@@ -1,0 +1,17 @@
+extension-pkg-whitelist=cv2
+
+[MESSAGES CONTROL]
+disable=
+    unused-import,
+    logging-fstring-interpolation,
+    missing-function-docstring,
+    line-too-long,
+    broad-exception-caught,
+    consider-using-enumerate,
+    invalid-name,
+    missing-module-docstring,
+    missing-class-docstring,
+    consider-using-dict-items,
+    unused-variable,
+    logging-not-lazy,
+    f-string-without-interpolation

@@ -1,0 +1,1197 @@
+# Takenoko Configuration File
+# This file contains all possible parameters for training with default values and comments
+# Remove the # at the beginning of lines to enable/configure parameters
+# "⚠️" means the section is under construction and relevant functionality has not been fully tested yet
+
+# =============================================================================
+# TARGET TRAINING
+# =============================================================================
+
+# "wan21" or "wan22"
+target_model = "wan21"
+
+# =============================================================================
+# CHECKPOINT SETTINGS
+# =============================================================================
+
+# DiT checkpoint path
+dit = "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/diffusion_models/wan2.2_t2v_low_noise_14B_fp16.safetensors"
+
+# use scaled fp8 for DiT
+fp8_scaled = true
+
+# Use fp8 for base model
+fp8_base = true
+
+# Enable FP16 accumulation
+fp16_accumulation = false
+
+# VAE checkpoint path
+vae = "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/vae/wan_2.1_vae.safetensors"
+
+# data type for VAE, default is float16
+# vae_dtype = "float16" 
+
+# Cache VAE on CPU
+# vae_cache_cpu = true
+
+# text encoder (T5) checkpoint path
+t5 = "https://huggingface.co/Wan-AI/Wan2.1-T2V-14B/resolve/main/models_t5_umt5-xxl-enc-bf16.pth"
+
+# Use fp8 for Text Encoder model
+# fp8_t5 = true
+
+# Directory to cache downloaded models
+# model_cache_dir = "cache/models"
+
+# Enable memory tracing
+trace_memory = true
+
+# =============================================================================
+# TRAINING SETTINGS
+# =============================================================================
+
+# Training steps
+max_train_steps = 2000
+
+# Training epochs (overrides max_train_steps if specified)
+# max_train_epochs = 10
+
+# Max num workers for DataLoader (lower is less main RAM usage, faster epoch start and slower data loading)
+max_data_loader_n_workers = 2
+
+# Persistent DataLoader workers (useful for reduce time gap between epoch, but may use more memory)
+persistent_data_loader_workers = true
+
+# Random seed for training
+seed = 20250811
+
+# Enable gradient checkpointing
+# Reduces activation memory by recomputing during backward; slower but lower VRAM
+gradient_checkpointing = true
+
+# Number of updates steps to accumulate before performing a backward/update pass
+gradient_accumulation_steps = 1
+
+# Mixed precision training (choices: "no", "fp16", "bf16")
+mixed_precision = "fp16"
+
+# Weight for regularization loss (1.0 = normal, higher = stronger regularization)
+prior_loss_weight = 1.0
+
+# =============================================================================
+# OPTIMIZER SETTINGS
+# =============================================================================
+
+# Optimizer to use: AdamW (default), AdamW8bit, AdaFactor. Also, you can use any optimizer by specifying
+# a fully-qualified class path (e.g., 'torch.optim.AdamW', 'bitsandbytes.optim.AdEMAMix8bit').
+# Resolved dynamically in optimizer manager with provided optimizer_args.
+optimizer_type = "adamw8bit"
+
+# additional arguments for optimizer (like "weight_decay=0.01 betas=0.9,0.999 ...")
+# optimizer_args = ["weight_decay=0.01", "betas=0.9,0.999"] 
+
+# Learning rate
+learning_rate = 2.0e-5
+
+# Max gradient norm, 0 for no clipping
+max_grad_norm = 1.0
+
+# =============================================================================
+# LEARNING RATE SCHEDULER
+# =============================================================================
+
+# Scheduler type
+# "constant": fixed LR for all steps (must have lr_warmup_steps = 0)
+# "constant_with_warmup": linear warmup to base LR, then hold constant
+# "linear": linear warmup, then linear decay to 0 over training steps
+# "cosine": linear warmup, then cosine decay to 0 over training steps
+# "cosine_with_restarts": warmup then cosine with restarts; uses lr_scheduler_num_cycles
+# "polynomial": warmup then polynomial decay; uses lr_scheduler_power
+# "inverse_sqrt": warmup then 1/sqrt(t) decay; uses lr_scheduler_timescale (defaults to lr_warmup_steps)
+# "cosine_with_min_lr": warmup then cosine decay to (min_lr_ratio * base LR); uses lr_scheduler_min_lr_ratio and half of lr_scheduler_num_cycles
+# "warmup_stable_decay": warmup -> flat (stable) -> decay; requires lr_warmup_steps and lr_decay_steps; uses lr_scheduler_min_lr_ratio and half of lr_scheduler_num_cycles
+# "piecewise_constant": step-wise schedule (from diffusers); requires lr_scheduler_args with step_rules
+# "adafactor:<initial_lr>": only valid with Adafactor optimizer (relative_step=True); no warmup/decay used
+# All schedulers except "constant" require lr_warmup_steps to be provided (0 is allowed)
+# "linear" and "cosine" ignore lr_decay_steps; "warmup_stable_decay" and some advanced schedules require lr_decay_steps > 0
+lr_scheduler = "constant"
+
+# Number of warmup steps (int) or fraction of total steps (float in 0..1)
+# lr_warmup_steps and lr_decay_steps accept int (steps) or float (0<value<1) as a fraction of total optimizer steps (max_train_steps × num_processes)
+lr_warmup_steps = 0
+
+# Number of decay steps for schedulers that support it (int) or fraction (float in 0..1, ratio of train steps)
+lr_decay_steps = 0
+
+# Cycles: used by cosine_with_restarts; for cosine_with_min_lr and warmup_stable_decay, half of this value is used internally
+lr_scheduler_num_cycles = 1
+
+# Exponent for polynomial scheduler
+lr_scheduler_power = 1.0
+
+# Timescale for inverse_sqrt; if unset, defaults to lr_warmup_steps
+# lr_scheduler_timescale = 0.0 
+
+# Minimum LR ratio (final_LR = base_LR * ratio) for cosine_with_min_lr and warmup_stable_decay
+# lr_scheduler_min_lr_ratio = 0.0 
+
+# Use a custom scheduler class (overrides lr_scheduler above). Either a torch scheduler name (e.g. "OneCycleLR")
+# or a fully-qualified import path (e.g. "torch.optim.lr_scheduler.StepLR"), kwargs come from lr_scheduler_args.
+lr_scheduler_type = "" 
+
+# Extra kwargs for the chosen scheduler as a list of key=value strings (parsed via Python literal_eval)
+# examples: lr_scheduler_args = 'T_max=100', lr_scheduler_args = 'step_rules=[(100,0.1),(300,0.01)]'
+lr_scheduler_args = ''
+
+# =============================================================================
+# NETWORK SETTINGS
+# =============================================================================
+
+# network module to train: "networks.lora_wan", "networks.control_lora_wan", "networks.reward_lora", "networks.vae_wan", "lycoris.kohya"
+# The module defines trainable adapters and is imported dynamically by the trainer.
+network_module = "networks.lora_wan"
+
+# network dimensions (depends on each network)
+network_dim = 32
+
+# alpha for LoRA weight scaling
+network_alpha = 32
+
+# pretrained weights for network
+# network_weights = "path/to/network/weights.safetensors" 
+
+# drops neurons out of training every step (0 or None is default behavior (no dropout), 1 would drop all neurons)
+# network_dropout = 0 
+
+# additional arguments for network (key=value). Parsed into list and consumed by network module.
+# network_args = '' 
+
+# LoRA+ (scaled lr on lora_up only):
+# network_args = ["loraplus_lr_ratio=2.0"]
+
+# LoRA-GGPO regularization (perturbs Linear LoRA weights during training):
+# Parsed by `takenoko.create_args_from_config` into args.ggpo_sigma/ggpo_beta for the loss hooks.
+# network_args = ["ggpo_sigma=0.03", "ggpo_beta=0.01"]
+
+# arbitrary comment string stored in metadata
+# training_comment = "trained with Takenoko" 
+
+# automatically determine dim (rank) from network_weights
+# dim_from_weights = true 
+
+# show detailed information about trainable LoRA parameters and network structure
+# verbose_network = true 
+
+# scale the weight of each key pair to help prevent overtraing via exploding gradients. (1 is a good starting point)
+# scale_weight_norms = 1.0 
+
+# network weights to merge into the model before training
+# base_weights = "path/to/base1.safetensors" 
+
+# multiplier for base weights
+# base_weights_multiplier = 1.0 
+
+# use lycoris for inference
+# lycoris = true 
+
+# =============================================================================
+# TIMESTEP AND FLOW MATCHING SETTINGS
+# =============================================================================
+
+# Method to sample timesteps: sigma, uniform, sigmoid, shift, flux_shift, logsnr, qwen_shift, qinglong_flux, qinglong_qwen, logit_normal, bell_shaped, half_bell, lognorm_blend, enhanced_sigmoid, fopp
+timestep_sampling = "shift"
+
+# Shift amount for discrete timestep sampling (used with 'shift' timestep_sampling)
+discrete_flow_shift = 3.0
+
+# Scale factor for sigmoid timestep sampling (used by: sigmoid, shift, flux_shift, qwen_shift, logit_normal, enhanced_sigmoid, qinglong_*)
+sigmoid_scale = 1.0
+
+# Bias for enhanced_sigmoid timestep sampling (only used when timestep_sampling = "enhanced_sigmoid")
+sigmoid_bias = 0.0 
+
+# Center of bell_shaped distribution in [0.0, 1.0]; 0.95 ~ timestep 950
+# Only used when timestep_sampling = "bell_shaped"
+bell_center = 0.5
+
+# Std (spread) of bell_shaped distribution; smaller => sharper peak
+# Only used when timestep_sampling = "bell_shaped"
+bell_std = 0.2
+
+# Alpha mix ratio for lognorm_blend (fraction of samples from LogNormal vs. linear)
+# Only used when timestep_sampling = "lognorm_blend"
+lognorm_blend_alpha = 0.75
+
+# Weighting scheme for timestep distribution: logit_normal, mode, cosmap, sigma_sqrt, none.
+# This key interacts with two independent things: sampling distribution (which timestep indices are drawn)
+# and loss weighting (how much each drawn timestep contributes to the loss)
+# Sampling distribution: only when timestep_sampling = "sigma".
+# logit_normal (uses logit_mean/logit_std) or mode (uses mode_scale) shape the sampling density.
+# none = uniform density. sigma_sqrt and cosmap do NOT influence sampling.
+# For all other samplers, weighting_scheme does not change which timesteps are sampled.
+# Loss weighting: for any sampler, ONLY sigma_sqrt or cosmap enable SD3-style per-index loss weights; other values imply unit weights.
+weighting_scheme = "none"
+
+# For logit-based transforms, sampling density when timestep_sampling="sigma" and weighting_scheme="logit_normal"
+logit_mean = 0.0
+
+# For logit-based transforms, mapping distribution when timestep_sampling="logsnr" (and the logsnr segment in qinglong_* variants)
+logit_std = 1.0
+
+# Scale of mode weighting scheme. Only effective when using the `'mode'` as the `weighting_scheme`
+mode_scale = 1.29
+
+# set minimum time step for training (0~999, default is 0)
+min_timestep = 0 
+
+# Set maximum time step for training (1~1000, default is 1000)
+max_timestep = 1000 
+
+# Enable pre-computed timestep distribution (default: false)
+# Uses a fixed, quantized distribution of t (reproducible) and takes precedence over num_timestep_buckets.
+# Supported for most timestep_sampling methods; unsupported methods fall back to on-the-fly sampling.
+# Distribution is sliced to [min_timestep, max_timestep] before sampling. Dataset-provided batch['timesteps']
+# are ignored when enabled.
+use_precomputed_timesteps = true 
+
+# Number of buckets for the precomputed distribution (default: 10000)
+# Larger values = finer quantization of the target distribution. Key: 'precomputed_timestep_buckets'.
+precomputed_timestep_buckets = 10000 
+
+# Optional: override the base area used by flux/qwen/qinglong precompute (auto-inferred from height/width/latents if unset)
+# Helps make precomputed mid-shift match runtime behavior when image sizes are known ahead of time.
+# precomputed_midshift_area = 1024.0
+
+# Preserve distribution shape (default: false)
+# If false: sampled t in [0,1] is linearly scaled into [min_timestep, max_timestep] (fast, but warps the shape).
+# If true: rejection sampling preserves the original distribution shape inside the range (slower, shape-faithful).
+# Applies after the sampling method (uniform/sigmoid/shift/flux_shift/logsnr/etc) or mapped presampled values.
+# When dataset provides per-batch uniform t (see num_timestep_buckets), those are used first for mapping.
+# With precomputed timesteps enabled, the global distribution is sliced to min/max first; constraints still apply.
+preserve_distribution_shape = false 
+
+# Number of timestep buckets for training (default: None)
+# Dataset-side per-epoch uniform stratification of u in [0,1] to improve coverage on small datasets.
+# Used only when use_precomputed_timesteps = false. Samples are mapped through the chosen timestep_sampling,
+# then min/max (and preserve_distribution_shape) are applied. Implemented in the dataset; batches may include
+# a per-item 'timesteps' list. Ignored when use_precomputed_timesteps = true. Set >= 2 to enable.
+# num_timestep_buckets = 10
+
+# Skip extra in-range constraint
+skip_extra_timestep_constraint = true
+
+# Epsilon for extra in-range constraint
+timestep_constraint_epsilon = 1e-5
+
+# Round training timesteps to the nearest integer schedule step
+round_training_timesteps = true 
+
+# Fast rejection sampling
+fast_rejection_sampling = false
+
+# When fast_rejection_sampling = true, control the candidate oversampling factor and max iterations
+# rejection_overdraw_factor = 4.0
+
+# When fast_rejection_sampling = true, control the max iterations
+# rejection_max_iters = 10
+
+# show timesteps: image, console
+# Visualizes the actual distribution produced by the current sampling+constraints path. 
+# show_timesteps = 'console' 
+
+# =============================================================================
+# ⚠️ DISPERSIVE LOSS SETTINGS
+# =============================================================================
+
+# Enable dispersive loss for improved generation quality and speed.
+enable_dispersive_loss = false
+
+# The lambda (λ) hyperparameter that controls the strength of the dispersive loss. The paper found 0.05 to be a robust value.
+dispersive_loss_lambda = 0.05
+
+# Temperature parameter (> 0). Smaller values sharpen repulsion.
+dispersive_loss_tau = 0.5
+
+# None disables extraction, non-negative integer selects a block index
+dispersive_loss_target_block = 2
+
+# "l2_sq" or "cosine"
+dispersive_loss_metric = "l2_sq"
+
+# Optional: pool spatial tokens per frame before dispersion ("none" or "frame_mean")
+dispersive_loss_pooling = "none"
+
+# =============================================================================
+# ⚠️ CONTRASTIVE FLOW MATCHING (ΔFM) SETTINGS
+# =============================================================================
+
+# Enable the contrastive objective for improved generation quality and speed.
+enable_contrastive_flow_matching = false
+
+# # The lambda (λ) hyperparameter that controls the strength of the contrastive loss. The paper found 0.05 to be a robust value.
+contrastive_flow_lambda = 0.05
+
+# =============================================================================
+# ⚠️ REPA (Representation Alignment) SETTINGS
+# =============================================================================
+
+# Set to false to disable
+enable_repa = false
+
+# Name of the pretrained visual encoder from the `timm` library. DINOv2 models are recommended. Examples: "dinov2_vitb14", "dinov2_vitl14", "dinov2_vitg14" (DINOv2 models), "clip_vitb32", "clip_vitl14" (CLIP models), "efficientnet_b0", "efficientnet_b1" (EfficientNet models), "resnet50", "resnet101" (ResNet models)
+repa_encoder_name = "dinov2_vitb14"
+
+# The depth (layer index) of the diffusion transformer to align. The paper finds that aligning early layers (e.g., 8) is most effective.
+repa_alignment_depth = 8
+
+# The lambda (λ) hyperparameter that controls the strength of the REPA loss. The paper found 0.5 to be a robust value.
+repa_loss_lambda = 0.5
+
+# The similarity function to use for alignment. "cosine" is recommended. Options: "cosine", "nt_xent"
+repa_similarity_fn = "cosine"
+
+# =============================================================================
+# ⚠️ FOPP SETTINGS
+# =============================================================================
+
+# Schedule type for FoPP: linear, cosine
+fopp_schedule_type = "cosine"
+
+# Number of timesteps for FoPP
+fopp_num_timesteps = 1000
+
+# Beta start for FoPP
+fopp_beta_start = 0.0001
+
+# Beta end for FoPP
+fopp_beta_end = 0.002
+
+# Random seed for FoPP sampling
+fopp_seed = 1997
+
+# =============================================================================
+# ⚠️ NABLA SETTINGS
+# =============================================================================
+
+# Enable Nabla sparse attention
+nabla_sparse_attention = false
+
+# nabla-0.6_sta-11-3-3, nabla-0.6_sta-11-5-5
+nabla_sparse_algo = "nabla-0.9_sta-11-24-24"
+
+# =============================================================================
+# OPTIMIZATION SETTINGS
+# =============================================================================
+
+# Use SDPA for CrossAttention (requires PyTorch 2.0)
+sdpa = true
+
+# Use FlashAttention for CrossAttention, requires FlashAttention
+# flash_attn = true 
+
+# Use SageAttention, requires SageAttention
+# sage_attn = true 
+
+# Use xformers for CrossAttention, requires xformers
+# xformers = true 
+
+# Use FlashAttention 3 for CrossAttention
+# flash3 = true 
+
+# Use split attention for attention calculation (split batch size=1, affects memory usage and speed)
+# split_attn = true 
+
+# Number of blocks to swap in the model, max XXX
+# blocks_to_swap = 20 
+
+# Enable PyTorch CUDA allocator tuning
+cuda_allocator_enable = true
+
+# Max split size in MB for CUDA allocator
+cuda_allocator_max_split_size_mb = 64
+
+# Enable expandable segments for CUDA allocator
+cuda_allocator_expandable_segments = false
+
+# =============================================================================
+# DUAL MODEL TRAINING SETTINGS
+# =============================================================================
+
+# Enable dual model training
+# Trains a single LoRA against two base DiTs (low/high noise) by swapping base weights on-the-fly
+enable_dual_model_training = false
+
+# DiT checkpoint path for high noise model
+dit_high_noise = "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/diffusion_models/wan2.2_t2v_high_noise_14B_fp16.safetensors"
+
+# Timestep boundary for dual model training (0.0 to 1.0)
+# Determines the split between low/high noise regimes
+timestep_boundary = 0.875
+
+# Offload inactive DiT model to CPU
+# Keeps only the active model on GPU; inactive state_dict resides on CPU to save VRAM
+offload_inactive_dit = true
+
+# Allow mixed block swap offload
+allow_mixed_block_swap_offload = false
+
+# Dual-mode timestep bucketing strategy (interaction of per-epoch timestep buckets with high/low boundary)
+# "hybrid" (default): use presampled bucketed t if it matches the boundary side; otherwise resample on-demand
+# "presampled": always use dataset-presampled uniform t as-is (may cross boundary)
+# "on_demand": ignore presampled t; draw fresh uniform each retry until boundary side matches (up to max retries)
+# "strict_clamp": minimally adjust a presampled t to be just inside the target boundary side
+dual_timestep_bucket_strategy = "on_demand"
+
+# Maximum retries for on-demand resampling
+dual_timestep_bucket_max_retries = 100
+
+# Epsilon for boundary matching
+dual_timestep_bucket_eps = 1e-4
+
+# =============================================================================
+# ⚠️ CONTROLNET TRAINING SETTINGS
+# =============================================================================
+
+# Enable ControlNet training mode
+enable_controlnet = false
+
+# Weight for the ControlNet loss
+controlnet_weight = 1.0
+
+# Stride for the ControlNet loss
+controlnet_stride = 1
+
+# Max gradient norm for ControlNet
+controlnet_max_grad_norm = 1.0
+
+# ControlNet configuration
+controlnet = {}
+
+# =============================================================================
+# ⚠️ CONTROL LORA TRAINING SETTINGS
+# =============================================================================
+
+# Enable control LoRA training mode
+enable_control_lora = false
+
+# Type of control LoRA: "tile", "canny", "depth", etc.
+control_lora_type = "tile"
+
+# Preprocessing method for control signal: "blur", "edge", "depth", etc.
+control_preprocessing = "blur"
+
+# Kernel size for Gaussian blur preprocessing
+control_blur_kernel_size = 15
+
+# Sigma for Gaussian blur preprocessing
+control_blur_sigma = 4.0
+
+# Scale factor for control signal strength
+control_scale_factor = 1.0
+
+# Multiplier to learning rate for the input patch_embedding layer if training control lora
+input_lr_scale = 5.0
+
+# Dimension index for concatenation of control signal
+control_concatenation_dim = 0
+
+# Suffix to append to media file name to get the control file
+control_suffix = "_control"
+
+# Add noise to the control latents, at a random strength up to this amount
+control_inject_noise = 0.1
+
+# Save control videos created on the fly to disk
+save_control_videos = true
+
+# Directory to save control videos for debugging
+control_video_save_dir = "tmp/control_videos"
+
+# =============================================================================
+# ⚠️ REWARD LORA TRAINING SETTINGS
+# =============================================================================
+
+# Enable reward LoRA training mode
+enable_reward_lora = false
+
+# List of prompts to use for reward training
+reward_prompts = ["a red spaceship flying in the sky", "a dog running in a park"]
+
+# Batch size for reward training
+reward_train_batch_size = 1
+
+# Height of the sample video for reward training
+reward_train_sample_height = 256
+
+# Width of the sample video for reward training
+reward_train_sample_width = 256
+
+# alias: reward_num_frames is also accepted
+reward_video_length = 81
+
+# Number of inference steps for reward training
+reward_num_inference_steps = 50
+
+# Guidance scale for reward training
+reward_guidance_scale = 6.0
+
+# Number of decoded latents for reward training
+reward_num_decoded_latents = 1
+
+# Number of steps to run validation on
+reward_validation_steps = 10000
+
+# Reward function to use for reward training
+reward_fn = "HPSReward"
+
+# JSON string
+reward_fn_kwargs = '{"version":"v2.1"}'
+
+# Enable backprop for reward training
+reward_backprop = true
+
+# Backprop strategy to use for reward training, choices: "last", "tail", "uniform", "random"
+reward_backprop_strategy = "tail"
+
+# Number of steps to backprop for reward training
+reward_backprop_num_steps = 5
+
+# List of steps to backprop for reward training
+reward_backprop_step_list = [45,46,47,48,49]
+
+# Random start step for reward training
+reward_backprop_random_start_step = 0
+
+# Random end step for reward training
+reward_backprop_random_end_step = 50
+
+# Stop backprop at the latent model input gradient
+reward_stop_latent_model_input_gradient = false
+
+# =============================================================================
+# ⚠️ DOP (DIFFERENTIAL OUTPUT PRESERVATION) SETTINGS
+# =============================================================================
+
+# Enable DOP regularization
+diff_output_preservation = false
+
+# The trigger word/phrase in captions to be replaced for DOP. This must exactly match the trigger in your dataset captions
+diff_output_preservation_trigger_word = "ohwx"
+
+# Generic class prompt to replace the trigger word for DOP. This is what the trigger will be replaced with during preservation
+diff_output_preservation_class = "a photo of a person"
+
+# Multiplier for the DOP loss (default: 1.0). Higher values = stronger preservation effect
+diff_output_preservation_multiplier = 1.0
+
+# =============================================================================
+# ⚠️ FLUXFLOW SETTINGS
+# =============================================================================
+
+# enable FLUXFLOW temporal augmentation during training
+enable_fluxflow = false
+
+# FLUXFLOW perturbation mode (choices: frame, block)
+fluxflow_mode = "frame"
+
+# Ratio of frames to shuffle in frame mode (0.0 to 1.0)
+fluxflow_frame_perturb_ratio = 0.25
+
+# Size of contiguous frame blocks in block mode
+fluxflow_block_size = 4
+
+# Beta: Ratio of blocks to reorder in block mode (0.0 to 1.0), NOT probability!
+fluxflow_block_perturb_prob = 0.5
+
+# Dimension index for frames/time in batched video tensor
+fluxflow_frame_dim_in_batch = 2
+
+# =============================================================================
+# ⚠️ FVDM SETTINGS
+# =============================================================================
+
+# Enable Frame-Aware Video Diffusion Model (FVDM) training
+enable_fvdm = false
+
+# Probability for the Probabilistic Timestep Sampling Strategy (PTSS) in FVDM. The paper suggests 0.2.
+fvdm_ptss_p = 1
+
+# =============================================================================
+# VALIDATION SETTINGS
+# =============================================================================
+
+# Run validation every N steps (in addition to end-of-epoch validation)
+validate_every_n_steps = 500
+
+# Enable validation at the end of each epoch (default: false)
+validate_on_epoch_end = true
+
+# comma-separated list of timesteps for validation (e.g., '100,300,500,700,900'). 
+validation_timesteps = "100,300,500,700,900"
+
+# Use unique noise per batch for proper validation (recommended: true for reliable metrics, false for legacy behavior)
+use_unique_noise_per_batch = true
+
+# =============================================================================
+# ⚠️ OPTICAL FLOW LOSS SETTINGS
+# =============================================================================
+
+# Enable RAFT-based optical flow loss for motion stability (experimental)
+enable_optical_flow_loss = false
+
+# Weight for the optical flow loss term (set >0 to enable)
+lambda_optical_flow = 0.01
+
+# =============================================================================
+# ⚠️ TREAD SETTINGS
+# =============================================================================
+
+# Enable TREAD routing for training
+enable_tread = false
+
+# TREAD mode: "full" or "ffn"
+tread_mode = "full"
+
+# Each route is a semicolon-separated string of key=value pairs. Keys: selection_ratio (0-1), start_layer_idx, end_layer_idx (negative allowed)
+tread_config_route1 = "selection_ratio=0.1; start_layer_idx=2; end_layer_idx=-2"
+# tread_config_route2 = "selection_ratio=0.1; start_layer_idx=2; end_layer_idx=8"
+# tread_config_route3 = "selection_ratio=0.25; start_layer_idx=9; end_layer_idx=11"
+# tread_config_route4 = "selection_ratio=0.35; start_layer_idx=12; end_layer_idx=15"
+# tread_config_route5 = "selection_ratio=0.25; start_layer_idx=16; end_layer_idx=23"
+# tread_config_route6 = "selection_ratio=0.1; start_layer_idx=24; end_layer_idx=-2"
+
+# =============================================================================
+# OUTPUT SETTINGS
+# =============================================================================
+
+# directory to output trained model
+output_dir = "output/wan21_lora"
+
+# base name of trained model file 
+output_name = "wan21_lora"
+
+# save training state additionally (including optimizer states etc.) when saving model
+save_state = true
+
+# save checkpoint every N steps
+save_every_n_steps = 50
+
+# save training state (including optimizer states etc.) on train end even if --save_state is not specified
+# save_state_on_train_end = false 
+
+# automatically resume training from latest checkpoint
+auto_resume = true
+
+# saved state to resume training
+# resume = "path/to/resume/state" 
+
+# fp16 training including gradients (temporary disabled)
+# full_fp16 = false 
+
+# bf16 training including gradients (temporary disabled)
+# full_bf16 = false 
+
+# save checkpoint every N epochs
+# save_every_n_epochs = 1 
+
+# save last N checkpoints when saving every N epochs (remove older checkpoints)
+# save_last_n_epochs = 10 
+
+# save last N checkpoints of state (overrides the value of --save_last_n_epochs)
+# save_last_n_epochs_state = 3 
+
+# save checkpoints until N steps elapsed (remove older checkpoints if N steps elapsed)
+# save_last_n_steps = 5000 
+
+# save states until N steps elapsed (overrides --save_last_n_steps, overrides --save_last_n_steps)
+# save_last_n_steps_state = 5000 
+
+# allow resuming training with a different dataset (e.g., for domain adaptation or transfer learning)
+# allow_dataset_change = true 
+
+# reset epoch/step calculations when resuming with a different dataset (recommended for proper training behavior)
+# reset_training_state = true 
+
+# skip dataset compatibility validation entirely (advanced users only - use with caution)
+# ignore_dataset_compatibility = true 
+
+# =============================================================================
+# METADATA SETTINGS
+# =============================================================================
+
+# embed the original config file content in safetensors metadata (default: True)
+embed_config_in_metadata = true
+
+# do not save metadata in output model
+# no_metadata = true 
+
+# title for model metadata (default is output_name)
+# metadata_title = "" 
+
+# author name for model metadata
+# metadata_author = "" 
+
+# description for model metadata
+# metadata_description = "" 
+
+# license for model metadata
+# metadata_license = "" 
+
+# tags for model metadata, separated by comma
+# metadata_tags = "" 
+
+# =============================================================================
+# LOGGING SETTINGS
+# =============================================================================
+
+# Enhanced progress bar with additional metrics (learning rate, epoch, memory usage, etc.), set to false to use simple progress bar if you encounter any issues
+enhanced_progress_bar = true
+
+# Log training configuration
+log_config = true
+
+# Enable logging and output TensorBoard log to this directory
+logging_dir = "logs/wan21_lora"
+
+# Logging tool to use (only tensorboard is supported)
+log_with = "tensorboard"
+
+# Set logging level to DEBUG to see FluxFlow messages
+logging_level = "INFO"
+
+# Enable periodic logging of additional training loss diagnostics
+log_extra_train_metrics = true
+
+# Interval (in steps) to compute and log extra train metrics
+train_metrics_interval = 50
+
+# Log a scatter plot of per-sample loss vs timestep to TensorBoard
+log_loss_scatterplot = true
+
+# Interval (in steps) to log the scatter plot
+log_loss_scatterplot_interval = 100
+
+# Add prefix for each log directory
+# log_prefix = "" 
+
+# Name of tracker to use for logging, default is script-specific default name
+# log_tracker_name = "" 
+
+# Path to tracker config file to use for logging
+# log_tracker_config = "" 
+
+# WandB support has been removed. The following options are deprecated and ignored.
+# wandb_run_name = ""
+# wandb_api_key = ""
+
+# Automatically launch TensorBoard server on training start
+launch_tensorboard_server = true
+
+# Host for TensorBoard server
+tensorboard_host = "127.0.0.1"
+
+# Port for TensorBoard server  
+tensorboard_port = 6006
+
+# Enable auto-reload of logs (default: true)
+tensorboard_auto_reload = true
+
+# Timestep distribution logging
+# Choose how to visualize timestep distributions in TensorBoard during training.
+# "off":     disable logging
+# "histogram": log TensorBoard histograms (fast; shows shape clearly)
+# "chart":     log a static chart image (uses matplotlib if available)
+# "both":      log both histogram and chart
+log_timestep_distribution = "off"
+
+# How often to log the live (used) timestep distribution during training (in steps)
+log_timestep_distribution_interval = 100
+
+# Number of bins for histogram/chart density
+log_timestep_distribution_bins = 100
+
+# Log an initial expected distribution at training start
+# Uses precomputed buckets if enabled; otherwise simulates via the configured sampler
+log_timestep_distribution_init = true
+
+# Log an initial expected distribution at training start only once
+log_timestep_distribution_init_once = true
+
+# Number of samples to draw when simulating the initial distribution (when not using precomputed buckets)
+log_timestep_distribution_samples = 20000
+
+# Log a live (used) timestep distribution during training (in steps)
+log_timestep_distribution_window = 10000
+
+# Band ratios using configured edges, e.g., "850,900,950"
+log_timestep_distribution_bands = "0,100,200,300,400,500,600,700,800,900,1000"
+
+# Log the probability mass function (PMF) of the timestep distribution
+log_timestep_distribution_pmf = true
+
+# =============================================================================
+# DDP SETTINGS
+# =============================================================================
+
+# DDP timeout (min, None for default of accelerate)
+# ddp_timeout = null 
+
+# Enable gradient_as_bucket_view for DDP
+# ddp_gradient_as_bucket_view = false # Enable gradient_as_bucket_view for DDP
+
+# Enable static_graph for DDP
+# ddp_static_graph = false 
+
+# =============================================================================
+# DYNAMO SETTINGS
+# =============================================================================
+
+# dynamo backend type (default is None)
+dynamo_backend = "NO"
+
+# Dynamo mode (choices: default, reduce-overhead, max-autotune)
+dynamo_mode = "default"
+
+# Use fullgraph mode for dynamo
+# dynamo_fullgraph = false 
+
+# Use dynamic mode for dynamo
+# dynamo_dynamic = false # Use dynamic mode for dynamo
+
+# =============================================================================
+# ⚠️ VAE TRAINING SETTINGS
+# =============================================================================
+
+# VAE training mode: "full", "decoder_only", "encoder_only"
+vae_training_mode = "full"
+
+# Weight for KL divergence loss in VAE training
+vae_kl_weight = 1e-6
+
+# Reconstruction loss type: "mse", "l1", "huber"
+vae_reconstruction_loss = "mse"
+
+# =============================================================================
+# ⚠️ ONLINE SELF-CORRECTION SETTINGS
+# =============================================================================
+
+# Enable lightweight online self-correction cache updates during training (non-invasive; off by default)
+# When enabled, the trainer periodically generates short clips into output_dir/self_correction_cache
+# and mixes them into training via a hybrid dataloader wrapper.
+self_correction_enabled = false
+
+# Do not start self-correction until after this many optimizer steps
+self_correction_warmup_steps = 1000
+
+# Regenerate correction clips every N optimizer steps (0 disables periodic updates)
+self_correction_update_frequency = 1000
+
+# Maximum number of correction clips to keep in the cache directory
+self_correction_cache_size = 200
+
+# Length (frames) of generated correction clips
+self_correction_clip_len = 32
+
+# Probability to draw a batch from the correction cache instead of the main dataset
+self_correction_batch_ratio = 0.2
+
+# Number of frames for generation
+self_correction_sample_steps = 16 
+
+# Output width in pixels
+self_correction_width = 256
+
+# Output height in pixels 
+self_correction_height = 256
+
+# Classifier-free guidance scale (CFG)
+self_correction_guidance_scale = 5.0
+
+# Inline prompts for self-correction 
+# Each table can include: text, width, height, frames, step, seed, guidance_scale, enum
+# If not provided, captions from datasets are used.
+
+[[self_correction_prompts]]
+text = "a person walking on a beach at sunset"
+frames = 33
+step = 16
+guidance_scale = 5.0
+
+[[self_correction_prompts]]
+text = "a busy downtown street with cars and pedestrians"
+frames = 17
+step = 12
+guidance_scale = 4.5
+
+# =============================================================================
+# SAMPLING SETTINGS
+# =============================================================================
+
+# Generate sample images every N steps
+sample_every_n_steps = 500
+
+# Generate sample images before training
+sample_at_first = true
+
+# Generate sample images every N epochs (overwrites n_steps)
+# sample_every_n_epochs = 1 
+
+# =============================================================================
+# SAMPLE PROMPTS SETTINGS
+# =============================================================================
+
+[[sample_prompts]]
+
+# The main prompt text
+text = """
+Young woman with short blonde hair and grey eyes, tank top, denim shorts, \
+in a cluttered open restaurant on a hill above amazing ocean beach
+"""
+
+# Output width in pixels
+width = 384
+
+# Output height in pixels
+height = 384
+
+# Number of frames for video generation
+frames = 45
+
+# Random seed for generation
+seed = 20250801
+
+# Step for generation
+step = 20
+
+# Classifier-free guidance scale (CFG)
+cfg_scale = 6.0
+
+# =============================================================================
+# LATENT CACHE SETTINGS
+# =============================================================================
+
+[datasets.latent_cache]
+
+# cache features in VAE on CPU
+vae_cache_cpu = true
+
+# data type for VAE, default is float16
+vae_dtype = "float16"
+
+# device to use, default is cuda if available
+device = "cuda"
+
+# batch size, override dataset config if dataset batch size > this
+# batch_size = null 
+
+# number of workers for dataset, default is cpu count-1
+# num_workers = null 
+
+# skip existing cache files
+skip_existing = false
+
+# keep cache files not in dataset
+keep_cache = true
+
+# debug mode, choices: image, console, video
+# debug_mode = "image" 
+
+# console width, default is 80
+# console_width = 80 
+
+# console background color, default is black
+# console_back = "black" 
+
+# debug mode: not interactive, number of images to show for each dataset
+# console_num_images = 1 
+
+# =============================================================================
+# TEXT ENCODER CACHE SETTINGS
+# =============================================================================
+
+[datasets.text_encoder_cache]
+
+# use fp8 for Text Encoder model
+fp8_t5 = true
+
+# device to use, default is cuda if available
+device = "cuda"
+
+# batch size, override dataset config if dataset batch size > this
+batch_size = 16
+
+# number of workers for dataset, default is cpu count-1
+# num_workers = null 
+
+# skip existing cache files
+skip_existing = false
+
+# keep cache files not in dataset
+keep_cache = true
+
+# =============================================================================
+# DATASET SETTINGS
+# =============================================================================
+
+[datasets.general]
+
+# File extension for caption files
+caption_extension = ".txt"
+
+# Probability to drop entire captions (0.0-1.0). When >0, a random portion of items will have empty captions during
+# caching/training. Defaults to 0.0 (disabled).
+# caption_dropout_rate = 0.1
+
+# Enable bucket-based training for different resolutions
+enable_bucket = true
+
+# Prevent upscaling of images to larger bucket sizes
+bucket_no_upscale = true
+
+# Directory containing mask images for masked training
+# mask_path = "/path/to/mask/images" 
+
+# =============================================================================
+# TRAINING DATASETS
+# =============================================================================
+
+# Image dataset
+[[datasets.train]]
+
+# Path to image directory (overrides general setting)
+image_directory = "path/to/images"
+
+# Path to cache directory (overrides general setting)
+cache_directory = "path/to/images/cache"
+
+# Target resolution [width, height] (overrides general setting)
+resolution = [512, 512]
+
+# Batch size for this dataset (overrides general setting)
+batch_size = 1
+
+# Number of times to repeat this dataset per epoch (overrides general setting)
+num_repeats = 1
+
+# Path to mask images for this dataset (overrides general setting)
+# mask_path = "/path/to/mask/images" 
+
+
+# Video dataset
+[[datasets.train]]
+
+# Path to video directory (overrides general setting)
+video_directory = "path/to/videos"
+
+# Path to cache directory
+cache_directory = "path/to/videos/cache"
+
+# Target resolution [width, height]
+resolution = [256, 256]
+
+# Batch size for this dataset
+batch_size = 1
+
+# Number of times to repeat this dataset per epoch
+num_repeats = 1
+
+# Use uniform sampling
+frame_extraction = "uniform"
+
+# Extract different frame sequence lengths
+target_frames = [1, 17, 33]
+
+# Extract each target_frame sequence once
+frame_sample = 1
+
+# Source FPS
+source_fps = 24
+
+# Path to mask images/videos for this dataset
+# mask_path = "/path/to/video/masks" 
+
+# Regularization image dataset, captions should be generic and NOT include unique trigger word
+[[datasets.train]]
+
+# Path to image directory (overrides general setting)
+image_directory = "/path/to/your/regularization_images"
+
+# Number of times to repeat this dataset per epoch (overrides general setting)
+num_repeats = 1
+
+# Target resolution [width, height] (overrides general setting)
+resolution = [960, 544]
+
+# Batch size for this dataset (overrides general setting)
+batch_size = 1
+
+# Marks regularization dataset
+is_reg = true
+
+# Regularization video dataset, captions should be generic and NOT include unique trigger word
+[[datasets.train]]
+
+# Path to video directory (overrides general setting)
+video_directory = "/path/to/your/regularization_videos"
+
+# Number of times to repeat this dataset per epoch (overrides general setting)
+num_repeats = 1
+
+# Target resolution [width, height] (overrides general setting)
+resolution = [960, 544]
+
+# Batch size for this dataset (overrides general setting)
+batch_size = 1
+
+# marks regularization dataset
+is_reg = true
+
+# =============================================================================
+# VALIDATION DATASETS
+# =============================================================================
+
+# Image validation dataset
+[[datasets.val]]
+
+# Path to image directory (overrides general setting)
+image_directory = "path/to/val/images"
+
+# Path to cache directory
+cache_directory = "path/to/val/images/cache"
+
+# Target resolution [width, height]
+resolution = [512, 512]
+
+# Batch size for this dataset
+batch_size = 1
+
+# Number of times to repeat this dataset per epoch
+num_repeats = 1
+
+# Video validation dataset
+[[datasets.val]]
+
+# Path to video directory (overrides general setting)
+video_directory = "path/to/val/videos"
+
+# Path to cache directory (overrides general setting)
+cache_directory = "path/to/val/videos/cache"
+
+# Target resolution [width, height]
+resolution = [256, 256]
+
+# Batch size for this dataset
+batch_size = 1
+
+# Number of times to repeat this dataset per epoch
+num_repeats = 1
+
+# Use head sampling
+frame_extraction = "head"
+
+# Extract different frame sequence lengths
+target_frames = [1, 25]
+
+# Extract each target_frame sequence once
+frame_sample = 1

@@ -1,0 +1,227 @@
+# Takenoko Configuration File
+
+# =============================================================================
+# TARGET TRAINING
+# =============================================================================
+
+target_model = "wan22"
+
+# =============================================================================
+# CHECKPOINT SETTINGS
+# =============================================================================
+
+dit = "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/diffusion_models/wan2.2_t2v_low_noise_14B_fp16.safetensors"
+fp8_scaled = true
+fp8_base = true
+vae = "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/vae/wan_2.1_vae.safetensors"
+t5 = "https://huggingface.co/Wan-AI/Wan2.1-T2V-14B/resolve/main/models_t5_umt5-xxl-enc-bf16.pth"
+
+# =============================================================================
+# TRAINING SETTINGS
+# =============================================================================
+
+max_train_steps = 10000 
+max_data_loader_n_workers = 2
+persistent_data_loader_workers = true
+seed = 20250811
+gradient_checkpointing = true
+gradient_accumulation_steps = 1
+mixed_precision = "fp16"
+
+# =============================================================================
+# OPTIMIZER SETTINGS
+# =============================================================================
+
+optimizer_type = "AdamW8bitKahan" 
+optimizer_args = ["weight_decay=0.01", "betas=0.9,0.999", "stabilize=false", "eps=1e-7"] 
+learning_rate = 5e-5
+max_grad_norm = 1.0
+
+# =============================================================================
+# LEARNING RATE SCHEDULER
+# =============================================================================
+
+lr_scheduler = "constant"
+lr_warmup_steps = 0
+lr_decay_steps = 0
+
+# =============================================================================
+# NETWORK SETTINGS
+# =============================================================================
+
+network_module = "networks.lora_wan"
+network_dim = 32
+network_alpha = 32
+
+# =============================================================================
+# TIMESTEP AND FLOW MATCHING SETTINGS
+# =============================================================================
+
+timestep_sampling = "shift"
+discrete_flow_shift = 5.0
+sigmoid_scale = 1.0
+min_timestep = 0
+max_timestep = 1000
+
+# =============================================================================
+# OPTIMIZATION SETTINGS
+# =============================================================================
+
+sdpa = true
+
+# =============================================================================
+# DUAL MODEL TRAINING SETTINGS
+# =============================================================================
+
+enable_dual_model_training = true
+dit_high_noise = "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/diffusion_models/wan2.2_t2v_high_noise_14B_fp16.safetensors"
+timestep_boundary = 875
+offload_inactive_dit = true
+allow_mixed_block_swap_offload = false
+
+# =============================================================================
+# VALIDATION SETTINGS
+# =============================================================================
+
+validate_every_n_steps = 500
+validation_timesteps = "0,100,300,500,700,800,900,1000" 
+
+# =============================================================================
+# OUTPUT SETTINGS
+# =============================================================================
+
+output_dir = "output/wan22_lora_dual"
+output_name = "wan22_lora_dual"
+save_state = true 
+save_every_n_steps = 500 
+auto_resume = true
+
+# =============================================================================
+# METADATA SETTINGS
+# =============================================================================
+
+embed_config_in_metadata = true 
+
+# =============================================================================
+# LOGGING SETTINGS
+# =============================================================================
+
+enhanced_progress_bar = true
+log_config = true
+logging_dir = "logs/wan22_lora_dual"
+log_with = "tensorboard"
+logging_level = "INFO"
+launch_tensorboard_server = true
+tensorboard_host = "127.0.0.1"
+tensorboard_port = 6006
+tensorboard_auto_reload = true
+log_timestep_distribution = "histogram"
+log_timestep_distribution_interval = 50
+log_timestep_distribution_samples = 10000
+log_timestep_distribution_window = 10000
+log_timestep_distribution_bands = "0,100,200,300,400,500,600,700,800,900,1000"
+
+# =============================================================================
+# SAMPLING SETTINGS
+# =============================================================================
+
+sample_every_n_steps = 500
+sample_at_first = true
+
+# =============================================================================
+# SAMPLE PROMPTS SETTINGS
+# =============================================================================
+
+[[sample_prompts]]
+
+text = """
+Young woman with short blonde hair and grey eyes, tank top, denim shorts, \
+in a cluttered open restaurant on a hill above amazing ocean beach
+"""
+width = 384 
+height = 384 
+frames = 45 
+seed = 20250801 
+step = 20 
+cfg_scale = 6.0 
+
+
+# =============================================================================
+# LATENT CACHE SETTINGS
+# =============================================================================
+
+[datasets.latent_cache]
+
+vae_cache_cpu = true 
+vae_dtype = "float16" 
+device = "cuda" 
+skip_existing = false 
+keep_cache = true 
+
+# =============================================================================
+# TEXT ENCODER CACHE SETTINGS
+# =============================================================================
+
+[datasets.text_encoder_cache]
+
+fp8_t5 = true 
+device = "cuda" 
+batch_size = 16 
+skip_existing = false 
+keep_cache = true 
+
+# =============================================================================
+# DATASET SETTINGS
+# =============================================================================
+
+[datasets.general] 
+
+caption_extension = ".txt" 
+enable_bucket = true 
+bucket_no_upscale = true 
+
+# =============================================================================
+# TRAINING DATASETS
+# =============================================================================
+
+[[datasets.train]] 
+
+image_directory = "path/to/images" 
+cache_directory = "path/to/images/cache" 
+resolution = [512, 512] 
+batch_size = 1 
+num_repeats = 1 
+
+[[datasets.train]] 
+
+video_directory = "path/to/videos" 
+cache_directory = "path/to/videos/cache" 
+resolution = [256, 256] 
+batch_size = 1 
+num_repeats = 1 
+frame_extraction = "uniform" 
+target_frames = [1, 17, 33] 
+frame_sample = 1 
+
+# =============================================================================
+# VALIDATION DATASETS
+# =============================================================================
+
+[[datasets.val]]  
+
+image_directory = "path/to/val/images" 
+cache_directory = "path/to/val/images/cache" 
+resolution = [512, 512] 
+batch_size = 1 
+num_repeats = 1 
+
+[[datasets.val]] 
+
+video_directory = "path/to/val/videos" 
+cache_directory = "path/to/val/videos/cache" 
+resolution = [256, 256] 
+batch_size = 1 
+num_repeats = 1 
+frame_extraction = "head" 
+target_frames = [1, 25] 
+frame_sample = 1 

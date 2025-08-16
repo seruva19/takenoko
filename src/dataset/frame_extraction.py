@@ -1,0 +1,96 @@
+from __future__ import annotations
+
+from typing import List, Optional, Tuple
+
+import numpy as np
+
+
+def generate_crop_positions(
+    frame_count: int,
+    target_frames: Optional[List[int]],
+    mode: str,
+    frame_stride: Optional[int] = 1,
+    frame_sample: Optional[int] = 1,
+    max_frames: Optional[int] = None,
+) -> List[Tuple[int, int]]:
+    """
+    Generate a list of (start_index, window_size) pairs for extracting frame windows.
+
+    Args:
+        frame_count: Total number of frames available in the video (F).
+        target_frames: List of target window sizes (each is the number of frames in a clip).
+        mode: Strategy name. Supported:
+            - "head" (alias: "single_beginning")
+            - "middle" (alias: "single_middle")
+            - "chunk" (non-overlapping contiguous windows)
+            - "slide" (sliding window with stride)
+            - "uniform" (fixed count of evenly spaced starts)
+            - "multiple_overlapping" (cover video with minimal number of windows, end-aligned)
+            - "full" (use up to max_frames, rounded to N*4+1)
+        frame_stride: Stride for "slide" mode.
+        frame_sample: Number of samples for "uniform" mode.
+        max_frames: Maximum frames for "full" mode.
+
+    Returns:
+        List of (start_index, window_size) tuples.
+    """
+    if not target_frames:
+        return []
+
+    crop_pos_and_frames: List[Tuple[int, int]] = []
+
+    # Normalize aliases
+    normalized_mode = mode
+    if mode == "single_beginning":
+        normalized_mode = "head"
+    elif mode == "single_middle":
+        normalized_mode = "middle"
+
+    for target_frame in target_frames:
+        if frame_count < target_frame:
+            # Not enough frames to extract this window size
+            continue
+
+        if normalized_mode == "head":
+            crop_pos_and_frames.append((0, target_frame))
+
+        elif normalized_mode == "middle":
+            start = (frame_count - target_frame) // 2
+            crop_pos_and_frames.append((start, target_frame))
+
+        elif normalized_mode == "chunk":
+            for i in range(0, frame_count, target_frame):
+                if i + target_frame <= frame_count:
+                    crop_pos_and_frames.append((i, target_frame))
+
+        elif normalized_mode == "slide":
+            stride = frame_stride or 1
+            for i in range(0, frame_count - target_frame + 1, stride):
+                crop_pos_and_frames.append((i, target_frame))
+
+        elif normalized_mode == "uniform":
+            samples = frame_sample or 1
+            starts = np.linspace(0, frame_count - target_frame, samples, dtype=int)
+            for i in starts:
+                crop_pos_and_frames.append((int(i), target_frame))
+
+        elif normalized_mode == "multiple_overlapping":
+            # Cover the whole video with minimal number of clips, end-aligned (may overlap)
+            num_clips = ((frame_count - 1) // target_frame) + 1
+            starts = np.linspace(0, frame_count - target_frame, num_clips, dtype=int)
+            for i in starts:
+                crop_pos_and_frames.append((int(i), target_frame))
+
+        elif normalized_mode == "full":
+            if max_frames is None or max_frames <= 0:
+                use_frames = frame_count
+            else:
+                use_frames = min(frame_count, max_frames)
+            # round to N*4+1 as per original implementation
+            use_frames = (use_frames - 1) // 4 * 4 + 1
+            crop_pos_and_frames.append((0, use_frames))
+
+        else:
+            raise ValueError(f"frame_extraction {mode} is not supported")
+
+    return crop_pos_and_frames

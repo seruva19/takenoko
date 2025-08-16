@@ -1,0 +1,522 @@
+"""Training loss computation utilities.
+
+This module encapsulates all logic related to computing the training loss, so the
+main training loop can remain focused on orchestration. It preserves behavior from
+the previous inlined implementation in `core/training_core.py`.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any, Dict, Optional, Tuple, Callable, List
+
+import torch
+import torch.nn.functional as F
+
+from common.logger import get_logger
+from criteria.dispersive_loss import dispersive_loss_info_nce
+from utils.train_utils import get_sigmas
+
+
+logger = get_logger(__name__)
+
+
+@dataclass
+class LossComponents:
+    """Container for individual loss terms and the final total loss.
+
+    Attributes
+    ----------
+    total_loss: torch.Tensor
+        The final scalar loss to backpropagate.
+    base_loss: Optional[torch.Tensor]
+        The base flow-matching loss (after reductions and any weighting).
+    dop_loss: Optional[torch.Tensor]
+        The Diff Output Preservation loss component, if enabled.
+    dispersive_loss: Optional[torch.Tensor]
+        The dispersive (InfoNCE-style) loss component, if enabled.
+    optical_flow_loss: Optional[torch.Tensor]
+        The optical flow consistency loss, if enabled.
+    repa_loss: Optional[torch.Tensor]
+        The REPA alignment loss, if enabled.
+    """
+
+    total_loss: torch.Tensor
+    base_loss: Optional[torch.Tensor] = None
+    dop_loss: Optional[torch.Tensor] = None
+    dispersive_loss: Optional[torch.Tensor] = None
+    optical_flow_loss: Optional[torch.Tensor] = None
+    repa_loss: Optional[torch.Tensor] = None
+
+
+class TrainingLossComputer:
+    """Compute training losses with feature flags preserved via `args`.
+
+    Parameters
+    ----------
+    config: Any
+        Configuration object providing model/patch settings. Must expose
+        `patch_size` as a tuple (pt, ph, pw).
+    """
+
+    def __init__(self, config: Any) -> None:
+        self.config = config
+
+    # ---- Internal helpers ----
+    def _compute_seq_len(self, latents: torch.Tensor) -> int:
+        lat_f, lat_h, lat_w = latents.shape[2:5]
+        pt, ph, pw = self.config.patch_size
+        return (lat_f * lat_h * lat_w) // (pt * ph * pw)
+
+    def _maybe_get_control_latents(
+        self,
+        args: Any,
+        accelerator: Any,
+        batch: Dict[str, Any],
+        latents: torch.Tensor,
+        network_dtype: torch.dtype,
+        vae: Optional[Any],
+        control_signal_processor: Optional[Any],
+    ) -> Optional[torch.Tensor]:
+        if (
+            hasattr(args, "enable_control_lora")
+            and args.enable_control_lora
+            and control_signal_processor is not None
+            and hasattr(control_signal_processor, "process_control_signal")
+        ):
+            try:
+                return control_signal_processor.process_control_signal(
+                    args, accelerator, batch, latents, network_dtype, vae
+                )
+            except Exception as e:
+                logger.warning(f"Control signal processing failed for DOP path: {e}")
+                return None
+        return None
+
+    def _concat_control_if_available(
+        self,
+        noisy_model_input: torch.Tensor,
+        control_latents: Optional[torch.Tensor],
+    ) -> torch.Tensor:
+        if control_latents is None:
+            return noisy_model_input
+        concat_dim = 1 if noisy_model_input.dim() == 5 else 0
+        return torch.cat(
+            [noisy_model_input, control_latents.to(noisy_model_input)], dim=concat_dim
+        )
+
+    # ---- Public API ----
+    @torch.no_grad()
+    def _compute_prior_pred_for_dop(
+        self,
+        args: Any,
+        accelerator: Any,
+        transformer: Any,
+        network: Any,
+        latents: torch.Tensor,
+        noisy_model_input: torch.Tensor,
+        timesteps: torch.Tensor,
+        dop_context: List[torch.Tensor],
+        model_input_control: Optional[torch.Tensor],
+    ) -> torch.Tensor:
+        """Compute the base model prediction with LoRA disabled for DOP.
+
+        Returns a detached tensor suitable for MSE target.
+        """
+        # Temporarily disable LoRA
+        original_multiplier = accelerator.unwrap_model(network).multiplier
+        accelerator.unwrap_model(network).multiplier = 0.0
+        try:
+            seq_len = self._compute_seq_len(latents)
+            model_input_prior = (
+                model_input_control
+                if model_input_control is not None
+                else noisy_model_input
+            )
+            prior_pred_list = transformer(
+                model_input_prior,
+                t=timesteps,
+                context=dop_context,
+                seq_len=seq_len,
+                y=None,
+            )
+            prior_pred = torch.stack(prior_pred_list, dim=0).detach()
+            return prior_pred
+        finally:
+            # Restore
+            accelerator.unwrap_model(network).multiplier = original_multiplier
+
+    def compute_training_loss(
+        self,
+        *,
+        args: Any,
+        accelerator: Any,
+        latents: torch.Tensor,
+        noise: torch.Tensor,
+        noisy_model_input: torch.Tensor,
+        timesteps: torch.Tensor,
+        network_dtype: torch.dtype,
+        model_pred: torch.Tensor,
+        target: torch.Tensor,
+        weighting: Optional[torch.Tensor],
+        batch: Dict[str, Any],
+        intermediate_z: Optional[torch.Tensor],
+        vae: Optional[Any] = None,
+        transformer: Optional[Any] = None,
+        network: Optional[Any] = None,
+        control_signal_processor: Optional[Any] = None,
+        repa_helper: Optional[Any] = None,
+        raft: Optional[Any] = None,
+        warp_fn: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
+    ) -> LossComponents:
+        """Compute the full training loss and its components.
+
+        The returned `total_loss` is the scalar to backpropagate.
+        """
+
+        # ---- Base or Contrastive Flow Matching ----
+        if (
+            hasattr(args, "enable_contrastive_flow_matching")
+            and args.enable_contrastive_flow_matching
+        ):
+            batch_size = latents.size(0)
+            shuffled_indices = torch.randperm(batch_size, device=accelerator.device)
+            negative_latents = latents[shuffled_indices]
+            negative_noise = noise[shuffled_indices]
+            negative_target = negative_noise - negative_latents.to(
+                device=accelerator.device, dtype=network_dtype
+            )
+
+            loss_fm = F.mse_loss(model_pred.to(network_dtype), target, reduction="none")
+            loss_contrastive = F.mse_loss(
+                model_pred.to(network_dtype), negative_target, reduction="none"
+            )
+            lambda_val = float(getattr(args, "contrastive_flow_lambda", 0.05))
+            loss = loss_fm - lambda_val * loss_contrastive
+        else:
+            loss = F.mse_loss(model_pred.to(network_dtype), target, reduction="none")
+
+        # ---- Dataset sample weights ----
+        sample_weights = batch.get("weight", None)
+        if sample_weights is not None:
+            sample_weights = sample_weights.to(
+                device=accelerator.device, dtype=network_dtype
+            )
+            while sample_weights.dim() < loss.dim():
+                sample_weights = sample_weights.unsqueeze(-1)
+            loss = loss * sample_weights
+
+        # ---- Masked training ----
+        mask = batch.get("mask_signal", None)
+        if mask is not None:
+            mask = mask.to(device=accelerator.device, dtype=network_dtype)
+            while mask.dim() < loss.dim():
+                mask = mask.unsqueeze(-1)
+            loss = loss * mask
+
+        if weighting is not None:
+            loss = loss * weighting
+
+        loss = loss.mean()
+        base_loss = loss
+
+        # ---- Optional Dispersive Loss ----
+        dispersive_loss_value: Optional[torch.Tensor] = None
+        if (
+            hasattr(args, "enable_dispersive_loss")
+            and args.enable_dispersive_loss
+            and intermediate_z is not None
+            and float(getattr(args, "dispersive_loss_lambda", 0.0)) != 0.0
+        ):
+            try:
+                pooled_z = intermediate_z
+                pooling_mode = str(
+                    getattr(args, "dispersive_loss_pooling", "none")
+                ).lower()
+                if pooling_mode != "none":
+                    try:
+                        lat_f, lat_h, lat_w = latents.shape[2:5]
+                        pt, ph, pw = self.config.patch_size
+                        t_tokens = max(1, lat_f // pt)
+                        h_tokens = max(1, lat_h // ph)
+                        w_tokens = max(1, lat_w // pw)
+                        tokens_per_frame = h_tokens * w_tokens
+                        bsz, seq_len, hidden = pooled_z.shape
+                        if seq_len == t_tokens * tokens_per_frame:
+                            pooled_z = pooled_z.view(
+                                bsz, t_tokens, tokens_per_frame, hidden
+                            )
+                            if pooling_mode == "frame_mean":
+                                pooled_z = pooled_z.mean(dim=2)  # (B, T, C)
+                                pooled_z = pooled_z.reshape(bsz, -1)
+                    except Exception:
+                        pooled_z = intermediate_z
+
+                dispersive_val = dispersive_loss_info_nce(
+                    pooled_z,
+                    tau=float(getattr(args, "dispersive_loss_tau", 0.5)),
+                    metric=str(getattr(args, "dispersive_loss_metric", "l2_sq")),
+                )
+                loss = (
+                    loss
+                    + float(getattr(args, "dispersive_loss_lambda", 0.0))
+                    * dispersive_val
+                )
+                dispersive_loss_value = dispersive_val.detach()
+            except Exception as e:
+                logger.warning(f"Dispersive loss computation failed: {e}")
+
+        # ---- Optional REPA Loss ----
+        repa_loss_value: Optional[torch.Tensor] = None
+        if repa_helper is not None:
+            try:
+                if "pixels" in batch:
+                    clean_pixels = torch.stack(
+                        batch["pixels"], dim=0
+                    )  # (B, C, F, H, W)
+                    first_frame_pixels = clean_pixels[:, :, 0, :, :]
+                    repa_val = repa_helper.get_repa_loss(first_frame_pixels, vae)
+                    loss = loss + repa_val
+                    repa_loss_value = repa_val.detach()
+                else:
+                    logger.warning(
+                        "REPA enabled, but no 'pixels' found in batch. Skipping REPA loss."
+                    )
+            except Exception as e:
+                logger.warning(f"REPA loss computation failed: {e}")
+
+        # ---- Optional Optical Flow Loss (RAFT) ----
+        optical_flow_loss_value: Optional[torch.Tensor] = None
+        if (
+            hasattr(args, "enable_optical_flow_loss")
+            and args.enable_optical_flow_loss
+            and float(getattr(args, "lambda_optical_flow", 0.0)) > 0.0
+        ):
+            try:
+                assert vae is not None, "VAE must be provided for optical flow loss"
+                with torch.no_grad():
+                    pred_latents = model_pred.to(network_dtype)
+                    decoded = vae.decode(
+                        pred_latents / getattr(vae, "scaling_factor", 1.0)
+                    )
+                    pred_frames = (
+                        torch.stack(decoded, dim=0)
+                        if isinstance(decoded, list)
+                        else decoded
+                    )
+                assert (
+                    pred_frames.dim() == 5
+                ), f"Expected pred_frames shape (B, T, C, H, W), got {pred_frames.shape}"
+                bsz, t_frames, c, h, w = pred_frames.shape
+                if t_frames < 2:
+                    raise ValueError("Need at least 2 frames for optical flow loss")
+                assert (
+                    raft is not None
+                ), "RAFT model must be available for optical flow loss"
+                assert (
+                    warp_fn is not None
+                ), "Warp function must be provided for optical flow loss"
+                with torch.no_grad():
+                    frame0 = pred_frames[:, :-1].reshape(-1, c, h, w)
+                    frame1 = pred_frames[:, 1:].reshape(-1, c, h, w)
+                    flow = raft(frame0, frame1)
+                warped = warp_fn(frame0, flow)
+                flow_loss = F.l1_loss(warped, frame1)
+                loss = loss + float(args.lambda_optical_flow) * flow_loss
+                optical_flow_loss_value = flow_loss.detach()
+            except Exception as e:
+                logger.warning(f"Optical flow loss computation failed: {e}")
+
+        # ---- Diff Output Preservation (DOP) ----
+        dop_loss_value: Optional[torch.Tensor] = None
+        if (
+            getattr(args, "diff_output_preservation", False)
+            and "t5_preservation" in batch
+            and transformer is not None
+            and network is not None
+        ):
+            try:
+                dop_embeds = [
+                    t.to(device=accelerator.device, dtype=network_dtype)
+                    for t in batch["t5_preservation"]
+                ]
+                # Control-aware inputs, mirroring training path
+                control_latents_dop = self._maybe_get_control_latents(
+                    args,
+                    accelerator,
+                    batch,
+                    latents,
+                    network_dtype,
+                    vae,
+                    control_signal_processor,
+                )
+                model_input_control = None
+                if control_latents_dop is not None:
+                    model_input_control = self._concat_control_if_available(
+                        noisy_model_input, control_latents_dop
+                    )
+
+                # Base model (LoRA disabled) prior prediction
+                prior_pred = self._compute_prior_pred_for_dop(
+                    args=args,
+                    accelerator=accelerator,
+                    transformer=transformer,
+                    network=network,
+                    latents=latents,
+                    noisy_model_input=noisy_model_input,
+                    timesteps=timesteps,
+                    dop_context=dop_embeds,
+                    model_input_control=model_input_control,
+                )
+
+                # LoRA-enabled prediction on preservation prompt
+                seq_len = self._compute_seq_len(latents)
+                model_input_dop = (
+                    model_input_control
+                    if model_input_control is not None
+                    else noisy_model_input
+                )
+                # Match original behavior: compute DOP prediction under autocast
+                with accelerator.autocast():
+                    dop_pred_list = transformer(
+                        model_input_dop,
+                        t=timesteps,
+                        context=dop_embeds,
+                        seq_len=seq_len,
+                        y=None,
+                    )
+                dop_pred = torch.stack(dop_pred_list, dim=0)
+                dop_loss_val = F.mse_loss(dop_pred, prior_pred) * float(
+                    getattr(args, "diff_output_preservation_multiplier", 1.0)
+                )
+                loss = loss + dop_loss_val
+                dop_loss_value = dop_loss_val.detach()
+            except Exception as e:
+                logger.warning(f"DOP loss computation failed: {e}")
+
+        return LossComponents(
+            total_loss=loss,
+            base_loss=base_loss.detach(),
+            dop_loss=dop_loss_value,
+            dispersive_loss=dispersive_loss_value,
+            optical_flow_loss=optical_flow_loss_value,
+            repa_loss=repa_loss_value,
+        )
+
+    @torch.no_grad()
+    def compute_extra_train_metrics(
+        self,
+        *,
+        model_pred: torch.Tensor,
+        target: torch.Tensor,
+        noise: torch.Tensor,
+        timesteps: torch.Tensor,
+        noise_scheduler: Any,
+        accelerator: Any,
+    ) -> Dict[str, float]:
+        """Compute periodic extra training loss metrics using existing tensors.
+
+        Returns
+        -------
+        Dict[str, float]
+            A mapping with keys:
+            - "train/loss_p50"
+            - "train/loss_p90"
+            - "train/loss_cv_in_batch"
+            - "train/direct_noise_loss_mean"
+            - "train/loss_snr_correlation_batch"
+        """
+        metrics: Dict[str, float] = {}
+        try:
+            per_sample_vel = torch.nn.functional.mse_loss(
+                model_pred.to(torch.float32), target.to(torch.float32), reduction="none"
+            ).mean(dim=[1, 2, 3, 4])
+
+            # Percentiles
+            try:
+                p50 = torch.quantile(per_sample_vel, 0.5).item()
+            except Exception:
+                p50 = torch.median(per_sample_vel).item()
+            try:
+                p90 = torch.quantile(per_sample_vel, 0.9).item()
+            except Exception:
+                k = max(1, int(0.1 * per_sample_vel.numel()))
+                p90 = per_sample_vel.topk(k).values.min().item()
+
+            # CV (robust to batch size 1; use population std to avoid ddof warnings)
+            mean_loss = per_sample_vel.mean()
+            batch_items = int(per_sample_vel.numel())
+            if batch_items > 1:
+                std_loss = per_sample_vel.to(torch.float32).std(correction=0)
+                cv_in_batch = (
+                    (std_loss / (mean_loss + 1e-12)).item()
+                    if torch.isfinite(mean_loss)
+                    else 0.0
+                )
+            else:
+                std_loss = torch.tensor(
+                    0.0, device=per_sample_vel.device, dtype=torch.float32
+                )
+                cv_in_batch = 0.0
+
+            # Direct noise loss mean
+            direct_noise_loss_mean = (
+                torch.nn.functional.mse_loss(
+                    model_pred.to(torch.float32),
+                    noise.to(torch.float32),
+                    reduction="none",
+                )
+                .mean(dim=[1, 2, 3, 4])
+                .mean()
+                .item()
+            )
+
+            # SNR correlation with loss
+            try:
+                sigmas = get_sigmas(
+                    noise_scheduler,
+                    timesteps,
+                    accelerator.device,
+                    n_dim=4,
+                    dtype=timesteps.dtype,
+                    source="training/metrics",
+                )
+                if sigmas.dim() > 1:
+                    sigmas_reduced = sigmas.view(sigmas.shape[0], -1).mean(dim=1)
+                else:
+                    sigmas_reduced = sigmas
+                snr_vals = (1.0 / (sigmas_reduced.to(torch.float32) ** 2)).flatten()
+                if (
+                    per_sample_vel.numel() > 1
+                    and snr_vals.numel() == per_sample_vel.numel()
+                ):
+                    x = per_sample_vel.to(torch.float32)
+                    y = snr_vals
+                    x = x - x.mean()
+                    y = y - y.mean()
+                    # Use population std (correction=0) to avoid degrees-of-freedom issues
+                    denom = x.std(correction=0) * y.std(correction=0)
+                    corr = (
+                        (x * y).mean() / (denom + 1e-12)
+                        if torch.isfinite(denom) and float(denom.item()) > 0.0
+                        else torch.tensor(0.0, device=x.device)
+                    )
+                    loss_snr_corr = float(corr.item())
+                else:
+                    loss_snr_corr = 0.0
+            except Exception:
+                loss_snr_corr = 0.0
+
+            metrics.update(
+                {
+                    "train/loss_p50": float(p50),
+                    "train/loss_p90": float(p90),
+                    "train/loss_cv_in_batch": float(cv_in_batch),
+                    "train/direct_noise_loss_mean": float(direct_noise_loss_mean),
+                    "train/loss_snr_correlation_batch": float(loss_snr_corr),
+                }
+            )
+        except Exception:
+            return {}
+
+        return metrics
