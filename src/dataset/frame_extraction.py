@@ -20,14 +20,15 @@ def generate_crop_positions(
         frame_count: Total number of frames available in the video (F).
         target_frames: List of target window sizes (each is the number of frames in a clip).
         mode: Strategy name. Supported:
-            - "head" (alias: "single_beginning")
-            - "middle" (alias: "single_middle")
+            - "head"
+            - "middle"
             - "chunk" (non-overlapping contiguous windows)
             - "slide" (sliding window with stride)
+            - "slide_end" (sliding with stride; ensure last window ends at the last frame; if video is shorter than target, return a single full-length window)
             - "uniform" (fixed count of evenly spaced starts)
             - "multiple_overlapping" (cover video with minimal number of windows, end-aligned)
             - "full" (use up to max_frames, rounded to N*4+1)
-        frame_stride: Stride for "slide" mode.
+        frame_stride: Stride for "slide"/"slide_end" modes.
         frame_sample: Number of samples for "uniform" mode.
         max_frames: Maximum frames for "full" mode.
 
@@ -39,12 +40,7 @@ def generate_crop_positions(
 
     crop_pos_and_frames: List[Tuple[int, int]] = []
 
-    # Normalize aliases
     normalized_mode = mode
-    if mode == "single_beginning":
-        normalized_mode = "head"
-    elif mode == "single_middle":
-        normalized_mode = "middle"
 
     for target_frame in target_frames:
         if frame_count < target_frame:
@@ -67,6 +63,18 @@ def generate_crop_positions(
             stride = frame_stride or 1
             for i in range(0, frame_count - target_frame + 1, stride):
                 crop_pos_and_frames.append((i, target_frame))
+
+        elif normalized_mode == "slide_end":
+            stride = frame_stride or 1
+            last_start = frame_count - target_frame
+            if last_start < 0:
+                # Video shorter than target; take full length as a single window
+                crop_pos_and_frames.append((0, frame_count))
+            else:
+                for i in range(0, last_start + 1, stride):
+                    crop_pos_and_frames.append((i, target_frame))
+                if not crop_pos_and_frames or crop_pos_and_frames[-1][0] != last_start:
+                    crop_pos_and_frames.append((last_start, target_frame))
 
         elif normalized_mode == "uniform":
             samples = frame_sample or 1
