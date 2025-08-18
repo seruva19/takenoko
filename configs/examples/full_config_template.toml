@@ -24,13 +24,29 @@ fp8_scaled = true
 fp8_base = true
 
 # Upcast quantization to float32 when computing scales and FP8 weights (improves accuracy, small VRAM cost during optimization)
-upcast_quantization = false
+# Only works with fp8_scaled = true
+upcast_quantization = true
 
-# Upcast linear matmul to float32 when using fp8_scaled (ignored for mm_scaled; slight perf cost, improves numerical stability)
+# Upcast linear matmul to float32
+# Only works with fp8_scaled = true
 upcast_linear = false
 
-# Use mixed precision for transformer
-mixed_precision_transformer = false
+# Exclude feedforward layers from scaled_mm optimization (useful for WAN models where scaled_mm degrades quality)
+# May help to prevent quality degradation in feedforward layers, only works with fp8_scaled = true
+exclude_ffn_from_scaled_mm = true
+
+# Scale input tensor format for scaled_mm ("e4m3" or "e5m2", None disables input scaling)
+# Enables input tensor quantization for additional memory savings, may impact quality, only works with fp8_scaled = true
+# scale_input_tensor = null
+
+# Optional: force a uniform cast of DiT weights ("fp16" or "bf16").
+# When null, preserves default behavior (checkpoint dtype or fp8 paths).
+# Ignored when fp8_scaled = true or mixed_precision_transformer = true.
+# dit_cast_dtype = null
+
+# Use mixed precision for transformer (preserves per-tensor dtypes from checkpoint)
+# true for better dtype precision when using fp8_scaled
+mixed_precision_transformer = true
 
 # Enable FP16 accumulation
 fp16_accumulation = false
@@ -1003,6 +1019,9 @@ skip_existing = false
 # keep cache files not in dataset
 keep_cache = true
 
+# delete all existing latent cache files in cache_directory before caching
+# purge_before_run = true
+
 # debug mode, choices: image, console, video
 # debug_mode = "image" 
 
@@ -1038,6 +1057,9 @@ skip_existing = false
 
 # keep cache files not in dataset
 keep_cache = true
+
+# delete all existing text encoder cache files in cache_directory before caching
+# purge_before_run = true
 
 # =============================================================================
 # DATASET SETTINGS
@@ -1086,7 +1108,6 @@ num_repeats = 1
 # Path to mask images for this dataset (overrides general setting)
 # mask_path = "/path/to/mask/images" 
 
-
 # Video dataset
 [[datasets.train]]
 
@@ -1105,7 +1126,15 @@ batch_size = 1
 # Number of times to repeat this dataset per epoch
 num_repeats = 1
 
-# Use uniform sampling
+# Supported frame extraction modes
+# - head: take first window, requires setting target_frames. 
+# - middle: take centered window, requires setting target_frames.
+# - chunk: non-overlapping contiguous windows of length target_frame across the video, requires setting target_frames.
+# - slide: sliding windows, requires setting target_frames and frame_stride (>=1), default is 1. Overlap (frames) = target_frame - frame_stride.
+# - slide_end: sliding windows that guarantee the final window ends at the last frame; if the video is shorter than target_frame, produce a single full-length window. Requires target_frames and frame_stride (>=1). Overlap (frames) = target_frame - frame_stride.
+# - uniform: fixed count of evenly spaced start positions, requires setting target_frames and frame_sample (>=1). If frame_sample == 1, it is auto-changed to "head" by the loader.
+# - multiple_overlapping: minimally cover the video with windows (may overlap), end-aligned, requires setting target_frames.
+# - full: use up to max_frames (rounded to N*4+1) starting at 0, requires setting target_frames to be non-empty; Uses max_frames to cap length (optional). If multiple target_frames are provided, one identical (0, use_frames) window is produced per entry; recommended target_frames = [1].
 frame_extraction = "uniform"
 
 # Extract different frame sequence lengths
@@ -1113,6 +1142,12 @@ target_frames = [1, 17, 33]
 
 # Extract each target_frame sequence once
 frame_sample = 1
+
+# Stride between sliding windows; used only when frame_extraction = "slide"
+# frame_stride = 1
+
+# Cap total frames used by frame_extraction = "full"; final length is rounded to (4n+1)
+# max_frames = 129
 
 # Source FPS
 source_fps = 24
