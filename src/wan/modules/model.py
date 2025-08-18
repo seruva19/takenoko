@@ -847,6 +847,10 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
         device: torch.device,
         move_to_device: bool,
         use_scaled_mm: bool = False,
+        exclude_ffn_from_scaled_mm: bool = False,
+        scale_input_tensor: Optional[str] = None,
+        upcast_linear: bool = False,
+        quant_dtype: Optional[torch.dtype] = None,
     ) -> int:
         """
         Optimize the model state_dict with fp8.
@@ -870,7 +874,15 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
         )
 
         # apply monkey patching
-        apply_fp8_monkey_patch(self, state_dict, use_scaled_mm=use_scaled_mm)
+        apply_fp8_monkey_patch(
+            self,
+            state_dict,
+            use_scaled_mm=use_scaled_mm,
+            exclude_ffn_from_scaled_mm=exclude_ffn_from_scaled_mm,
+            scale_input_tensor=scale_input_tensor,
+            upcast_linear=upcast_linear,
+            quant_dtype=quant_dtype,
+        )
 
         return state_dict  # type: ignore
 
@@ -1390,6 +1402,8 @@ def load_wan_model(
     use_fvdm: bool = False,
     quant_dtype: Optional[torch.dtype] = None,
     upcast_linear: bool = False,
+    exclude_ffn_from_scaled_mm: bool = False,
+    scale_input_tensor: Optional[str] = None,
 ) -> WanModel:
     """
     Load a WAN model from the specified checkpoint.
@@ -1471,6 +1485,8 @@ def load_wan_model(
             use_scaled_mm=use_scaled_mm,
             upcast_linear=upcast_linear,
             quant_dtype=quant_dtype,
+            exclude_ffn_from_scaled_mm=exclude_ffn_from_scaled_mm,
+            scale_input_tensor=scale_input_tensor,
         )
 
         if loading_device.type != "cpu":

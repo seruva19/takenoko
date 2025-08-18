@@ -116,10 +116,17 @@ def create_args_from_config(
     # Quantization behavior controls (default False to preserve prior behavior)
     args.upcast_quantization = bool(config.get("upcast_quantization", False))
     args.upcast_linear = bool(config.get("upcast_linear", False))
+    # New FP8 optimization flags (gated for safety - default to False)
+    args.exclude_ffn_from_scaled_mm = bool(
+        config.get("exclude_ffn_from_scaled_mm", False)
+    )
+    args.scale_input_tensor = config.get("scale_input_tensor", None)
     # Allow loading mixed precision transformer (per-tensor dtypes preserved)
     args.mixed_precision_transformer = bool(
         config.get("mixed_precision_transformer", False)
     )
+    # Optional uniform cast dtype for DiT weights ("fp16"|"bf16"|None)
+    args.dit_cast_dtype = config.get("dit_cast_dtype", None)
     args.t5 = config.get("t5")
     args.fp8_t5 = config.get("fp8_t5", False)
     args.clip = config.get("clip")

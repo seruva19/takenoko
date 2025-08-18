@@ -106,6 +106,26 @@ class ModelManager:
         mp_transformer = bool(getattr(args, "mixed_precision_transformer", False))
         dit_weight_dtype_to_use = None if mp_transformer else dit_weight_dtype
 
+        # Optional override via config: dit_cast_dtype = "fp16" | "bf16" | None
+        # Ignored when fp8_scaled is True (weights are converted to fp8 at load) or when mixed_precision_transformer is True
+        cast_pref = getattr(args, "dit_cast_dtype", None)
+        if not getattr(args, "fp8_scaled", False) and not mp_transformer and cast_pref:
+            cast_pref_str = str(cast_pref).lower()
+            if cast_pref_str in ("fp16", "float16"):  # explicit uniform cast
+                dit_weight_dtype_to_use = torch.float16
+                logger.info("Overriding DiT uniform cast to float16 via dit_cast_dtype")
+            elif cast_pref_str in ("bf16", "bfloat16"):
+                dit_weight_dtype_to_use = torch.bfloat16
+                logger.info(
+                    "Overriding DiT uniform cast to bfloat16 via dit_cast_dtype"
+                )
+            elif cast_pref_str in ("none", "null", "auto", ""):  # treat as None
+                pass
+            else:
+                logger.warning(
+                    f"Unknown dit_cast_dtype='{cast_pref}'. Expected 'fp16'|'bf16'|None. Using default behavior."
+                )
+
         transformer = load_wan_model(
             config,
             accelerator.device,
@@ -121,6 +141,10 @@ class ModelManager:
                 torch.float32 if getattr(args, "upcast_quantization", False) else None
             ),
             upcast_linear=bool(getattr(args, "upcast_linear", False)),
+            exclude_ffn_from_scaled_mm=bool(
+                getattr(args, "exclude_ffn_from_scaled_mm", False)
+            ),
+            scale_input_tensor=getattr(args, "scale_input_tensor", None),
         )
         # WanModel was constructed with use_fvdm above; no runtime mutation needed
 
@@ -185,6 +209,10 @@ class ModelManager:
                 torch.float32 if getattr(args, "upcast_quantization", False) else None
             ),
             upcast_linear=bool(getattr(args, "upcast_linear", False)),
+            exclude_ffn_from_scaled_mm=bool(
+                getattr(args, "exclude_ffn_from_scaled_mm", False)
+            ),
+            scale_input_tensor=getattr(args, "scale_input_tensor", None),
         )
 
         # Enable block swap for the temporary high-noise model only when not offloading it

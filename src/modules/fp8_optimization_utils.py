@@ -457,6 +457,8 @@ def apply_fp8_monkey_patch(
     use_scaled_mm=False,
     upcast_linear: bool = False,
     quant_dtype: Optional[torch.dtype] = None,
+    exclude_ffn_from_scaled_mm: bool = False,
+    scale_input_tensor: Optional[str] = None,
 ):
     """
     Apply monkey patching to a model using FP8 optimized state dict.
@@ -465,29 +467,38 @@ def apply_fp8_monkey_patch(
         model (nn.Module): Model instance to patch
         optimized_state_dict (dict): FP8 optimized state dict
         use_scaled_mm (bool): Use scaled_mm for FP8 Linear layers, requires SM 8.9+ (RTX 40 series)
+        upcast_linear (bool): Whether to upcast the linear transformation to float32
+        quant_dtype (Optional[torch.dtype]): Quantization dtype used during optimization
+        exclude_ffn_from_scaled_mm (bool): Exclude feedforward layers from scaled_mm (useful for WAN models)
+        scale_input_tensor (Optional[str]): Scale input tensor format ("e4m3" or "e5m2") for scaled_mm
 
     Returns:
         nn.Module: The patched model (same instance, modified in-place)
     """
-    # # Calculate FP8 float8_e5m2 max value
-    # max_value = calculate_fp8_maxval(5, 2)
-    max_value = None  # do not quantize input tensor
+    # Calculate max_value for input tensor scaling if enabled
+    max_value = None
+    if use_scaled_mm:
+        # Set model-level flag for FP8 optimization detection
+        setattr(model, "fp8_matmul_enabled", True)
+
+        if scale_input_tensor is not None:
+            if "e4m3" in scale_input_tensor.lower():
+                max_value = calculate_fp8_maxval(4, 3)
+            elif "e5m2" in scale_input_tensor.lower():
+                max_value = calculate_fp8_maxval(5, 2)
+            else:
+                logger.warning(
+                    f"Unknown scale_input_tensor format: {scale_input_tensor}"
+                )
 
     # Log configuration summary for clarity
+    if exclude_ffn_from_scaled_mm:
+        logger.info("FFNs will be excluded from scaled_mm patching (Wan mode)")
     if upcast_linear:
         logger.info(
-            "Linear transformations for scaled layers will be upcast to float32 (ignored for mm_scaled)"
+            f"Linear transformations for scaled layers will be upcast to float32 {'except when using scaled_mm' if use_scaled_mm else ''}"
         )
-    logger.info(
-        f"Quantization executed in {quant_dtype if quant_dtype is not None else 'original tensor dtype'}"
-    )
-    # Determine original weight dtype for dequant and mm_scaled out_dtype
-    try:
-        model_param_dtype = next(model.parameters()).dtype  # type: ignore[attr-defined]
-    except Exception:
-        model_param_dtype = torch.float32
-    orig_dtype_to_use = model_param_dtype
-    logger.info(f"Weights will be dequantized to {orig_dtype_to_use}")
+    # We'll determine original dtype per-layer for better accuracy
 
     # Find all scale keys to identify FP8-optimized layers
     scale_keys = [k for k in optimized_state_dict.keys() if k.endswith(".scale_weight")]
@@ -500,6 +511,7 @@ def apply_fp8_monkey_patch(
         patched_module_paths.add(module_path)
 
     patched_count = 0
+    q_dtype = None
 
     # Apply monkey patch to each layer with FP8 weights
     for name, module in model.named_modules():
@@ -508,33 +520,46 @@ def apply_fp8_monkey_patch(
 
         # Apply patch if it's a Linear layer with FP8 scale
         if isinstance(module, nn.Linear) and has_scale:
-            # register the scale_weight as a buffer with the same dtype as the incoming scale tensor
-            try:
-                scale_dtype = optimized_state_dict[f"{name}.scale_weight"].dtype
-            except Exception:
-                scale_dtype = torch.float32
-            module.register_buffer("scale_weight", torch.tensor(1.0, dtype=scale_dtype))
+            # Register the scale_weight as a buffer to load the state_dict
+            setattr(
+                module, "original_dtype_enum", module.weight.dtype
+            )  # More accurate per-layer dtype
+            q_dtype = optimized_state_dict[f"{name}.scale_weight"].dtype
+            module.register_buffer("scale_weight", torch.tensor(1.0, dtype=q_dtype))
+            setattr(module, "upcast_linear", upcast_linear)
 
-            # expose control flags
-            try:
-                module.upcast_linear = bool(upcast_linear)  # type: ignore[attr-defined]
-            except Exception:
-                pass
-
-            # store original dtype enum for mm_scaled and dequant paths
-            try:
-                module.original_dtype_enum = orig_dtype_to_use  # type: ignore[attr-defined]
-            except Exception:
-                pass
+            # Determine if this layer should use scaled_mm (with FFN exclusion support)
+            really_use_scaled_mm = use_scaled_mm
+            if exclude_ffn_from_scaled_mm and _is_ffn_layer(name):
+                really_use_scaled_mm = False
 
             # Create a new forward method with the patched version.
-            def new_forward(self, x):
-                return fp8_linear_forward_patch(self, x, use_scaled_mm, max_value)
+            # Use default arguments to capture variables properly in closure
+            def new_forward(
+                self, x, _use_scaled_mm=really_use_scaled_mm, _max_value=max_value
+            ):
+                return fp8_linear_forward_patch(self, x, _use_scaled_mm, _max_value)
 
             # Bind method to module
             module.forward = new_forward.__get__(module, type(module))
 
             patched_count += 1
 
+    logger.info(f"Quantization done in {q_dtype}")
     logger.info(f"Number of monkey-patched Linear layers: {patched_count}")
     return model
+
+
+def _is_ffn_layer(layer_name: str) -> bool:
+    """
+    Check if a layer is a feedforward network layer based on common naming patterns.
+
+    Args:
+        layer_name (str): Name of the layer
+
+    Returns:
+        bool: True if the layer is likely a feedforward layer
+    """
+    ffn_patterns = ["ffn", "feed_forward", "mlp", "fc", "feedforward"]
+    layer_name_lower = layer_name.lower()
+    return any(pattern in layer_name_lower for pattern in ffn_patterns)
