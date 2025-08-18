@@ -52,6 +52,19 @@ def process_text_encoder_batches(
 ):
     """Process text encoder batches across all datasets"""
     num_workers = num_workers if num_workers is not None else max(1, os.cpu_count() - 1)  # type: ignore
+    # Optional purge step: remove all existing text-encoder cache files in each dataset cache dir
+    purge_before_run = getattr(encode, "_purge_before_run", False)
+    if purge_before_run:
+        total_purged = 0
+        for dataset in datasets:
+            try:
+                for cache_file in dataset.get_all_text_encoder_output_cache_files():
+                    if os.path.exists(cache_file):
+                        os.remove(cache_file)
+                        total_purged += 1
+            except Exception as e:
+                logger.warning(f"Failed to purge text encoder cache files: {e}")
+        logger.info(f"🧹 Purged {total_purged} text encoder cache files before caching")
     for i, dataset in enumerate(datasets):
         logger.info(f"Encoding dataset [{i}]")
         all_cache_files = all_cache_files_for_dataset[i]

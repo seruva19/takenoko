@@ -637,6 +637,7 @@ def create_args_from_config(
             "skip_existing", False
         )
         args.latent_cache_keep_cache = latent_cache_config.get("keep_cache", False)
+        args.latent_cache_purge = latent_cache_config.get("purge_before_run", False)
         args.latent_cache_debug_mode = latent_cache_config.get("debug_mode")
         args.latent_cache_console_width = latent_cache_config.get("console_width", 80)
         args.latent_cache_console_back = latent_cache_config.get(
@@ -652,6 +653,7 @@ def create_args_from_config(
         args.latent_cache_num_workers = None
         args.latent_cache_skip_existing = False
         args.latent_cache_keep_cache = False
+        args.latent_cache_purge = False
         args.latent_cache_debug_mode = None
         args.latent_cache_console_width = 80
         args.latent_cache_console_back = "black"
@@ -675,6 +677,9 @@ def create_args_from_config(
         args.text_encoder_cache_keep_cache = text_encoder_cache_config.get(
             "keep_cache", False
         )
+        args.text_encoder_cache_purge = text_encoder_cache_config.get(
+            "purge_before_run", False
+        )
     else:
         # Set defaults for text encoder cache if section not found
         args.text_encoder_cache_device = args.device
@@ -682,6 +687,7 @@ def create_args_from_config(
         args.text_encoder_cache_num_workers = None
         args.text_encoder_cache_skip_existing = False
         args.text_encoder_cache_keep_cache = False
+        args.text_encoder_cache_purge = False
 
     # No explicit load_mask toggle: mask_path presence implies mask loading
 
@@ -1016,17 +1022,18 @@ class UnifiedTrainer:
         print("2. Cache Text Encoder Outputs")
         print("3. Train Model")
         print("4. Estimate VRAM Usage (from current config)")
-        print("5. Reload Config File")
-        print("6. Free VRAM (aggressive)")
-        print("7. Return to Config Selection")
+        print("5. Estimate latent cache chunks (by frame extraction mode)")
+        print("6. Reload Config File")
+        print("7. Free VRAM (aggressive)")
+        print("8. Return to Config Selection")
         print("=" * 50)
 
         while True:
-            choice = input("Enter your choice (1-7): ").strip()
-            if choice in ["1", "2", "3", "4", "5", "6", "7"]:
+            choice = input("Enter your choice (1-8): ").strip()
+            if choice in ["1", "2", "3", "4", "5", "6", "7", "8"]:
                 return choice
             else:
-                print("Invalid choice. Please enter 1, 2, 3, 4, 5, 6, or 7.")
+                print("Invalid choice. Please enter 1-8.")
 
     def cache_latents(self) -> bool:
         """Run latent caching operation"""
@@ -1057,6 +1064,7 @@ class UnifiedTrainer:
             cache_args.num_workers = self.args.latent_cache_num_workers
             cache_args.skip_existing = self.args.latent_cache_skip_existing
             cache_args.keep_cache = self.args.latent_cache_keep_cache
+            cache_args.purge_before_run = self.args.latent_cache_purge
 
             # Add control LoRA caching arguments
             cache_args.control_lora_type = self.args.control_lora_type
@@ -1201,6 +1209,7 @@ class UnifiedTrainer:
             cache_args.skip_existing = self.args.text_encoder_cache_skip_existing
             cache_args.batch_size = self.args.text_encoder_cache_batch_size
             cache_args.keep_cache = self.args.text_encoder_cache_keep_cache
+            cache_args.purge_before_run = self.args.text_encoder_cache_purge
 
             # Add target_model for proper cache extension
             cache_args.target_model = self.args.target_model
@@ -1307,6 +1316,13 @@ class UnifiedTrainer:
                     cache_args,  # <-- ADD cache_args
                 )
 
+            # Mark the encoder closure with purge flag so the batch processor can purge before run
+            setattr(
+                encode_for_text_encoder,
+                "_purge_before_run",
+                cache_args.purge_before_run,
+            )
+
             process_text_encoder_batches(
                 cache_args.num_workers,
                 cache_args.skip_existing,
@@ -1342,6 +1358,11 @@ class UnifiedTrainer:
         except Exception as e:
             logger.exception(f"❌ Error during text encoder output caching: {e}")
             return False
+
+    def _estimate_latent_cache_chunks(self) -> int:
+        from caching.chunk_estimator import estimate_latent_cache_chunks
+
+        return estimate_latent_cache_chunks(self.args.dataset_config, self.args)
 
     def free_vram_aggressively(self) -> bool:
         """Attempt to free as much VRAM as possible using safe mechanisms."""
@@ -1694,20 +1715,45 @@ class UnifiedTrainer:
                 input("Press Enter to continue...")
 
             elif choice == "5":
+                try:
+                    # Show both total and per-dataset breakdown
+                    from caching.chunk_estimator import (
+                        estimate_latent_cache_chunks,
+                        estimate_latent_cache_chunks_per_dataset,
+                    )
+
+                    total_chunks = estimate_latent_cache_chunks(
+                        self.args.dataset_config, self.args
+                    )
+                    per_ds = estimate_latent_cache_chunks_per_dataset(
+                        self.args.dataset_config, self.args
+                    )
+                    logger.info(
+                        f"🧮 Estimated latent cache chunks: {total_chunks} (across all video datasets)"
+                    )
+                    for entry in per_ds:
+                        logger.info(
+                            f"   - {entry['video_directory']}: {entry['chunks']} chunks"
+                        )
+                except Exception as e:
+                    logger.exception(f"❌ Error estimating cache chunks: {e}")
+                input("Press Enter to continue...")
+
+            elif choice == "6":
                 success = self.reload_config()
                 if not success:
                     logger.error(
                         "Config reload failed. Please check the error messages above."
                     )
-                    input("Press Enter to continue...")
+                input("Press Enter to continue...")
 
-            elif choice == "6":
+            elif choice == "7":
                 success = self.free_vram_aggressively()
                 if not success:
                     logger.error("VRAM cleanup failed.")
                 input("Press Enter to continue...")
 
-            elif choice == "7":
+            elif choice == "8":
                 logger.info("Returning to config selection menu...")
                 sys.exit(100)
 

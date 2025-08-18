@@ -366,6 +366,18 @@ def encode_datasets(
     num_workers = (
         args.num_workers if args.num_workers is not None else max(1, os.cpu_count() - 1)  # type: ignore
     )
+    # Optional purge step: remove all existing latent cache files in each dataset cache dir
+    if getattr(args, "purge_before_run", False):
+        total_purged = 0
+        for dataset in datasets:
+            try:
+                for cache_file in dataset.get_all_latent_cache_files():
+                    if os.path.exists(cache_file):
+                        os.remove(cache_file)
+                        total_purged += 1
+            except Exception as e:
+                logger.warning(f"Failed to purge latent cache files: {e}")
+        logger.info(f"🧹 Purged {total_purged} latent cache files before caching")
     for i, dataset in enumerate(datasets):
         logger.info(f"Encoding dataset [{i}]")
         all_latent_cache_paths = []
