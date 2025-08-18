@@ -102,6 +102,10 @@ class ModelManager:
         # Pass FVDM flag through to the model by inlining the constructor after load
         use_fvdm_flag = hasattr(args, "enable_fvdm") and args.enable_fvdm
 
+        # Honor mixed_precision_transformer: keep per-tensor dtypes by not forcing a uniform cast
+        mp_transformer = bool(getattr(args, "mixed_precision_transformer", False))
+        dit_weight_dtype_to_use = None if mp_transformer else dit_weight_dtype
+
         transformer = load_wan_model(
             config,
             accelerator.device,
@@ -109,10 +113,14 @@ class ModelManager:
             attn_mode,
             split_attn,
             loading_device,
-            dit_weight_dtype,
+            dit_weight_dtype_to_use,
             getattr(args, "fp8_scaled", False),
             sparse_algo=sparse_algo,
             use_fvdm=use_fvdm_flag,
+            quant_dtype=(
+                torch.float32 if getattr(args, "upcast_quantization", False) else None
+            ),
+            upcast_linear=bool(getattr(args, "upcast_linear", False)),
         )
         # WanModel was constructed with use_fvdm above; no runtime mutation needed
 
@@ -169,10 +177,14 @@ class ModelManager:
             attn_mode,
             split_attn,
             "cpu" if offload_inactive else loading_device,
-            dit_weight_dtype,
+            dit_weight_dtype_to_use,
             getattr(args, "fp8_scaled", False),
             sparse_algo=sparse_algo,
             use_fvdm=use_fvdm_flag,
+            quant_dtype=(
+                torch.float32 if getattr(args, "upcast_quantization", False) else None
+            ),
+            upcast_linear=bool(getattr(args, "upcast_linear", False)),
         )
 
         # Enable block swap for the temporary high-noise model only when not offloading it

@@ -66,6 +66,7 @@ def load_safetensors_with_lora_and_fp8(
     dit_weight_dtype: Optional[torch.dtype] = None,
     target_keys: Optional[List[str]] = None,
     exclude_keys: Optional[List[str]] = None,
+    quant_dtype: Optional[torch.dtype] = None,
 ) -> dict[str, torch.Tensor]:
     """
     Merge LoRA weights into the state dict of a model with fp8 optimization if needed.
@@ -219,6 +220,7 @@ def load_safetensors_with_lora_and_fp8(
         target_keys,
         exclude_keys,
         weight_hook=weight_hook,
+        quant_dtype=quant_dtype,
     )
 
     for lora_weight_keys in list_of_lora_weight_keys:
@@ -242,6 +244,7 @@ def load_safetensors_with_fp8_optimization_and_hook(
     target_keys: Optional[List[str]] = None,
     exclude_keys: Optional[List[str]] = None,
     weight_hook: callable = None,  # type: ignore
+    quant_dtype: Optional[torch.dtype] = None,
 ) -> dict[str, torch.Tensor]:
     """
     Load state dict from safetensors files and merge LoRA weights into the state dict with fp8 optimization if needed.
@@ -259,6 +262,7 @@ def load_safetensors_with_fp8_optimization_and_hook(
             exclude_keys,
             move_to_device=move_to_device,
             weight_hook=weight_hook,
+            quant_dtype=quant_dtype,
         )
     else:
         logger.info(

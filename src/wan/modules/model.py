@@ -1388,6 +1388,8 @@ def load_wan_model(
     sparse_algo: Optional[str] = None,
     use_scaled_mm: bool = False,
     use_fvdm: bool = False,
+    quant_dtype: Optional[torch.dtype] = None,
+    upcast_linear: bool = False,
 ) -> WanModel:
     """
     Load a WAN model from the specified checkpoint.
@@ -1406,10 +1408,13 @@ def load_wan_model(
         sparse_algo (Optional[str]): Sparse attention algorithm to use, if any.
     """
 
-    # dit_weight_dtype is None for fp8_scaled
-    assert (not fp8_scaled and dit_weight_dtype is not None) or (
-        fp8_scaled and dit_weight_dtype is None
-    )
+    # If fp8_scaled, dit_weight_dtype must be None (we quantize/patch at load time).
+    # Otherwise, allow dit_weight_dtype to be None to support mixed precision transformers
+    # where weights keep their original per-tensor dtypes.
+    if fp8_scaled and dit_weight_dtype is not None:
+        raise ValueError(
+            "fp8_scaled=True requires dit_weight_dtype=None (weights will be converted to fp8 at load time)"
+        )
 
     device = torch.device(device)
     loading_device = torch.device(loading_device)
@@ -1450,6 +1455,7 @@ def load_wan_model(
         move_to_device=(loading_device == device),
         target_keys=FP8_OPTIMIZATION_TARGET_KEYS,
         exclude_keys=FP8_OPTIMIZATION_EXCLUDE_KEYS,
+        quant_dtype=quant_dtype,
     )
 
     # remove "model.diffusion_model." prefix: 1.3B model has this prefix
@@ -1458,7 +1464,14 @@ def load_wan_model(
             sd[key[22:]] = sd.pop(key)
 
     if fp8_scaled:
-        apply_fp8_monkey_patch(model, sd, use_scaled_mm=use_scaled_mm)
+        # Apply monkey patch for FP8. Defaults preserve previous behavior
+        apply_fp8_monkey_patch(
+            model,
+            sd,
+            use_scaled_mm=use_scaled_mm,
+            upcast_linear=upcast_linear,
+            quant_dtype=quant_dtype,
+        )
 
         if loading_device.type != "cpu":
             # make sure all the model weights are on the loading_device

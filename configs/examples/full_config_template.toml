@@ -23,6 +23,15 @@ fp8_scaled = true
 # Use fp8 for base model
 fp8_base = true
 
+# Upcast quantization to float32 when computing scales and FP8 weights (improves accuracy, small VRAM cost during optimization)
+upcast_quantization = false
+
+# Upcast linear matmul to float32 when using fp8_scaled (ignored for mm_scaled; slight perf cost, improves numerical stability)
+upcast_linear = false
+
+# Use mixed precision for transformer
+mixed_precision_transformer = false
+
 # Enable FP16 accumulation
 fp16_accumulation = false
 

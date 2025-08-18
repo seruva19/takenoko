@@ -113,6 +113,13 @@ def create_args_from_config(
 
     args.fp8_scaled = config.get("fp8_scaled", False)
     args.fp8_base = config.get("fp8_base", False)
+    # Quantization behavior controls (default False to preserve prior behavior)
+    args.upcast_quantization = bool(config.get("upcast_quantization", False))
+    args.upcast_linear = bool(config.get("upcast_linear", False))
+    # Allow loading mixed precision transformer (per-tensor dtypes preserved)
+    args.mixed_precision_transformer = bool(
+        config.get("mixed_precision_transformer", False)
+    )
     args.t5 = config.get("t5")
     args.fp8_t5 = config.get("fp8_t5", False)
     args.clip = config.get("clip")
