@@ -27,7 +27,7 @@ I stripped out everything unrelated to Wan2.1-T2V-14B training and some other fu
 
 <h3>📜 Docs</h3>
 
-This is a personal project and probably won't have in the nearest future comprehensive docs (unless it somehow becomes popular). I've tried to provide detailed comments in the config template, but it can't cover eveything. 
+This is a personal project and probably won't have in the nearest future comprehensive docs (unless it somehow becomes popular). I've tried to provide detailed comments in the config template, but it can't cover eveything. As a workaround, I recommend using [repomix](https://github.com/yamadashy/repomix) to compress the whole repository into a single XML AI-readable file (will take around 400K tokens), then feeding it into the free Gemini 2.5 Pro with 1M context window (in [Google AI Studio](https://aistudio.google.com/)) and asking questions about various aspects of the project.
 
 <h3>📜 Q&A</h3>
 
