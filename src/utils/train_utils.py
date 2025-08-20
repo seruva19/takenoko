@@ -634,11 +634,11 @@ def get_sigmas(
         if src not in _warned_missing_timesteps_sources:
             if source:
                 logger.warning(
-                    f"⚠️ Some timesteps are not present in the noise schedule (source: {source}). Rounding to the nearest available timestep. This is expected when using continuous timesteps; training is not affected."
+                    f"🔔 Some timesteps are not present in the noise schedule (source: {source}). Rounding to the nearest available timestep. This is expected when using continuous timesteps; training is not affected."
                 )
             else:
                 logger.warning(
-                    "⚠️ Some timesteps are not present in the noise schedule. Rounding to the nearest available timestep. This is expected when using continuous timesteps; training is not affected."
+                    "🔔 Some timesteps are not present in the noise schedule. Rounding to the nearest available timestep. This is expected when using continuous timesteps; training is not affected."
                 )
             _warned_missing_timesteps_sources.add(src)
         step_indices = [

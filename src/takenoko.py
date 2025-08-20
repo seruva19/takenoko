@@ -442,6 +442,10 @@ def create_args_from_config(
         "log_timestep_distribution_pmf", False
     )
 
+    # Throughput metrics logging settings
+    args.log_throughput_metrics = config.get("log_throughput_metrics", True)
+    args.throughput_window_size = config.get("throughput_window_size", 100)
+
     # TensorBoard server settings
     args.launch_tensorboard_server = config.get("launch_tensorboard_server", False)
     args.tensorboard_host = config.get("tensorboard_host", "127.0.0.1")

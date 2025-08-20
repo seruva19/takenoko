@@ -797,6 +797,12 @@ log_loss_scatterplot = true
 # Interval (in steps) to log the scatter plot
 log_loss_scatterplot_interval = 100
 
+# Enable throughput metrics logging (samples per second, steps per second, runtime)
+log_throughput_metrics = true
+
+# Window size for throughput calculation (number of recent steps to average)
+throughput_window_size = 100
+
 # Add prefix for each log directory
 # log_prefix = "" 
 

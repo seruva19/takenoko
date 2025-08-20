@@ -14,6 +14,7 @@ from accelerate import Accelerator
 from modules.scheduling_flow_match_discrete import FlowMatchDiscreteScheduler
 from utils.train_utils import get_sigmas
 from common.logger import get_logger
+from core.metrics import get_throughput_metrics, get_total_runtime
 
 logger = get_logger(__name__, level=logging.INFO)
 
@@ -708,6 +709,13 @@ class ValidationCore:
                 except Exception:
                     pass
 
+            # Add evaluation throughput metrics if enabled
+            eval_throughput_metrics = {}
+            eval_runtime = 0.0
+            if getattr(args, "log_throughput_metrics", True):
+                eval_throughput_metrics = get_throughput_metrics()
+                eval_runtime = get_total_runtime()
+
             accelerator.log(
                 {
                     "val/velocity_loss_avg": velocity_final_avg_loss,
@@ -740,6 +748,10 @@ class ValidationCore:
                     "val/worst_direct_loss": worst_direct_loss,
                     "val/velocity_loss_timestep_correlation": velocity_loss_t_corr,
                     "val/noise_loss_timestep_correlation": noise_loss_t_corr,
+                    # Evaluation throughput metrics
+                    "eval/samples_per_sec": eval_throughput_metrics["samples_per_sec"],
+                    "eval/steps_per_second": eval_throughput_metrics["steps_per_sec"],
+                    "eval/runtime": eval_runtime,
                 },
                 step=global_step,
             )

@@ -278,6 +278,19 @@ class TrainingCore:
         )
         return logs
 
+    def record_training_step(self, batch_size: int) -> None:
+        """Record a training step for throughput tracking."""
+        from core.metrics import record_training_step as _rts
+
+        _rts(batch_size)
+
+    def initialize_throughput_tracker(self, args: Any) -> None:
+        """Initialize throughput tracker with configuration."""
+        from core.metrics import initialize_throughput_tracker as _init_tracker
+
+        window_size = getattr(args, "throughput_window_size", 100)
+        _init_tracker(window_size)
+
     def generate_safe_progress_metrics(
         self,
         args: argparse.Namespace,
@@ -674,6 +687,9 @@ class TrainingCore:
             # Fresh training start
             last_sampled_step = -1
             last_validated_step = -1
+
+        # Initialize throughput tracker with configuration
+        self.initialize_throughput_tracker(args)
 
         for epoch in range(epoch_to_start, num_train_epochs):
             accelerator.print(f"\nepoch {epoch+1}/{num_train_epochs}")
@@ -1184,6 +1200,9 @@ class TrainingCore:
                 current_loss = float(loss_components.total_loss.detach().item())
                 loss_recorder.add(epoch=epoch + 1, step=step, loss=current_loss)
                 avr_loss: float = loss_recorder.moving_average
+
+                # Record training step for throughput tracking
+                self.record_training_step(bsz)
 
                 # Update EMA loss for TensorBoard logging
                 ema_loss_value = self.update_ema_loss(current_loss)

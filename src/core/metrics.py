@@ -7,7 +7,7 @@ training loop to keep `training_core.py` lean while preserving functionality.
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
-
+import time
 import torch
 
 from common.logger import get_logger
@@ -20,6 +20,114 @@ from optimizers.enhanced_logging import (
 
 
 logger = get_logger(__name__)
+
+
+class ThroughputTracker:
+    """Track training throughput metrics for samples per second and steps per second."""
+
+    def __init__(self, window_size: int = 100):
+        """Initialize throughput tracker.
+
+        Args:
+            window_size: Number of recent measurements to keep for averaging
+        """
+        self.window_size = window_size
+        self.step_times: List[float] = []
+        self.batch_sizes: List[int] = []
+        self.start_time = time.perf_counter()
+        self.last_step_time = self.start_time
+
+    def record_step(self, batch_size: int) -> None:
+        """Record a training step completion.
+
+        Args:
+            batch_size: Number of samples in the current batch
+        """
+        current_time = time.perf_counter()
+        step_duration = current_time - self.last_step_time
+
+        self.step_times.append(step_duration)
+        self.batch_sizes.append(batch_size)
+
+        # Keep only recent measurements
+        if len(self.step_times) > self.window_size:
+            self.step_times.pop(0)
+            self.batch_sizes.pop(0)
+
+        self.last_step_time = current_time
+
+    def get_throughput_metrics(self) -> Dict[str, float]:
+        """Calculate current throughput metrics.
+
+        Returns:
+            Dictionary containing samples_per_sec and steps_per_sec
+        """
+        if not self.step_times:
+            return {"samples_per_sec": 0.0, "steps_per_sec": 0.0}
+
+        # Calculate average step time
+        avg_step_time = sum(self.step_times) / len(self.step_times)
+        steps_per_sec = 1.0 / avg_step_time if avg_step_time > 0 else 0.0
+
+        # Calculate average batch size
+        avg_batch_size = sum(self.batch_sizes) / len(self.batch_sizes)
+        samples_per_sec = steps_per_sec * avg_batch_size
+
+        return {
+            "samples_per_sec": samples_per_sec,
+            "steps_per_sec": steps_per_sec,
+            "avg_step_time": avg_step_time,
+            "avg_batch_size": avg_batch_size,
+        }
+
+    def get_total_runtime(self) -> float:
+        """Get total runtime since initialization.
+
+        Returns:
+            Total runtime in seconds
+        """
+        return time.perf_counter() - self.start_time
+
+
+# Global throughput tracker instance
+_throughput_tracker = ThroughputTracker()
+
+
+def initialize_throughput_tracker(window_size: int = 100) -> None:
+    """Initialize the global throughput tracker with a specific window size.
+
+    Args:
+        window_size: Number of recent measurements to keep for averaging
+    """
+    global _throughput_tracker
+    _throughput_tracker = ThroughputTracker(window_size)
+
+
+def record_training_step(batch_size: int) -> None:
+    """Record a training step for throughput calculation.
+
+    Args:
+        batch_size: Number of samples in the current batch
+    """
+    _throughput_tracker.record_step(batch_size)
+
+
+def get_throughput_metrics() -> Dict[str, float]:
+    """Get current throughput metrics.
+
+    Returns:
+        Dictionary containing throughput metrics
+    """
+    return _throughput_tracker.get_throughput_metrics()
+
+
+def get_total_runtime() -> float:
+    """Get total training runtime.
+
+    Returns:
+        Total runtime in seconds
+    """
+    return _throughput_tracker.get_total_runtime()
 
 
 def generate_parameter_stats(
@@ -257,6 +365,17 @@ def generate_step_logs(
     """Generate scalar logs for a training step."""
     network_train_unet_only = True
     logs: Dict[str, Any] = {"loss/current": current_loss, "loss/average": avr_loss}
+
+    # Add throughput metrics if enabled
+    if getattr(args, "log_throughput_metrics", True):
+        throughput_metrics = get_throughput_metrics()
+        logs.update(
+            {
+                "train/samples_per_sec": throughput_metrics["samples_per_sec"],
+                "train/steps_per_second": throughput_metrics["steps_per_sec"],
+                "train/runtime": get_total_runtime(),
+            }
+        )
 
     if ema_loss is not None:
         logs["loss/ema"] = ema_loss
