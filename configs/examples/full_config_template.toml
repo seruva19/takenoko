@@ -820,6 +820,12 @@ performance_verbosity = "standard"
 # Split SNR metrics into essential and other namespaces for clarity
 snr_split_namespaces = true
 
+# EMA smoothing factor (0.9-0.99 typical). Higher = smoother, slower to react.
+# ema_loss_beta = 0.98
+
+# Number of steps to defer bias correction for early readability
+# ema_loss_bias_warmup_steps = 100
+
 # =============================================================================
 # TIMESTEP DISTRIBUTION LOGGING
 # =============================================================================

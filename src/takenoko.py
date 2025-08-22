@@ -360,6 +360,9 @@ def create_args_from_config(
     args.train_metrics_interval = config.get("train_metrics_interval", 50)
     # Prefer essential SNR metrics under `snr/` and move others to `snr_other/`
     args.snr_split_namespaces = config.get("snr_split_namespaces", True)
+    # EMA loss display config
+    args.ema_loss_beta = float(config.get("ema_loss_beta", 0.98))
+    args.ema_loss_bias_warmup_steps = int(config.get("ema_loss_bias_warmup_steps", 100))
 
     # Loss-vs-timestep scatter logging
     args.log_loss_scatterplot = config.get("log_loss_scatterplot", False)

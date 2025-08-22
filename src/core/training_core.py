@@ -101,6 +101,9 @@ class TrainingCore:
         self.ema_loss: Optional[float] = None
         self.ema_beta: float = 0.98  # Smoothing factor (0.9-0.99 are good choices)
         self.ema_step_count: int = 0
+        self.ema_bias_warmup_steps: int = (
+            100  # defer bias correction for early readability
+        )
 
         # Parameter statistics tracking
         self.last_param_log_step: int = -1
@@ -128,6 +131,16 @@ class TrainingCore:
             raise ValueError("EMA beta must be between 0.0 and 1.0")
         self.ema_beta = beta
         logger.info(f"EMA beta set to {beta}")
+
+    def configure_ema_from_args(self, args: argparse.Namespace) -> None:
+        """Configure EMA hyperparameters from args if provided."""
+        try:
+            if hasattr(args, "ema_loss_beta"):
+                self.set_ema_beta(float(args.ema_loss_beta))
+            if hasattr(args, "ema_loss_bias_warmup_steps"):
+                self.ema_bias_warmup_steps = int(args.ema_loss_bias_warmup_steps)
+        except Exception:
+            pass
 
     def configure_advanced_logging(self, args: argparse.Namespace) -> None:
         """Configure advanced logging settings including parameter stats, per-source losses, and gradient norms.
@@ -201,19 +214,23 @@ class TrainingCore:
             )
 
     def update_ema_loss(self, current_loss: float) -> float:
-        """Update EMA loss and return bias-corrected value."""
+        """Update EMA loss; warm-start and defer bias correction for early steps."""
         self.ema_step_count += 1
 
         if self.ema_loss is None:
-            self.ema_loss = current_loss
+            # Warm-start from current loss to avoid huge initial spike
+            self.ema_loss = float(current_loss)
         else:
-            self.ema_loss = (
-                self.ema_beta * self.ema_loss + (1 - self.ema_beta) * current_loss
+            self.ema_loss = self.ema_beta * self.ema_loss + (1 - self.ema_beta) * float(
+                current_loss
             )
 
-        # Bias correction for early steps
+        # Defer bias correction for a short warmup window to improve readability
+        if self.ema_step_count <= max(0, int(self.ema_bias_warmup_steps)):
+            return float(self.ema_loss)
+
         corrected_ema = self.ema_loss / (1 - self.ema_beta**self.ema_step_count)
-        return corrected_ema
+        return float(corrected_ema)
 
     # Metric helpers moved to trainer.metrics
     # kept methods as thin wrappers for backward compatibility
@@ -656,6 +673,11 @@ class TrainingCore:
         controlnet: Optional[Any] = None,
         dual_model_manager: Optional[Any] = None,
     ) -> Tuple[int, Any]:
+        # Configure EMA hyperparameters from args (non-fatal)
+        try:
+            self.configure_ema_from_args(args)
+        except Exception:
+            pass
         """Run the main training loop."""
 
         # Calculate starting epoch when resuming from checkpoint
