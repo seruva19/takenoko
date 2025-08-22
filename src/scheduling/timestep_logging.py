@@ -609,7 +609,16 @@ def log_show_timesteps_figure_unconditional(
             from utils.train_utils import compute_loss_weighting_for_sd3
 
             weights = []
+            # Respect configured timestep limits by masking outside [min, max]
+            t_min = int(getattr(args, "min_timestep", 0) or 0)
+            t_max = int(getattr(args, "max_timestep", 1000) or 1000)
+            t_min = max(0, min(999, t_min))
+            t_max = max(0, min(1000, t_max))
+
             for i in range(1000):
+                if i < t_min or i >= t_max:
+                    weights.append(0.0)
+                    continue
                 ts = torch.tensor([i + 1], device="cpu")
                 w = compute_loss_weighting_for_sd3(
                     getattr(args, "weighting_scheme", "none"),
