@@ -224,7 +224,7 @@ network_alpha = 32
 # TIMESTEP AND FLOW MATCHING SETTINGS
 # =============================================================================
 
-# Method to sample timesteps: sigma, uniform, sigmoid, shift, flux_shift, logsnr, qwen_shift, qinglong_flux, qinglong_qwen, logit_normal, bell_shaped, half_bell, lognorm_blend, enhanced_sigmoid, fopp
+# Method to sample timesteps: sigma, uniform, sigmoid, shift, flux_shift, logsnr, qwen_shift, qinglong_flux, qinglong_qwen, logit_normal, bell_shaped, half_bell, lognorm_blend, lognorm_continuous_blend, enhanced_sigmoid, fopp, content, style, content_style_blend
 timestep_sampling = "shift"
 
 # Shift amount for discrete timestep sampling (used with 'shift' timestep_sampling)
@@ -244,9 +244,14 @@ bell_center = 0.5
 # Only used when timestep_sampling = "bell_shaped"
 bell_std = 0.2
 
-# Alpha mix ratio for lognorm_blend (fraction of samples from LogNormal vs. linear)
-# Only used when timestep_sampling = "lognorm_blend"
+# Alpha mix ratio for lognorm_blend and lognorm_continuous_blend (fraction of samples from LogNormal vs. linear)
+# Only used when timestep_sampling = "lognorm_blend" or "lognorm_continuous_blend"
 lognorm_blend_alpha = 0.75
+
+# Blend ratio for content_style_blend (fraction of content vs style sampling)
+# Only used when timestep_sampling = "content_style_blend"
+# 0.0 = pure style (later timesteps), 1.0 = pure content (earlier timesteps)
+content_style_blend_ratio = 0.5
 
 # Weighting scheme for timestep distribution: logit_normal, mode, cosmap, sigma_sqrt, none.
 # This key interacts with two independent things: sampling distribution (which timestep indices are drawn)
@@ -802,6 +807,13 @@ log_throughput_metrics = true
 
 # Window size for throughput calculation (number of recent steps to average)
 throughput_window_size = 100
+
+# Performance metrics verbosity level for model prediction and target analysis: minimal, standard, debug
+performance_verbosity = "standard"
+
+# =============================================================================
+# TIMESTEP DISTRIBUTION LOGGING
+# =============================================================================
 
 # Add prefix for each log directory
 # log_prefix = "" 

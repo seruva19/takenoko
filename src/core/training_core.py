@@ -78,6 +78,7 @@ from common.performance_logger import (
     get_model_statistics,
     get_hardware_metrics,
     log_performance_summary,
+    configure_verbosity,
 )
 
 import logging
@@ -133,6 +134,14 @@ class TrainingCore:
 
         Sets default values for various logging options if not already set in args.
         """
+        # Performance logging verbosity
+        if not hasattr(args, "performance_verbosity"):
+            args.performance_verbosity = "standard"  # Default verbosity level
+        
+        # Configure performance logger verbosity
+        configure_verbosity(args.performance_verbosity)
+        logger.info(f"Performance logging verbosity set to: {args.performance_verbosity}")
+
         # Parameter statistics logging
         if not hasattr(args, "log_param_stats"):
             args.log_param_stats = False  # Disabled by default
@@ -1275,6 +1284,8 @@ class TrainingCore:
                             model_pred.to(network_dtype),
                             target,
                             accelerator.is_main_process,
+                            timesteps,
+                            global_step,
                         )
                         logs.update(model_stats)
 

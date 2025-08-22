@@ -4,11 +4,17 @@ This module provides comprehensive logging capabilities for:
 - Performance timing analysis (data loading, forward/backward pass, optimizer step)
 - Model output and target tensor statistics
 - Enhanced hardware utilization metrics
+
+Supports configurable verbosity levels:
+- minimal: Essential metrics only (timing, convergence, stability)
+- standard: Standard metrics + essential (default)
+- debug: All metrics including detailed breakdowns
 """
 
 import time
+import math
 import logging
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple, Literal
 import torch
 from accelerate import Accelerator
 
@@ -16,16 +22,25 @@ from common.logger import get_logger
 
 logger = get_logger(__name__, level=logging.INFO)
 
+# Verbosity levels for metric collection
+VerbosityLevel = Literal["minimal", "standard", "debug"]
+
 
 class PerformanceLogger:
     """Comprehensive performance logging for training diagnostics.
 
     This class provides detailed logging capabilities to help diagnose training
     performance bottlenecks, monitor model stability, and track hardware utilization.
+    Supports configurable verbosity levels to balance insight vs. monitoring overhead.
     """
 
-    def __init__(self):
-        """Initialize the performance logger."""
+    def __init__(self, verbosity: VerbosityLevel = "standard"):
+        """Initialize the performance logger.
+
+        Args:
+            verbosity: Metric collection level ("minimal", "standard", "debug")
+        """
+        self.verbosity = verbosity
         self.loop_end_time = None
         self.step_start_time = None
         self.forward_pass_start_time = None
@@ -120,16 +135,20 @@ class PerformanceLogger:
         model_pred: torch.Tensor,
         target: torch.Tensor,
         is_main_process: bool = True,
+        timesteps: Optional[torch.Tensor] = None,
+        global_step: Optional[int] = None,
     ) -> Dict[str, float]:
-        """Get model output and target tensor statistics.
+        """Get meaningful model output and target tensor statistics.
 
         Args:
             model_pred: Model predictions tensor
             target: Target tensor
             is_main_process: Whether this is the main process (to avoid redundant calculations)
+            timesteps: Optional timesteps tensor for timestep-specific analysis
+            global_step: Optional global step for convergence tracking
 
         Returns:
-            Dict containing model and target statistics
+            Dict containing meaningful model and target statistics based on verbosity level
         """
         if not is_main_process:
             return {}
@@ -139,28 +158,360 @@ class PerformanceLogger:
                 model_pred_f = model_pred.float()
                 target_f = target.float()
 
-                model_stats = {
-                    "prediction/mean": model_pred_f.mean().item(),
-                    "prediction/std": model_pred_f.std().item(),
-                    "prediction/max": model_pred_f.max().item(),
-                    "prediction/min": model_pred_f.min().item(),
-                }
-                target_stats = {
-                    "target_gt/mean": target_f.mean().item(),
-                    "target_gt/std": target_f.std().item(),
-                    "target_gt/max": target_f.max().item(),
-                    "target_gt/min": target_f.min().item(),
-                }
-
-                # Combine stats
                 stats = {}
-                stats.update(model_stats)
-                stats.update(target_stats)
+
+                # ESSENTIAL METRICS (all verbosity levels)
+                essential_metrics = self._compute_essential_metrics(
+                    model_pred_f, target_f
+                )
+                stats.update(essential_metrics)
+
+                # STANDARD METRICS (standard and debug verbosity)
+                if self.verbosity in ["standard", "debug"]:
+                    standard_metrics = self._compute_standard_metrics(
+                        model_pred_f, target_f, timesteps
+                    )
+                    stats.update(standard_metrics)
+
+                # DEBUG METRICS (debug verbosity only)
+                if self.verbosity == "debug":
+                    debug_metrics = self._compute_debug_metrics(
+                        model_pred_f, target_f, timesteps
+                    )
+                    stats.update(debug_metrics)
 
                 return stats
         except Exception as e:
             logger.debug(f"Failed to calculate model statistics: {e}")
             return {}
+
+    def _compute_essential_metrics(
+        self, model_pred_f: torch.Tensor, target_f: torch.Tensor
+    ) -> Dict[str, float]:
+        """Compute essential metrics for all verbosity levels."""
+        metrics = {}
+
+        # 1. Convergence Analysis (Essential)
+        pred_target_diff = (model_pred_f - target_f).abs()
+        metrics.update(
+            {
+                "prediction_target/mean_absolute_error": pred_target_diff.mean().item(),
+                "prediction_target/mean_squared_error": (pred_target_diff**2)
+                .mean()
+                .item(),
+                "prediction_target/max_error": pred_target_diff.max().item(),
+            }
+        )
+
+        # 2. Numerical Stability (Essential)
+        nan_count = torch.isnan(model_pred_f).sum().item()
+        inf_count = torch.isinf(model_pred_f).sum().item()
+        metrics.update(
+            {
+                "prediction_target/nan_count": float(nan_count),
+                "prediction_target/inf_count": float(inf_count),
+                "prediction/numerical_stability": self._compute_numerical_stability(
+                    model_pred_f
+                ),
+            }
+        )
+
+        return metrics
+
+    def _compute_standard_metrics(
+        self,
+        model_pred_f: torch.Tensor,
+        target_f: torch.Tensor,
+        timesteps: Optional[torch.Tensor] = None,
+    ) -> Dict[str, float]:
+        """Compute standard metrics for standard and debug verbosity."""
+        metrics = {}
+
+        # 1. Consolidated Scale Alignment (instead of 3 separate ratios)
+        scale_alignment = self._compute_scale_alignment_score(model_pred_f, target_f)
+        metrics["prediction_target/scale_alignment"] = scale_alignment
+
+        # 2. Distribution Similarity
+        distribution_similarity = self._compute_distribution_similarity(
+            model_pred_f, target_f
+        )
+        metrics["prediction_target/distribution_similarity"] = distribution_similarity
+
+        # 3. Timestep Analysis (summarized, not per-timestep)
+        if timesteps is not None and timesteps.numel() > 0:
+            timestep_summary = self._compute_timestep_summary(
+                model_pred_f, target_f, timesteps
+            )
+            metrics.update(timestep_summary)
+
+        # 4. Gradient Flow Indicators (when available)
+        # Only check gradients on leaf tensors to avoid PyTorch warnings
+        if model_pred_f.is_leaf and model_pred_f.grad is not None:
+            gradient_metrics = self._compute_gradient_metrics(model_pred_f)
+            metrics.update(gradient_metrics)
+
+        return metrics
+
+    def _compute_debug_metrics(
+        self,
+        model_pred_f: torch.Tensor,
+        target_f: torch.Tensor,
+        timesteps: Optional[torch.Tensor] = None,
+    ) -> Dict[str, float]:
+        """Compute debug metrics for debug verbosity only."""
+        metrics = {}
+
+        # 1. Basic Statistics (Debug only)
+        metrics.update(
+            {
+                "prediction/mean": model_pred_f.mean().item(),
+                "prediction/std": model_pred_f.std().item(),
+                "prediction/max": model_pred_f.max().item(),
+                "prediction/min": model_pred_f.min().item(),
+                "target_gt/mean": target_f.mean().item(),
+                "target_gt/std": target_f.std().item(),
+                "target_gt/max": target_f.max().item(),
+                "target_gt/min": target_f.min().item(),
+            }
+        )
+
+        # 2. Detailed Scale Analysis (Debug only)
+        detailed_scale = self._compute_detailed_scale_analysis(model_pred_f, target_f)
+        metrics.update(detailed_scale)
+
+        # 3. Per-Timestep Breakdown (Debug only)
+        if timesteps is not None and timesteps.numel() > 0:
+            per_timestep_metrics = self._compute_per_timestep_metrics(
+                model_pred_f, target_f, timesteps
+            )
+            metrics.update(per_timestep_metrics)
+
+        return metrics
+
+    def _compute_scale_alignment_score(
+        self, model_pred_f: torch.Tensor, target_f: torch.Tensor
+    ) -> float:
+        """Compute consolidated scale alignment score (0 = no alignment, 1 = perfect alignment)."""
+        try:
+            # Compute range, std, and mean ratios
+            pred_range = model_pred_f.max() - model_pred_f.min()
+            target_range = target_f.max() - target_f.min()
+            pred_std = model_pred_f.std()
+            target_std = target_f.std()
+            pred_mean = model_pred_f.mean()
+            target_mean = target_f.mean()
+
+            # Compute individual alignment scores
+            range_ratio = (
+                (pred_range / target_range).item() if target_range > 0 else 0.0
+            )
+            std_ratio = (pred_std / target_std).item() if target_std > 0 else 0.0
+            mean_ratio = (pred_mean / target_mean).item() if target_mean != 0 else 0.0
+
+            # Convert ratios to alignment scores (closer to 1.0 = better alignment)
+            range_alignment = 1.0 - min(abs(range_ratio - 1.0), 1.0)
+            std_alignment = 1.0 - min(abs(std_ratio - 1.0), 1.0)
+            mean_alignment = 1.0 - min(abs(mean_ratio - 1.0), 1.0)
+
+            # Weighted average (std alignment is most important)
+            scale_alignment = (
+                0.5 * std_alignment + 0.3 * range_alignment + 0.2 * mean_alignment
+            )
+            return scale_alignment
+        except Exception:
+            return 0.0
+
+    def _compute_distribution_similarity(
+        self, model_pred_f: torch.Tensor, target_f: torch.Tensor
+    ) -> float:
+        """Compute distribution similarity using histogram intersection."""
+        try:
+            # Normalize both to [0,1] for comparison
+            pred_norm = (model_pred_f - model_pred_f.min()) / (
+                model_pred_f.max() - model_pred_f.min() + 1e-8
+            )
+            target_norm = (target_f - target_f.min()) / (
+                target_f.max() - target_f.min() + 1e-8
+            )
+
+            # Histogram-based similarity
+            pred_hist = torch.histc(pred_norm, bins=10, min=0, max=1)
+            target_hist = torch.histc(target_norm, bins=10, min=0, max=1)
+
+            # Normalize histograms
+            pred_sum = pred_hist.sum()
+            target_sum = target_hist.sum()
+            pred_hist = pred_hist / (pred_sum + 1e-8) if pred_sum > 0 else pred_hist
+            target_hist = (
+                target_hist / (target_sum + 1e-8) if target_sum > 0 else target_hist
+            )
+
+            # Histogram intersection similarity
+            hist_intersection = torch.minimum(pred_hist, target_hist).sum().item()
+            return hist_intersection
+        except Exception:
+            return 0.0
+
+    def _compute_timestep_summary(
+        self,
+        model_pred_f: torch.Tensor,
+        target_f: torch.Tensor,
+        timesteps: torch.Tensor,
+    ) -> Dict[str, float]:
+        """Compute summarized timestep metrics (percentiles instead of per-timestep)."""
+        metrics = {}
+        try:
+            # Group by timestep and compute errors
+            unique_timesteps = torch.unique(timesteps)
+            if len(unique_timesteps) > 1:
+                timestep_errors = []
+                for t in unique_timesteps:
+                    mask = timesteps == t
+                    if mask.sum() > 0:
+                        pred_t = model_pred_f[mask]
+                        target_t = target_f[mask]
+                        mae_t = (pred_t - target_t).abs().mean().item()
+                        timestep_errors.append(mae_t)
+
+                if len(timestep_errors) > 1:
+                    timestep_errors_tensor = torch.tensor(timestep_errors)
+
+                    # Compute percentiles with bounds checking
+                    sorted_errors = torch.sort(timestep_errors_tensor)[0]
+                    n_errors = len(sorted_errors)
+
+                    # Ensure indices are within bounds
+                    p50_idx = min(n_errors // 2, n_errors - 1)
+                    p90_idx = min(int(n_errors * 0.9), n_errors - 1)
+                    p99_idx = min(int(n_errors * 0.99), n_errors - 1)
+
+                    metrics.update(
+                        {
+                            "prediction_target/mae_p50": sorted_errors[p50_idx].item(),
+                            "prediction_target/mae_p90": sorted_errors[p90_idx].item(),
+                            "prediction_target/mae_p99": sorted_errors[p99_idx].item(),
+                            "prediction_target/mae_min": sorted_errors[0].item(),
+                            "prediction_target/mae_max": sorted_errors[-1].item(),
+                        }
+                    )
+
+                    # Overall correlation
+                    timestep_values = unique_timesteps.float()
+                    correlation = torch.corrcoef(
+                        torch.stack([timestep_values, timestep_errors_tensor])
+                    )[0, 1].item()
+                    if not math.isnan(correlation):
+                        metrics["prediction_target/timestep_error_correlation"] = (
+                            correlation
+                        )
+
+        except Exception as e:
+            logger.debug(f"Failed to compute timestep summary: {e}")
+
+        return metrics
+
+    def _compute_gradient_metrics(self, model_pred_f: torch.Tensor) -> Dict[str, float]:
+        """Compute gradient flow indicators."""
+        metrics = {}
+        try:
+            # Only compute gradient metrics for leaf tensors with gradients
+            if model_pred_f.is_leaf and model_pred_f.grad is not None:
+                grad_norm = model_pred_f.grad.norm().item()
+                metrics.update(
+                    {
+                        "prediction/gradient_norm": grad_norm,
+                        "prediction/gradient_mean": model_pred_f.grad.mean().item(),
+                        "prediction/gradient_std": model_pred_f.grad.std().item(),
+                    }
+                )
+        except Exception:
+            pass
+        return metrics
+
+    def _compute_detailed_scale_analysis(
+        self, model_pred_f: torch.Tensor, target_f: torch.Tensor
+    ) -> Dict[str, float]:
+        """Compute detailed scale analysis (debug only)."""
+        metrics = {}
+        try:
+            pred_range = model_pred_f.max() - model_pred_f.min()
+            target_range = target_f.max() - target_f.min()
+            pred_std = model_pred_f.std()
+            target_std = target_f.std()
+
+            metrics.update(
+                {
+                    "prediction_target/range_ratio": (
+                        (pred_range / target_range).item() if target_range > 0 else 0.0
+                    ),
+                    "prediction_target/std_ratio": (
+                        (pred_std / target_std).item() if target_std > 0 else 0.0
+                    ),
+                    "prediction_target/mean_ratio": (
+                        (model_pred_f.mean() / target_f.mean()).item()
+                        if target_f.mean() != 0
+                        else 0.0
+                    ),
+                }
+            )
+        except Exception:
+            pass
+        return metrics
+
+    def _compute_per_timestep_metrics(
+        self,
+        model_pred_f: torch.Tensor,
+        target_f: torch.Tensor,
+        timesteps: torch.Tensor,
+    ) -> Dict[str, float]:
+        """Compute per-timestep metrics (debug only)."""
+        metrics = {}
+        try:
+            unique_timesteps = torch.unique(timesteps)
+            if len(unique_timesteps) > 1:
+                for t in unique_timesteps:
+                    mask = timesteps == t
+                    if mask.sum() > 0:
+                        pred_t = model_pred_f[mask]
+                        target_t = target_f[mask]
+
+                        mae_t = (pred_t - target_t).abs().mean().item()
+                        mse_t = ((pred_t - target_t) ** 2).mean().item()
+
+                        metrics[f"prediction_target/mae_t{t.item():.0f}"] = mae_t
+                        metrics[f"prediction_target/mse_t{t.item():.0f}"] = mse_t
+
+                        pred_std_t = pred_t.std().item()
+                        target_std_t = target_t.std().item()
+                        if target_std_t > 0:
+                            scale_ratio_t = pred_std_t / target_std_t
+                            metrics[
+                                f"prediction_target/scale_ratio_t{t.item():.0f}"
+                            ] = scale_ratio_t
+        except Exception as e:
+            logger.debug(f"Failed to compute per-timestep metrics: {e}")
+        return metrics
+
+    def _compute_numerical_stability(self, tensor: torch.Tensor) -> float:
+        """Compute numerical stability score (0 = very unstable, 1 = very stable)."""
+        try:
+            # Check for extreme values
+            abs_tensor = tensor.abs()
+            max_val = abs_tensor.max().item()
+
+            if max_val == 0:
+                return 1.0  # Perfect stability (all zeros)
+
+            # Normalize by max value
+            normalized = abs_tensor / max_val
+
+            # Stability score based on how close values are to reasonable range
+            # Values close to 1.0 are stable, very large or very small values reduce stability
+            stability_score = 1.0 - torch.clamp(normalized - 1.0, min=0).mean().item()
+
+            return max(0.0, min(1.0, stability_score))
+        except Exception:
+            return 0.0
 
     def get_hardware_metrics(self) -> Dict[str, str]:
         """Get enhanced hardware utilization metrics.
@@ -283,7 +634,7 @@ class PerformanceLogger:
 
 
 # Global instance for easy access
-performance_logger = PerformanceLogger()
+performance_logger = PerformanceLogger(verbosity="standard")
 
 
 def start_step_timing() -> None:
@@ -331,11 +682,28 @@ def get_timing_metrics() -> Dict[str, float]:
     return performance_logger.get_timing_metrics()
 
 
+def configure_verbosity(verbosity: VerbosityLevel) -> None:
+    """Configure the verbosity level for metric collection.
+
+    Args:
+        verbosity: Metric collection level ("minimal", "standard", "debug")
+    """
+    global performance_logger
+    performance_logger = PerformanceLogger(verbosity=verbosity)
+    logger.info(f"Performance logger verbosity set to: {verbosity}")
+
+
 def get_model_statistics(
-    model_pred: torch.Tensor, target: torch.Tensor, is_main_process: bool = True
+    model_pred: torch.Tensor,
+    target: torch.Tensor,
+    is_main_process: bool = True,
+    timesteps: Optional[torch.Tensor] = None,
+    global_step: Optional[int] = None,
 ) -> Dict[str, float]:
-    """Get model output and target tensor statistics."""
-    return performance_logger.get_model_statistics(model_pred, target, is_main_process)
+    """Get meaningful model output and target tensor statistics."""
+    return performance_logger.get_model_statistics(
+        model_pred, target, is_main_process, timesteps, global_step
+    )
 
 
 def get_hardware_metrics() -> Dict[str, str]:

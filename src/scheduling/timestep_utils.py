@@ -66,6 +66,9 @@ def get_lin_function(
     Returns:
         Callable[[float], float]: Linear function f(x) = m*x + b
     """
+    if abs(x2 - x1) < 1e-9:
+        raise ValueError(f"x1 and x2 must be different (got x1={x1}, x2={x2})")
+
     m = (y2 - y1) / (x2 - x1)
     b = y1 - m * x1
     return lambda x: m * x + b
@@ -483,6 +486,48 @@ def _generate_timesteps_from_distribution(
         if len(t) > 0:
             t, _ = torch.sort(t)
 
+    elif args.timestep_sampling == "lognorm_continuous_blend":
+        # LogNormal Continuous Blend - every sample is a weighted combination of both distributions
+        alpha = getattr(args, "lognorm_blend_alpha", 0.75)
+
+        # LogNormal component
+        dist = torch.distributions.LogNormal(0, 1)
+        lognorm_samples = dist.sample((batch_size,)).to(device)  # type: ignore
+        lognorm_samples = torch.clamp(lognorm_samples, 0, 1)
+
+        # Linear component
+        linear_samples = torch.rand((batch_size,), device=device)
+
+        # Blend every sample with weights alpha and (1-alpha)
+        t = alpha * lognorm_samples + (1 - alpha) * linear_samples
+
+    elif args.timestep_sampling == "content":
+        # Cubic sampling favoring earlier timesteps for content/structure training
+        # Based on section 3.4 of https://arxiv.org/abs/2302.08453
+        orig_timesteps = torch.rand((batch_size,), device=device)
+        t = orig_timesteps**3  # Cubic transformation favors earlier timesteps
+
+    elif args.timestep_sampling == "style":
+        # Cubic sampling favoring later timesteps for style training
+        # Based on section 3.4 of https://arxiv.org/abs/2302.08453
+        orig_timesteps = torch.rand((batch_size,), device=device)
+        t = 1 - orig_timesteps**3  # Inverse cubic transformation favors later timesteps
+
+    elif args.timestep_sampling == "content_style_blend":
+        # Blend between content and style sampling
+        blend_ratio = getattr(args, "content_style_blend_ratio", 0.5)
+
+        # Content component (earlier timesteps)
+        content_timesteps = torch.rand((batch_size,), device=device)
+        content_t = content_timesteps**3
+
+        # Style component (later timesteps)
+        style_timesteps = torch.rand((batch_size,), device=device)
+        style_t = 1 - style_timesteps**3
+
+        # Blend
+        t = blend_ratio * content_t + (1 - blend_ratio) * style_t
+
     elif args.timestep_sampling == "enhanced_sigmoid":
         # Enhanced sigmoid with additional parameters
         sigmoid_scale = getattr(args, "sigmoid_scale", 1.0)
@@ -596,10 +641,14 @@ def _sample_standard_timesteps(
             "bell_shaped",
             "half_bell",
             "lognorm_blend",
+            "lognorm_continuous_blend",
             "enhanced_sigmoid",
             "logsnr",
             "qinglong_flux",
             "qinglong_qwen",
+            "content",
+            "style",
+            "content_style_blend",
         ]:
             t = timestep_distribution.sample(batch_size, device)
         else:
@@ -858,6 +907,10 @@ def get_noisy_model_input_and_timesteps(
             or args.timestep_sampling == "logsnr"
             or args.timestep_sampling == "qinglong_flux"
             or args.timestep_sampling == "qinglong_qwen"
+            or args.timestep_sampling == "lognorm_continuous_blend"
+            or args.timestep_sampling == "content"
+            or args.timestep_sampling == "style"
+            or args.timestep_sampling == "content_style_blend"
         ):
             # Sample timesteps using standard methods
             if presampled_uniform is not None and not should_use_precomputed_timesteps(

@@ -91,9 +91,18 @@ def create_args_from_config(
 
     # Map target_model to appropriate task if specified
     target_model = config.get("target_model", "wan21")  # for backwards compatibility
+
+    # Validate target_model is a string
+    if not isinstance(target_model, str):
+        logger.warning(
+            f"⚠️  Invalid target_model type '{type(target_model)}'. Expected string. Using default 'wan21'"
+        )
+        target_model = "wan21"
+
     args.target_model = (
         target_model  # Store target_model in args for dataset configuration
     )
+
     if target_model:
         target_model_mapping = {
             "wan21": "t2v-14B",
@@ -216,7 +225,7 @@ def create_args_from_config(
     # Optimizer settings
     args.optimizer_type = config.get("optimizer_type", "")
     args.optimizer_args = config.get("optimizer_args", [])
-    args.learning_rate = config.get("learning_rate", 2.0e-6)
+    args.learning_rate = config.get("learning_rate", 5e-5)
     args.max_grad_norm = config.get("max_grad_norm", 1.0)
 
     # LR Scheduler settings
@@ -492,6 +501,11 @@ def create_args_from_config(
     args.bell_std = config.get("bell_std", 0.2)
     # LogNormal blend control
     args.lognorm_blend_alpha = config.get("lognorm_blend_alpha", 0.75)
+    # Content/style blend control
+    args.content_style_blend_ratio = config.get("content_style_blend_ratio", 0.5)
+
+    # Performance logging verbosity
+    args.performance_verbosity = config.get("performance_verbosity", "standard")
     args.weighting_scheme = config.get("weighting_scheme", "none")
     args.logit_mean = config.get("logit_mean", 0.0)
     args.logit_std = config.get("logit_std", 1.0)

@@ -97,6 +97,20 @@ class TimestepDistribution:
             sigmoid_scale = getattr(args, "sigmoid_scale", 1.0)
             t = t * sigmoid_scale
             t = torch.sigmoid(t)
+        elif args.timestep_sampling == "content":
+            # Cubic sampling favoring earlier timesteps for content/structure training
+            t = quantiles ** (1 / 3)  # Inverse of cubic transformation
+        elif args.timestep_sampling == "style":
+            # Cubic sampling favoring later timesteps for style training
+            t = 1 - (1 - quantiles) ** (
+                1 / 3
+            )  # Inverse of inverse cubic transformation
+        elif args.timestep_sampling == "content_style_blend":
+            # Blend between content and style sampling
+            blend_ratio = getattr(args, "content_style_blend_ratio", 0.5)
+            content_t = quantiles ** (1 / 3)
+            style_t = 1 - (1 - quantiles) ** (1 / 3)
+            t = blend_ratio * content_t + (1 - blend_ratio) * style_t
         elif args.timestep_sampling == "flux_shift":
             # Precompute using a fixed base area; can be overridden via args.precomputed_midshift_area
             dist = torch.distributions.normal.Normal(0, 1)
@@ -289,6 +303,20 @@ class TimestepDistribution:
             # Combine and sort
             t = torch.cat([t1, t2])
             t, _ = torch.sort(t)
+        elif args.timestep_sampling == "lognorm_continuous_blend":
+            # LogNormal Continuous Blend - every sample is a weighted combination of both distributions
+            alpha = getattr(args, "lognorm_blend_alpha", 0.75)
+
+            # LogNormal component
+            dist = torch.distributions.LogNormal(0, 1)
+            lognorm_samples = dist.icdf(quantiles)
+            lognorm_samples = torch.clamp(lognorm_samples, 0, 1)  # type: ignore
+
+            # Linear component
+            linear_samples = quantiles
+
+            # Blend every sample with weights alpha and (1-alpha)
+            t = alpha * lognorm_samples + (1 - alpha) * linear_samples
         elif args.timestep_sampling == "enhanced_sigmoid":
             # Enhanced sigmoid with additional parameters
             dist = torch.distributions.normal.Normal(0, 1)
@@ -491,6 +519,10 @@ class TimestepDistribution:
 
         if quantile is not None:
             # Deterministic sampling at specific quantile
+            # Validate quantile is a number before conversion
+            if not isinstance(quantile, (int, float)):
+                raise ValueError(f"quantile must be a number, got {type(quantile)}")
+            
             q = float(max(0.0, min(quantile, 1.0 - 1e-9)))
             i = (torch.full((batch_size,), q) * len(self.distribution)).to(torch.int64)
             i = torch.clamp(i, 0, len(self.distribution) - 1)
