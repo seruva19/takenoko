@@ -137,10 +137,12 @@ class TrainingCore:
         # Performance logging verbosity
         if not hasattr(args, "performance_verbosity"):
             args.performance_verbosity = "standard"  # Default verbosity level
-        
+
         # Configure performance logger verbosity
         configure_verbosity(args.performance_verbosity)
-        logger.info(f"Performance logging verbosity set to: {args.performance_verbosity}")
+        logger.info(
+            f"Performance logging verbosity set to: {args.performance_verbosity}"
+        )
 
         # Parameter statistics logging
         if not hasattr(args, "log_param_stats"):

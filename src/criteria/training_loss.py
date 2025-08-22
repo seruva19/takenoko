@@ -471,7 +471,7 @@ class TrainingLossComputer:
                 .item()
             )
 
-            # SNR correlation with loss
+            # SNR correlation with loss and slope proxy
             try:
                 sigmas = get_sigmas(
                     noise_scheduler,
@@ -507,15 +507,38 @@ class TrainingLossComputer:
             except Exception:
                 loss_snr_corr = 0.0
 
-            metrics.update(
-                {
-                    "train/loss_p50": float(p50),
-                    "train/loss_p90": float(p90),
-                    "train/loss_cv_in_batch": float(cv_in_batch),
-                    "train/direct_noise_loss_mean": float(direct_noise_loss_mean),
-                    "train/loss_snr_correlation_batch": float(loss_snr_corr),
-                }
-            )
+            # Compute simple slope proxy: corr * std(loss) / std(SNR)
+            loss_slope = 0.0
+            try:
+                if sigmas_reduced is not None and per_sample_vel.numel() > 1:
+                    snr_vals = (1.0 / (sigmas_reduced.to(torch.float32) ** 2)).flatten()
+                    snr_std = snr_vals.std(correction=0)
+                    loss_std = per_sample_vel.to(torch.float32).std(correction=0)
+                    if (
+                        torch.isfinite(snr_std)
+                        and float(snr_std.item()) > 0
+                        and torch.isfinite(loss_std)
+                    ):
+                        loss_slope = float(
+                            loss_snr_corr * (loss_std / (snr_std + 1e-12))
+                        )
+            except Exception:
+                loss_slope = 0.0
+
+            # SNR namespaces: put essential SNR in snr/ and other SNR in snr_other/
+            essential = {
+                "train/loss_p50": float(p50),
+                "train/loss_p90": float(p90),
+                "train/loss_cv_in_batch": float(cv_in_batch),
+                "train/direct_noise_loss_mean": float(direct_noise_loss_mean),
+                "snr/train/loss_snr_correlation_batch": float(loss_snr_corr),
+            }
+            # Route slope to snr_other to keep essentials compact
+            others = {
+                "snr_other/train/loss_snr_slope_batch": float(loss_slope),
+            }
+            metrics.update(essential)
+            metrics.update(others)
         except Exception:
             return {}
 

@@ -195,11 +195,9 @@ class PerformanceLogger:
         pred_target_diff = (model_pred_f - target_f).abs()
         metrics.update(
             {
-                "prediction_target/mean_absolute_error": pred_target_diff.mean().item(),
-                "prediction_target/mean_squared_error": (pred_target_diff**2)
-                .mean()
-                .item(),
-                "prediction_target/max_error": pred_target_diff.max().item(),
+                "prediction/mean_absolute_error": pred_target_diff.mean().item(),
+                "prediction/mean_squared_error": (pred_target_diff**2).mean().item(),
+                "prediction/max_error": pred_target_diff.max().item(),
             }
         )
 
@@ -208,8 +206,8 @@ class PerformanceLogger:
         inf_count = torch.isinf(model_pred_f).sum().item()
         metrics.update(
             {
-                "prediction_target/nan_count": float(nan_count),
-                "prediction_target/inf_count": float(inf_count),
+                "prediction/nan_count": float(nan_count),
+                "prediction/inf_count": float(inf_count),
                 "prediction/numerical_stability": self._compute_numerical_stability(
                     model_pred_f
                 ),
@@ -229,13 +227,13 @@ class PerformanceLogger:
 
         # 1. Consolidated Scale Alignment (instead of 3 separate ratios)
         scale_alignment = self._compute_scale_alignment_score(model_pred_f, target_f)
-        metrics["prediction_target/scale_alignment"] = scale_alignment
+        metrics["prediction/scale_alignment"] = scale_alignment
 
         # 2. Distribution Similarity
         distribution_similarity = self._compute_distribution_similarity(
             model_pred_f, target_f
         )
-        metrics["prediction_target/distribution_similarity"] = distribution_similarity
+        metrics["prediction/distribution_similarity"] = distribution_similarity
 
         # 3. Timestep Analysis (summarized, not per-timestep)
         if timesteps is not None and timesteps.numel() > 0:
@@ -387,11 +385,11 @@ class PerformanceLogger:
 
                     metrics.update(
                         {
-                            "prediction_target/mae_p50": sorted_errors[p50_idx].item(),
-                            "prediction_target/mae_p90": sorted_errors[p90_idx].item(),
-                            "prediction_target/mae_p99": sorted_errors[p99_idx].item(),
-                            "prediction_target/mae_min": sorted_errors[0].item(),
-                            "prediction_target/mae_max": sorted_errors[-1].item(),
+                            "prediction/mae_p50": sorted_errors[p50_idx].item(),
+                            "prediction/mae_p90": sorted_errors[p90_idx].item(),
+                            "prediction/mae_p99": sorted_errors[p99_idx].item(),
+                            "prediction/mae_min": sorted_errors[0].item(),
+                            "prediction/mae_max": sorted_errors[-1].item(),
                         }
                     )
 
@@ -401,9 +399,7 @@ class PerformanceLogger:
                         torch.stack([timestep_values, timestep_errors_tensor])
                     )[0, 1].item()
                     if not math.isnan(correlation):
-                        metrics["prediction_target/timestep_error_correlation"] = (
-                            correlation
-                        )
+                        metrics["prediction/timestep_error_correlation"] = correlation
 
         except Exception as e:
             logger.debug(f"Failed to compute timestep summary: {e}")
@@ -441,13 +437,13 @@ class PerformanceLogger:
 
             metrics.update(
                 {
-                    "prediction_target/range_ratio": (
+                    "prediction/range_ratio": (
                         (pred_range / target_range).item() if target_range > 0 else 0.0
                     ),
-                    "prediction_target/std_ratio": (
+                    "prediction/std_ratio": (
                         (pred_std / target_std).item() if target_std > 0 else 0.0
                     ),
-                    "prediction_target/mean_ratio": (
+                    "prediction/mean_ratio": (
                         (model_pred_f.mean() / target_f.mean()).item()
                         if target_f.mean() != 0
                         else 0.0
@@ -478,16 +474,16 @@ class PerformanceLogger:
                         mae_t = (pred_t - target_t).abs().mean().item()
                         mse_t = ((pred_t - target_t) ** 2).mean().item()
 
-                        metrics[f"prediction_target/mae_t{t.item():.0f}"] = mae_t
-                        metrics[f"prediction_target/mse_t{t.item():.0f}"] = mse_t
+                        metrics[f"prediction/mae_t{t.item():.0f}"] = mae_t
+                        metrics[f"prediction/mse_t{t.item():.0f}"] = mse_t
 
                         pred_std_t = pred_t.std().item()
                         target_std_t = target_t.std().item()
                         if target_std_t > 0:
                             scale_ratio_t = pred_std_t / target_std_t
-                            metrics[
-                                f"prediction_target/scale_ratio_t{t.item():.0f}"
-                            ] = scale_ratio_t
+                            metrics[f"prediction/scale_ratio_t{t.item():.0f}"] = (
+                                scale_ratio_t
+                            )
         except Exception as e:
             logger.debug(f"Failed to compute per-timestep metrics: {e}")
         return metrics

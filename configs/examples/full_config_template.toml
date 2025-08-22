@@ -663,6 +663,12 @@ validation_timesteps = "100,300,500,700,900"
 # Use unique noise per batch for proper validation (recommended: true for reliable metrics, false for legacy behavior)
 use_unique_noise_per_batch = true
 
+# Compute SSIM-based perceptual SNR on tiny subsample
+enable_perceptual_snr = false
+
+# Max samples per validation step for perceptual SNR
+perceptual_snr_max_items = 4        
+
 # =============================================================================
 # ⚠️ OPTICAL FLOW LOSS SETTINGS
 # =============================================================================
@@ -810,6 +816,9 @@ throughput_window_size = 100
 
 # Performance metrics verbosity level for model prediction and target analysis: minimal, standard, debug
 performance_verbosity = "standard"
+
+# Split SNR metrics into essential and other namespaces for clarity
+snr_split_namespaces = true
 
 # =============================================================================
 # TIMESTEP DISTRIBUTION LOGGING

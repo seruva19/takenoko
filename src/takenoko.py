@@ -358,6 +358,8 @@ def create_args_from_config(
     # Extra training metrics (periodic)
     args.log_extra_train_metrics = config.get("log_extra_train_metrics", True)
     args.train_metrics_interval = config.get("train_metrics_interval", 50)
+    # Prefer essential SNR metrics under `snr/` and move others to `snr_other/`
+    args.snr_split_namespaces = config.get("snr_split_namespaces", True)
 
     # Loss-vs-timestep scatter logging
     args.log_loss_scatterplot = config.get("log_loss_scatterplot", False)
@@ -414,6 +416,9 @@ def create_args_from_config(
     args.validate_on_epoch_end = config.get("validate_on_epoch_end", False)
     args.validation_timesteps = config.get("validation_timesteps", "500")
     args.use_unique_noise_per_batch = config.get("use_unique_noise_per_batch", True)
+    # SNR / perceptual validation toggles
+    args.enable_perceptual_snr = config.get("enable_perceptual_snr", False)
+    args.perceptual_snr_max_items = config.get("perceptual_snr_max_items", 4)
 
     # Logging settings
     args.logging_dir = config.get("logging_dir", "logs")

@@ -258,6 +258,7 @@ class ValidationCore:
                 # These lists collect per-batch losses for the CURRENT timestep
                 batch_velocity_losses = []
                 batch_direct_noise_losses = []
+                batch_item_counts = []  # number of items per-batch for coverage
 
                 # Calculate SNR only once for the current timestep (optimization)
                 fixed_timesteps_tensor = torch.full(
@@ -269,6 +270,11 @@ class ValidationCore:
                 snr_for_timestep = (
                     compute_snr(noise_scheduler, fixed_timesteps_tensor).mean().item()
                 )
+
+                # Optional perceptual SNR (SSIM-based) on a very small subsample for cost control
+                # Requires decoded frames from VAE and reference pixels in batch
+                enable_psnr = bool(getattr(args, "enable_perceptual_snr", False))
+                max_psnr_items = int(getattr(args, "perceptual_snr_max_items", 4))
 
                 # Track sample-weighted (per-example) sums across all batches/timesteps
                 if timestep_idx == 0:
@@ -450,6 +456,7 @@ class ValidationCore:
                         dim=[1, 2, 3, 4]
                     )  # Per-batch item mean
                     batch_velocity_losses.append(velocity_loss)
+                    batch_item_counts.append(float(velocity_loss.numel()))
                     # Update sample-weighted accumulators
                     local_velocity_loss_sum = (
                         local_velocity_loss_sum + velocity_loss.sum()
@@ -486,6 +493,66 @@ class ValidationCore:
                         )
                     )
 
+                    # Perceptual SNR (SSIM): compute for a tiny subsample only when enabled
+                    if enable_psnr and vae is not None and "pixels" in batch:
+                        try:
+                            # Decode predicted latents to frames
+                            with torch.autocast(
+                                device_type=str(accelerator.device).split(":")[0],
+                                enabled=False,
+                            ):
+                                pred_latents = pred.to(torch.float32)
+                                decoded = vae.decode(
+                                    pred_latents / getattr(vae, "scaling_factor", 1.0)
+                                )
+                                pred_frames = (
+                                    torch.stack(decoded, dim=0)
+                                    if isinstance(decoded, list)
+                                    else decoded
+                                )
+                            # Reference frames from batch
+                            ref_frames = torch.stack(batch["pixels"], dim=0).to(
+                                device=pred_frames.device, dtype=pred_frames.dtype
+                            )
+                            # Limit items for cost
+                            b = min(
+                                pred_frames.shape[0],
+                                ref_frames.shape[0],
+                                max_psnr_items,
+                            )
+                            if b > 0:
+                                pf = pred_frames[:b, :, :, :, :]
+                                rf = ref_frames[:b, :, :, :, :]
+                                # Convert to grayscale-ish luminance for SSIM stability
+                                pf_y = pf.mean(dim=2)
+                                rf_y = rf.mean(dim=2)
+                                # Compute SSIM per-frame quickly
+                                # Using windowless approximation: 1 - ((pf - rf)^2 / (pf^2 + rf^2 + eps))
+                                eps = 1e-6
+                                num = (pf_y - rf_y) ** 2
+                                den = pf_y**2 + rf_y**2 + eps
+                                ssim_approx = 1.0 - (num / den)
+                                ssim_approx = torch.clamp(ssim_approx, 0.0, 1.0)
+                                # Perceptual SNR (log-scale)
+                                psnr_ssim_vals = 10.0 * torch.log10(
+                                    1.0 / ((1.0 - ssim_approx) ** 2 + eps)
+                                )
+                                psnr_ssim_mean = float(psnr_ssim_vals.mean().item())
+                                # Route PSNR to snr_other if splitting is enabled
+                                psnr_prefix = (
+                                    "snr_other"
+                                    if getattr(args, "snr_split_namespaces", False)
+                                    else "snr"
+                                )
+                                accelerator.log(
+                                    {
+                                        f"{psnr_prefix}/val/psnr_ssim_t{current_timestep}": psnr_ssim_mean
+                                    },
+                                    step=global_step,
+                                )
+                        except Exception:
+                            pass
+
                 # Gather and compute metrics efficiently (refactored approach)
                 velocity_metrics = self._compute_and_gather_metrics(
                     accelerator, batch_velocity_losses, "velocity_loss"
@@ -493,6 +560,46 @@ class ValidationCore:
                 noise_metrics = self._compute_and_gather_metrics(
                     accelerator, batch_direct_noise_losses, "direct_noise_loss"
                 )
+
+                # SNR-binned loss and coverage per timestep (quantile bins on gathered per-sample loss)
+                if accelerator.is_main_process and batch_velocity_losses:
+                    try:
+                        # Concatenate gathered per-sample losses for velocity
+                        vel_cat = torch.cat(batch_velocity_losses)
+                        vel_gathered = accelerator.gather_for_metrics(vel_cat)
+                        if not isinstance(vel_gathered, torch.Tensor):
+                            vel_gathered = torch.tensor(vel_gathered)
+
+                        # Repeat SNR value to match samples
+                        snr_tensor = torch.full_like(vel_gathered, snr_for_timestep)
+
+                        # Define 5 quantile bins on SNR (degenerate here since single timestep)
+                        # Keep interface stable: bin 0 holds all samples for this T
+                        bin_indices = [torch.ones_like(vel_gathered, dtype=torch.bool)]
+                        bin_names = ["bin0"]
+
+                        snr_logs = {}
+                        snr_ns = (
+                            "snr_other"
+                            if getattr(args, "snr_split_namespaces", False)
+                            else "snr"
+                        )
+                        for idx, mask in enumerate(bin_indices):
+                            if mask.sum() > 0:
+                                mean_loss = float(vel_gathered[mask].mean().item())
+                                snr_logs[
+                                    f"{snr_ns}/val/snr_{bin_names[idx]}_loss_t{current_timestep}"
+                                ] = mean_loss
+
+                        # Coverage: all samples fall into this timestep's bin
+                        total_items = float(vel_gathered.numel())
+                        snr_logs[f"{snr_ns}/val/coverage_t{current_timestep}"] = (
+                            total_items
+                        )
+
+                        accelerator.log(snr_logs, step=global_step)
+                    except Exception:
+                        pass
 
                 # The main process now holds all the computed stats
                 if accelerator.is_main_process:
@@ -515,10 +622,16 @@ class ValidationCore:
 
                     # Log per-timestep metrics
                     if global_step is not None:
-                        # Group detailed timestep metrics under val_timesteps/ for better TensorBoard organization
-                        log_dict = {
-                            f"val_timesteps/snr_t{current_timestep}": snr_for_timestep
-                        }
+                        # SNR per-timestep under snr_other when splitting is enabled (to limit essentials)
+                        log_dict = {}
+                        per_ns = (
+                            "snr_other"
+                            if getattr(args, "snr_split_namespaces", False)
+                            else "snr"
+                        )
+                        log_dict[f"{per_ns}/val/snr_t{current_timestep}"] = (
+                            snr_for_timestep
+                        )
 
                         # Dynamically add all computed metrics to the log under timesteps category
                         for key, value in velocity_metrics.items():
@@ -716,45 +829,122 @@ class ValidationCore:
                 eval_throughput_metrics = get_throughput_metrics()
                 eval_runtime = get_total_runtime()
 
-            accelerator.log(
-                {
-                    "val/velocity_loss_avg": velocity_final_avg_loss,
-                    "val/direct_noise_loss_avg": direct_noise_final_avg_loss,
-                    "val/velocity_loss_avg_weighted": velocity_weighted_avg_loss,
-                    "val/direct_noise_loss_avg_weighted": direct_noise_weighted_avg_loss,
-                    "val/velocity_loss_std": velocity_loss_std,
-                    "val/direct_noise_loss_std": direct_noise_loss_std,
-                    "val/velocity_loss_range": velocity_loss_range,
-                    "val/direct_noise_loss_range": direct_noise_loss_range,
-                    "val/loss_ratio": loss_ratio,
-                    "val/velocity_loss_snr_correlation": velocity_loss_snr_corr,
-                    "val/noise_loss_snr_correlation": noise_loss_snr_corr,
-                    # Additional diagnostics
-                    "val/velocity_loss_cv_across_timesteps": velocity_cv_across_timesteps,
-                    "val/direct_noise_loss_cv_across_timesteps": noise_cv_across_timesteps,
-                    "val/velocity_loss_avg_p25": vel_p25,
-                    "val/velocity_loss_avg_p50": vel_p50,
-                    "val/velocity_loss_avg_p75": vel_p75,
-                    "val/direct_noise_loss_avg_p25": noi_p25,
-                    "val/direct_noise_loss_avg_p50": noi_p50,
-                    "val/direct_noise_loss_avg_p75": noi_p75,
-                    "val/best_timestep_velocity": best_timestep_velocity,
-                    "val/worst_timestep_velocity": worst_timestep_velocity,
-                    "val/best_velocity_loss": best_velocity_loss,
-                    "val/worst_velocity_loss": worst_velocity_loss,
-                    "val/best_timestep_direct": best_timestep_direct,
-                    "val/worst_timestep_direct": worst_timestep_direct,
-                    "val/best_direct_loss": best_direct_loss,
-                    "val/worst_direct_loss": worst_direct_loss,
-                    "val/velocity_loss_timestep_correlation": velocity_loss_t_corr,
-                    "val/noise_loss_timestep_correlation": noise_loss_t_corr,
-                    # Evaluation throughput metrics
-                    "eval/samples_per_sec": eval_throughput_metrics["samples_per_sec"],
-                    "eval/steps_per_second": eval_throughput_metrics["steps_per_sec"],
-                    "eval/runtime": eval_runtime,
-                },
-                step=global_step,
-            )
+            # Compute SNR distribution stats and slope-style sensitivities for snr/ namespace
+            snr_mean = snr_std = snr_min = snr_max = snr_p50 = snr_p90 = 0.0
+            _snr_std_val = 0.0
+            try:
+                snr_tensor = torch.tensor(all_timestep_snrs)
+                if snr_tensor.numel() > 0:
+                    snr_mean = float(snr_tensor.mean().item())
+                    _snr_std_val = float(snr_tensor.std(unbiased=False).item())
+                    snr_std = _snr_std_val
+                    snr_min = float(snr_tensor.min().item())
+                    snr_max = float(snr_tensor.max().item())
+                    try:
+                        snr_p50 = float(torch.quantile(snr_tensor, 0.5).item())
+                        snr_p90 = float(torch.quantile(snr_tensor, 0.9).item())
+                    except Exception:
+                        snr_p50 = float(torch.median(snr_tensor).item())
+                        k = max(1, int(0.1 * snr_tensor.numel()))
+                        snr_p90 = float(snr_tensor.topk(k).values.min().item())
+            except Exception:
+                pass
+
+            vel_slope = 0.0
+            noise_slope = 0.0
+            if _snr_std_val > 0.0:
+                if velocity_loss_std > 0:
+                    vel_slope = float(
+                        velocity_loss_snr_corr * (velocity_loss_std / _snr_std_val)
+                    )
+                if direct_noise_loss_std > 0:
+                    noise_slope = float(
+                        noise_loss_snr_corr * (direct_noise_loss_std / _snr_std_val)
+                    )
+
+            # Split SNR metrics into essential snr/ and others snr_other/ if enabled
+            snr_essential = {}
+            snr_other = {}
+            if getattr(args, "snr_split_namespaces", False):
+                # Keep only 4-5 essentials in snr/
+                snr_essential["snr/val/mean"] = snr_mean
+                snr_essential["snr/val/std"] = snr_std
+                snr_essential["snr/val/p90"] = snr_p90
+                snr_essential["snr/val/velocity_loss_correlation"] = (
+                    velocity_loss_snr_corr
+                )
+                snr_essential["snr/val/direct_noise_loss_correlation"] = (
+                    noise_loss_snr_corr
+                )
+
+                # Route remaining SNR metrics to snr_other/
+                snr_other.update(
+                    {
+                        "snr_other/val/min": snr_min,
+                        "snr_other/val/max": snr_max,
+                        "snr_other/val/p50": snr_p50,
+                        "snr_other/val/velocity_loss_slope": vel_slope,
+                        "snr_other/val/direct_noise_loss_slope": noise_slope,
+                    }
+                )
+            else:
+                snr_essential.update(
+                    {
+                        "snr/val/velocity_loss_correlation": velocity_loss_snr_corr,
+                        "snr/val/direct_noise_loss_correlation": noise_loss_snr_corr,
+                        "snr/val/mean": snr_mean,
+                        "snr/val/std": snr_std,
+                        "snr/val/min": snr_min,
+                        "snr/val/max": snr_max,
+                        "snr/val/p50": snr_p50,
+                        "snr/val/p90": snr_p90,
+                        "snr/val/velocity_loss_slope": vel_slope,
+                        "snr/val/direct_noise_loss_slope": noise_slope,
+                    }
+                )
+
+            base_val_logs = {
+                "val/velocity_loss_avg": velocity_final_avg_loss,
+                "val/direct_noise_loss_avg": direct_noise_final_avg_loss,
+                "val/velocity_loss_avg_weighted": velocity_weighted_avg_loss,
+                "val/direct_noise_loss_avg_weighted": direct_noise_weighted_avg_loss,
+                "val/velocity_loss_std": velocity_loss_std,
+                "val/direct_noise_loss_std": direct_noise_loss_std,
+                "val/velocity_loss_range": velocity_loss_range,
+                "val/direct_noise_loss_range": direct_noise_loss_range,
+                "val/loss_ratio": loss_ratio,
+                # Additional diagnostics
+                "val/velocity_loss_cv_across_timesteps": velocity_cv_across_timesteps,
+                "val/direct_noise_loss_cv_across_timesteps": noise_cv_across_timesteps,
+                "val/velocity_loss_avg_p25": vel_p25,
+                "val/velocity_loss_avg_p50": vel_p50,
+                "val/velocity_loss_avg_p75": vel_p75,
+                "val/direct_noise_loss_avg_p25": noi_p25,
+                "val/direct_noise_loss_avg_p50": noi_p50,
+                "val/direct_noise_loss_avg_p75": noi_p75,
+                "val/best_timestep_velocity": best_timestep_velocity,
+                "val/worst_timestep_velocity": worst_timestep_velocity,
+                "val/best_velocity_loss": best_velocity_loss,
+                "val/worst_velocity_loss": worst_velocity_loss,
+                "val/best_timestep_direct": best_timestep_direct,
+                "val/worst_timestep_direct": worst_timestep_direct,
+                "val/best_direct_loss": best_direct_loss,
+                "val/worst_direct_loss": worst_direct_loss,
+                "val/velocity_loss_timestep_correlation": velocity_loss_t_corr,
+                "val/noise_loss_timestep_correlation": noise_loss_t_corr,
+                # Evaluation throughput metrics
+                "eval/samples_per_sec": eval_throughput_metrics["samples_per_sec"],
+                "eval/steps_per_second": eval_throughput_metrics["steps_per_sec"],
+                "eval/runtime": eval_runtime,
+            }
+
+            # Merge and log
+            merged_logs = {}
+            merged_logs.update(base_val_logs)
+            merged_logs.update(snr_essential)
+            merged_logs.update(snr_other)
+
+            accelerator.log(merged_logs, step=global_step)
 
         # Switch back to train mode
         unwrapped_model.train()
