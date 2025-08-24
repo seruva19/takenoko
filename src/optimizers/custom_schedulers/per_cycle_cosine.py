@@ -1,4 +1,4 @@
-"""Per-cycle warmup + cosine LR scheduler with a minimum floor.
+"""Per-cycle warmup + optional stable plateau + cosine LR scheduler with a minimum floor.
 
 This scheduler re-applies warmup at the start of every cycle, then cosine
 decays to a floor learning rate. It is intended for very long or indefinite
@@ -11,16 +11,17 @@ How to enable from TOML config (handled by optimizer_manager's hook):
   lr_scheduler_args = [
     "cycle_steps=500",
     "warmup_steps=25",
+    "stable_steps=0",      # optional plateau at base LR
     "decay_steps=475",
-    "min_lr_ratio=0.05"  # or use eta_min instead of a ratio
+    "min_lr_ratio=0.05"    # or use eta_min instead of a ratio
   ]
 
 Key behavior
 ------------
-- Every cycle: warmup (linear) from floor_lr -> base_lr, then cosine decay
-  from base_lr -> floor_lr.
-- If cycle_steps > warmup_steps + decay_steps, the remaining steps in the
-  cycle stay at floor_lr.
+- Every cycle: warmup (linear) from floor_lr -> base_lr, optional stable
+  plateau at base_lr, then cosine decay from base_lr -> floor_lr.
+- If cycle_steps > warmup_steps + stable_steps + decay_steps, the remaining
+  steps in the cycle stay at floor_lr.
 - `eta_min` (absolute LR floor) takes precedence over `min_lr_ratio` when set.
 
 Why it's useful for high-noise adapters
@@ -48,8 +49,10 @@ class PerCycleWarmupCosineWithFloor(torch.optim.lr_scheduler._LRScheduler):
         Total number of steps in one cycle (warmup + decay + optional floor tail).
     warmup_steps : int
         Linear warmup length at the start of each cycle.
+    stable_steps : int
+        Length of the constant plateau at base LR after warmup within each cycle.
     decay_steps : int
-        Cosine decay length after warmup within each cycle.
+        Cosine decay length after the plateau within each cycle.
     min_lr_ratio : float, default 0.0
         Minimum LR as a ratio of the base LR (per param group). Ignored if
         `eta_min` is provided.
@@ -63,7 +66,9 @@ class PerCycleWarmupCosineWithFloor(torch.optim.lr_scheduler._LRScheduler):
     For each param group with base LR `base_lr` and floor `floor_lr` (derived from
     `eta_min` or `min_lr_ratio * base_lr`):
       - Warmup (0..warmup_steps-1): linear from floor_lr -> base_lr
-      - Decay (warmup_steps..warmup_steps+decay_steps-1): cosine base_lr -> floor_lr
+      - Stable (warmup_steps..warmup_steps+stable_steps-1): constant at base_lr
+      - Decay (warmup_steps+stable_steps..
+        warmup_steps+stable_steps+decay_steps-1): cosine base_lr -> floor_lr
       - Tail (remaining steps in the cycle): constant at floor_lr
     This repeats every `cycle_steps` steps indefinitely.
     """
@@ -74,6 +79,7 @@ class PerCycleWarmupCosineWithFloor(torch.optim.lr_scheduler._LRScheduler):
         *,
         cycle_steps: int,
         warmup_steps: int,
+        stable_steps: int = 0,
         decay_steps: int,
         min_lr_ratio: float = 0.0,
         eta_min: Optional[float] = None,
@@ -81,15 +87,18 @@ class PerCycleWarmupCosineWithFloor(torch.optim.lr_scheduler._LRScheduler):
     ) -> None:
         if cycle_steps <= 0:
             raise ValueError("cycle_steps must be > 0")
-        if warmup_steps < 0 or decay_steps < 0:
-            raise ValueError("warmup_steps and decay_steps must be >= 0")
-        if warmup_steps + decay_steps > cycle_steps:
-            raise ValueError("warmup_steps + decay_steps must be <= cycle_steps")
+        if warmup_steps < 0 or stable_steps < 0 or decay_steps < 0:
+            raise ValueError("warmup_steps, stable_steps and decay_steps must be >= 0")
+        if warmup_steps + stable_steps + decay_steps > cycle_steps:
+            raise ValueError(
+                "warmup_steps + stable_steps + decay_steps must be <= cycle_steps"
+            )
         if eta_min is None and (min_lr_ratio < 0.0 or not math.isfinite(min_lr_ratio)):
             raise ValueError("min_lr_ratio must be a finite value >= 0.0")
 
         self.cycle_steps: int = int(cycle_steps)
         self.warmup_steps: int = int(warmup_steps)
+        self.stable_steps: int = int(stable_steps)
         self.decay_steps: int = int(decay_steps)
         self.min_lr_ratio: float = float(min_lr_ratio)
         self.eta_min: Optional[float] = float(eta_min) if eta_min is not None else None
@@ -117,16 +126,22 @@ class PerCycleWarmupCosineWithFloor(torch.optim.lr_scheduler._LRScheduler):
             if floor_lr > base_lr:
                 floor_lr = base_lr
 
-            if self.warmup_steps > 0 and pos_in_cycle < self.warmup_steps:
+            warmup_end = self.warmup_steps
+            stable_end = self.warmup_steps + self.stable_steps
+            decay_end = self.warmup_steps + self.stable_steps + self.decay_steps
+
+            if self.warmup_steps > 0 and pos_in_cycle < warmup_end:
                 # Linear warmup from floor_lr -> base_lr
                 progress = (pos_in_cycle + 1) / float(self.warmup_steps)
                 lr = floor_lr + (base_lr - floor_lr) * progress
-            elif (
-                self.decay_steps > 0
-                and pos_in_cycle < self.warmup_steps + self.decay_steps
-            ):
+            elif self.stable_steps > 0 and pos_in_cycle < stable_end:
+                # Stable plateau at base_lr
+                lr = base_lr
+            elif self.decay_steps > 0 and pos_in_cycle < decay_end:
                 # Cosine decay from base_lr -> floor_lr
-                t = (pos_in_cycle - self.warmup_steps + 1) / float(self.decay_steps)
+                t = (pos_in_cycle - self.warmup_steps - self.stable_steps + 1) / float(
+                    self.decay_steps
+                )
                 t = min(max(t, 0.0), 1.0)
                 lr = floor_lr + 0.5 * (base_lr - floor_lr) * (
                     1.0 + math.cos(math.pi * t)
