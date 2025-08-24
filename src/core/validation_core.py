@@ -653,12 +653,18 @@ class ValidationCore:
                                     if getattr(args, "snr_split_namespaces", False)
                                     else "snr"
                                 )
-                                accelerator.log(
-                                    {
-                                        f"{psnr_prefix}/val/psnr_ssim_t{current_timestep}": psnr_ssim_mean
-                                    },
-                                    step=global_step,
-                                )
+                                log_obj = {
+                                    f"{psnr_prefix}/val/psnr_ssim_t{current_timestep}": psnr_ssim_mean
+                                }
+                                try:
+                                    from utils.tensorboard_utils import (
+                                        apply_direction_hints_to_logs as _adh,
+                                    )
+
+                                    log_obj = _adh(args, log_obj)
+                                except Exception:
+                                    pass
+                                accelerator.log(log_obj, step=global_step)
                         except Exception:
                             pass
 
@@ -706,6 +712,14 @@ class ValidationCore:
                             total_items
                         )
 
+                        try:
+                            from utils.tensorboard_utils import (
+                                apply_direction_hints_to_logs as _adh,
+                            )
+
+                            snr_logs = _adh(args, snr_logs)
+                        except Exception:
+                            pass
                         accelerator.log(snr_logs, step=global_step)
                     except Exception:
                         pass
@@ -748,6 +762,14 @@ class ValidationCore:
                         for key, value in noise_metrics.items():
                             log_dict[f"val_timesteps/{key}_t{current_timestep}"] = value
 
+                        try:
+                            from utils.tensorboard_utils import (
+                                apply_direction_hints_to_logs as _adh,
+                            )
+
+                            log_dict = _adh(args, log_dict)
+                        except Exception:
+                            pass
                         accelerator.log(log_dict, step=global_step)
 
                     logger.info(
@@ -1096,6 +1118,14 @@ class ValidationCore:
             merged_logs.update(snr_essential)
             merged_logs.update(snr_other)
 
+            try:
+                from utils.tensorboard_utils import (
+                    apply_direction_hints_to_logs as _adh,
+                )
+
+                merged_logs = _adh(args, merged_logs)
+            except Exception:
+                pass
             accelerator.log(merged_logs, step=global_step)
 
         # Switch back to train mode

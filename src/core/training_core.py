@@ -1069,6 +1069,14 @@ class TrainingCore:
                         ).get_trainable_params()
                         accelerator.clip_grad_norm_(params_to_clip, args.max_grad_norm)
 
+                    # Update adaptive LR schedulers that need gradient stats (AMP/DDP-safe point)
+                    try:
+                        _sched = lr_scheduler
+                        if hasattr(_sched, "update_gradient_stats"):
+                            _sched.update_gradient_stats()  # type: ignore[attr-defined]
+                    except Exception:
+                        pass
+
                     # Start optimizer step timing
                     start_optimizer_step_timing()
                     try:
@@ -1085,6 +1093,22 @@ class TrainingCore:
                     try:
                         if hasattr(network, "update_norms"):
                             accelerator.unwrap_model(network).update_norms()
+                    except Exception:
+                        pass
+
+                    # Update adaptive LR schedulers with loss trend when available
+                    try:
+                        _sched = lr_scheduler
+                        if hasattr(_sched, "update_training_stats"):
+                            _loss_val = float(
+                                loss_components.total_loss.detach().item()
+                            )
+                            _sched.update_training_stats(_loss_val)  # type: ignore[attr-defined]
+                        elif hasattr(_sched, "update_metrics"):
+                            _loss_val = float(
+                                loss_components.total_loss.detach().item()
+                            )
+                            _sched.update_metrics(_loss_val)  # type: ignore[attr-defined]
                     except Exception:
                         pass
 
@@ -1407,6 +1431,14 @@ class TrainingCore:
                     except Exception:
                         pass
 
+                    try:
+                        from utils.tensorboard_utils import (
+                            apply_direction_hints_to_logs as _adh,
+                        )
+
+                        logs = _adh(args, logs)
+                    except Exception:
+                        pass
                     accelerator.log(logs, step=global_step)
 
                     # Enhanced optimizer-specific histogram logging
@@ -1462,6 +1494,14 @@ class TrainingCore:
 
             if accelerator.is_main_process and len(accelerator.trackers) > 0:
                 logs = {"loss/epoch": loss_recorder.moving_average}
+                try:
+                    from utils.tensorboard_utils import (
+                        apply_direction_hints_to_logs as _adh,
+                    )
+
+                    logs = _adh(args, logs)
+                except Exception:
+                    pass
                 accelerator.log(logs, step=epoch + 1)
 
             accelerator.wait_for_everyone()

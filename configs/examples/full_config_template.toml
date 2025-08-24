@@ -865,6 +865,9 @@ log_with = "tensorboard"
 # Set logging level to DEBUG to see FluxFlow messages
 logging_level = "INFO"
 
+# Append small emoji hints to TensorBoard tags (e.g., loss 📉, throughput 📈)
+tensorboard_append_direction_hints = true
+
 # Enable periodic logging of additional training loss diagnostics
 log_extra_train_metrics = true
 
@@ -889,13 +892,13 @@ throughput_window_size = 100
 enable_attention_metrics = false
 
 # Interval to collect attention metrics (in steps)
-attention_metrics_interval = 500      
+attention_metrics_interval = 100      
 
 # Maximum number of layers to collect attention metrics from, per step, collect from at most this many cross-attn layers
 attention_metrics_max_layers = 2      
 
 # Maximum number of queries to collect attention metrics from (subsample queries per head for bounded memory)
-attention_metrics_max_queries = 1024
+attention_metrics_max_queries = 32
 
 # Top-k mass for attention concentration metric
 attention_metrics_topk = 16

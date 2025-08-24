@@ -933,6 +933,15 @@ class WanNetworkTrainer:
 
         if len(accelerator.trackers) > 0:
             try:
+                # Ensure trackers are ready; optionally write a no-op with decorated tags
+                try:
+                    from utils.tensorboard_utils import (
+                        apply_direction_hints_to_logs as _adh,
+                    )
+
+                    _ = _adh(args, {})
+                except Exception:
+                    pass
                 accelerator.log({}, step=0)
             except Exception as e:
                 logger.error(f"💥 Accelerator logging failed: {e}")

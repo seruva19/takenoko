@@ -277,7 +277,27 @@ class VaeTrainingCore:
                                 params_to_clip, args.max_grad_norm
                             )
 
+                        # Update adaptive LR schedulers with gradient stats (before optimizer.step)
+                        try:
+                            _sched = lr_scheduler
+                            if hasattr(_sched, "update_gradient_stats"):
+                                _sched.update_gradient_stats()  # type: ignore[attr-defined]
+                        except Exception:
+                            pass
+
                     optimizer.step()
+
+                    # Update adaptive LR schedulers with loss (post-backward, pre-step is also fine)
+                    try:
+                        _sched = lr_scheduler
+                        _loss_val = float(loss.detach().item())
+                        if hasattr(_sched, "update_training_stats"):
+                            _sched.update_training_stats(_loss_val)  # type: ignore[attr-defined]
+                        elif hasattr(_sched, "update_metrics"):
+                            _sched.update_metrics(_loss_val)  # type: ignore[attr-defined]
+                    except Exception:
+                        pass
+
                     lr_scheduler.step()
                     optimizer.zero_grad(set_to_none=True)
 
@@ -310,7 +330,15 @@ class VaeTrainingCore:
                             accelerator.print(
                                 f"[Step {global_step}] VAE val_loss={val_loss:0.5f}"
                             )
-                            accelerator.log({"val_loss": val_loss}, step=global_step)
+                            try:
+                                from utils.tensorboard_utils import (
+                                    apply_direction_hints_to_logs as _adh,
+                                )
+
+                                _logs = _adh(args, {"val_loss": val_loss})
+                            except Exception:
+                                _logs = {"val_loss": val_loss}
+                            accelerator.log(_logs, step=global_step)
 
                         if should_saving:
                             accelerator.wait_for_everyone()
@@ -348,6 +376,14 @@ class VaeTrainingCore:
                 progress_bar.set_postfix(logs)
 
                 if len(accelerator.trackers) > 0:
+                    try:
+                        from utils.tensorboard_utils import (
+                            apply_direction_hints_to_logs as _adh,
+                        )
+
+                        logs = _adh(args, logs)
+                    except Exception:
+                        pass
                     accelerator.log(logs, step=global_step)
 
                 if global_step >= args.max_train_steps:
@@ -361,7 +397,15 @@ class VaeTrainingCore:
             if val_dataloader is not None and should_validate_on_epoch_end:
                 val_loss = self.validate_vae(accelerator, vae, val_dataloader, args)
                 accelerator.print(f"[Epoch {epoch+1}] VAE val_loss={val_loss:0.5f}")
-                accelerator.log({"val_loss": val_loss}, step=global_step)
+                try:
+                    from utils.tensorboard_utils import (
+                        apply_direction_hints_to_logs as _adh,
+                    )
+
+                    _logs = _adh(args, {"val_loss": val_loss})
+                except Exception:
+                    _logs = {"val_loss": val_loss}
+                accelerator.log(_logs, step=global_step)
             elif val_dataloader is not None and not should_validate_on_epoch_end:
                 accelerator.print(
                     f"\n[Epoch {epoch+1}] VAE epoch-end validation disabled"

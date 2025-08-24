@@ -432,28 +432,19 @@ def _generate_timesteps_from_distribution(
 
     elif args.timestep_sampling == "bell_shaped":
         # Bell-shaped distribution centered at `bell_center` with spread `bell_std`.
-        # This focuses sampling around a specific region (e.g., near 0.95 → timestep ~950).
-        x = torch.rand(batch_size, device=device)
-        bell_std = float(getattr(args, "bell_std", 0.2))
-        bell_center = float(getattr(args, "bell_center", 0.5))
-        # Gaussian-shaped bump around center
-        y = torch.exp(-0.5 * ((x - bell_center) / max(bell_std, 1e-6)) ** 2)
-        # Normalize to [0, 1]
-        y_shifted = y - y.min()
-        t = y_shifted / y_shifted.max()
+        # Use proper CDF inversion method to ensure correct distribution shape and boundaries
+        u = torch.rand(batch_size, device=device)
+        t = map_uniform_to_sampling(
+            args, u, latents if latents is not None else torch.empty(0)
+        )
 
     elif args.timestep_sampling == "half_bell":
         # Half Bell-Shaped (HBSMNTW) - bell curve for first half, flat for second half
-        x = torch.rand(batch_size, device=device)
-        bell_std = getattr(args, "bell_std", 0.2)
-        y = torch.exp(-0.5 * ((x - 0.5) / bell_std) ** 2)
-        y_shifted = y - y.min()
-
-        # Flatten second half to max value
-        mid_point = batch_size // 2
-        y_shifted[mid_point:] = y_shifted[:mid_point].max()
-
-        t = y_shifted / y_shifted.max()
+        # Use proper CDF inversion method to ensure correct distribution shape and boundaries
+        u = torch.rand(batch_size, device=device)
+        t = map_uniform_to_sampling(
+            args, u, latents if latents is not None else torch.empty(0)
+        )
 
     elif args.timestep_sampling == "lognorm_blend":
         # LogNormal Blend - combines lognormal distribution with linear sampling

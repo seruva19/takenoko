@@ -422,6 +422,10 @@ def create_args_from_config(
     args.snr_split_namespaces = config.get("snr_split_namespaces", True)
     # Prefer essential Validation metrics under `val/` and move others to `val_other/`
     args.val_split_namespaces = config.get("val_split_namespaces", True)
+    # Append small emoji hints to TensorBoard tags (e.g., loss 📉, throughput 📈)
+    args.tensorboard_append_direction_hints = bool(
+        config.get("tensorboard_append_direction_hints", True)
+    )
     # EMA loss display config
     args.ema_loss_beta = float(config.get("ema_loss_beta", 0.98))
     args.ema_loss_bias_warmup_steps = int(config.get("ema_loss_bias_warmup_steps", 100))

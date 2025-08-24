@@ -176,3 +176,111 @@ def register_metric_descriptions_non_intrusive(
     except Exception:
         # Fully non-intrusive
         return
+
+
+def _infer_direction_hint(tag: str) -> str | None:
+    """Infer whether higher or lower is better for a given metric tag.
+
+    Returns one of: "down", "up", or None when unknown/neutral.
+    Heuristics are intentionally simple to avoid over-engineering.
+    """
+    t = tag.lower()
+
+    # Do not decorate clearly informational tags
+    neutral_keywords = [
+        "lr/",  # learning rates
+        "/snr",  # signal-to-noise ratios (context dependent)
+        "snr/",
+        "param_stats/",
+        "val_timesteps/snr",
+    ]
+    if any(k in t for k in neutral_keywords):
+        return None
+
+    lower_is_better = [
+        "loss",
+        "error",
+        "mse",
+        "mae",
+        "rmse",
+        "nll",
+        "perplex",
+        "grad",
+        "gradient",
+        "norm",
+        "wd",
+        "weight_decay",
+        "latency",
+        "time",
+        "duration",
+        "memory",
+        "mem",
+    ]
+    if any(k in t for k in lower_is_better):
+        return "down"
+
+    higher_is_better = [
+        "accuracy",
+        "acc/",
+        "/acc",
+        "f1",
+        "precision",
+        "recall",
+        "psnr",
+        "ssim",
+        "iou",
+        "bleu",
+        "rouge",
+        "throughput",
+        "speed",
+        "samples_per_sec",
+        "tokens_per_sec",
+        "ips",
+        "itps",
+        "fps",
+        "sps",
+    ]
+    if any(k in t for k in higher_is_better):
+        return "up"
+
+    return None
+
+
+def apply_direction_hints_to_logs(args: Any, logs: Dict[str, Any]) -> Dict[str, Any]:
+    """Append small emoji hints to TensorBoard metric tags when enabled.
+
+    - Controlled via args.tensorboard_append_direction_hints (bool).
+    - Example: "loss/current" -> "loss/current (📉 better)"; "throughput/sps" -> "throughput/sps (📈 better)"
+    - Avoids modifying tags that already contain emoji hints.
+    - Leaves unrelated entries (non-scalar values) untouched key-wise.
+    """
+    try:
+        if not bool(getattr(args, "tensorboard_append_direction_hints", False)):
+            return logs
+
+        new_logs: Dict[str, Any] = {}
+        for k, v in logs.items():
+            try:
+                # Only decorate string tags
+                if not isinstance(k, str):
+                    new_logs[k] = v
+                    continue
+
+                # Skip if already has a direction emoji
+                if "📉" in k or "📈" in k:
+                    new_logs[k] = v
+                    continue
+
+                hint = _infer_direction_hint(k)
+                if hint == "down":
+                    new_logs[f"{k} (📉 better)"] = v
+                elif hint == "up":
+                    new_logs[f"{k} (📈 better)"] = v
+                else:
+                    new_logs[k] = v
+            except Exception:
+                new_logs[k] = v
+
+        return new_logs
+    except Exception:
+        return logs

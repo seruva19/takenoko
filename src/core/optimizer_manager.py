@@ -103,7 +103,7 @@ class OptimizerManager:
         optimizer = None
         optimizer_class = None
 
-        if optimizer_type.endswith("8bit".lower()):
+        if optimizer_type == "AdamW8bit".lower():
             try:
                 import bitsandbytes as bnb
             except ImportError:
@@ -111,10 +111,9 @@ class OptimizerManager:
                     "bitsandbytes is not installed. Please install bitsandbytes to use 8-bit optimizers."
                 )
 
-            if optimizer_type == "AdamW8bit".lower():
-                logger.info(f"using AdamW8bit optimizer | {optimizer_kwargs}")
-                optimizer_class = bnb.optim.AdamW8bit
-                optimizer = optimizer_class(trainable_params, lr=lr, **optimizer_kwargs)
+            logger.info(f"using AdamW8bit optimizer | {optimizer_kwargs}")
+            optimizer_class = bnb.optim.AdamW8bit
+            optimizer = optimizer_class(trainable_params, lr=lr, **optimizer_kwargs)
 
         elif optimizer_type == "Adafactor".lower():
             # Adafactor: check relative_step and warmup_init
@@ -239,6 +238,28 @@ class OptimizerManager:
             from optimizers.soap import SOAP
 
             optimizer_class = SOAP
+            optimizer = optimizer_class(trainable_params, lr=lr, **optimizer_kwargs)
+
+        elif optimizer_type == "TemporalAdamW".lower():
+            logger.info(f"using TemporalAdamW optimizer | {optimizer_kwargs}")
+
+            # Import our custom optimizer
+            from optimizers.temporal_adamw import TemporalAdamW
+
+            optimizer_class = TemporalAdamW
+            optimizer = optimizer_class(trainable_params, lr=lr, **optimizer_kwargs)
+
+        elif optimizer_type == "TemporalAdamW8bit".lower():
+            logger.info(f"using TemporalAdamW8bit optimizer | {optimizer_kwargs}")
+
+            try:
+                from optimizers.temporal_adamw_8bit import TemporalAdamW8bit
+            except Exception as err:
+                raise ImportError(
+                    "TemporalAdamW8bit requires bitsandbytes. Please install it."
+                ) from err
+
+            optimizer_class = TemporalAdamW8bit
             optimizer = optimizer_class(trainable_params, lr=lr, **optimizer_kwargs)
 
         elif optimizer_type == "Muon".lower():
@@ -558,6 +579,11 @@ class OptimizerManager:
             alias_map = {
                 # Short alias → fully-qualified class path
                 "per_cycle_cosine": "optimizers.custom_schedulers.per_cycle_cosine.PerCycleWarmupCosineWithFloor",
+                "ema_adaptive": "optimizers.custom_schedulers.adaptive_schedulers.EMAAdaptiveScheduler",
+                "noise_adaptive": "optimizers.custom_schedulers.adaptive_schedulers.NoiseAdaptiveScheduler",
+                "hybrid_adaptive": "optimizers.custom_schedulers.adaptive_schedulers.HybridAdaptiveScheduler",
+                "adaptive_per_cycle_cosine": "optimizers.custom_schedulers.adaptive_schedulers.AdaptivePerCycleWarmupCosineScheduler",
+                "cycle_adaptive_per_cycle": "optimizers.custom_schedulers.adaptive_schedulers.CycleAdaptivePerCycleScheduler",
             }
 
             if lr_scheduler_type in alias_map:

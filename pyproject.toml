@@ -33,6 +33,7 @@ dependencies = [
   "pytorch-optimizer>=3.6.1",
   "requests>=2.31.0",
   "safetensors==0.4.5",
+  "schedulefree>=1.4.1",
   "scikit-learn>=1.7.1",
   "tensorboard>=2.19.0",
   "tensorboardx>=2.6.4",
@@ -46,7 +47,6 @@ dependencies = [
   "tqdm==4.67.1",
   "transformers==4.46.3",
   "voluptuous==0.15.2",
-
 ]
 
 [project.optional-dependencies]
