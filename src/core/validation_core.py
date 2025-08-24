@@ -241,7 +241,15 @@ class ValidationCore:
             samples = []
             attempts = 0
             while len(samples) < count and attempts < count * 5:
-                t = int(torch.randint(min_t, max_t + 1, (1,), generator=rng).item())
+                t = int(
+                    torch.randint(
+                        min_t,
+                        max_t + 1,
+                        (1,),
+                        generator=rng,
+                        device=accelerator.device,
+                    ).item()
+                )
                 if t not in samples:
                     samples.append(t)
                 attempts += 1
@@ -265,7 +273,15 @@ class ValidationCore:
                     high = min(max_t, t + jitter)
                     if high < low:
                         low, high = high, low
-                    jt = int(torch.randint(low, high + 1, (1,), generator=rng).item())
+                    jt = int(
+                        torch.randint(
+                            low,
+                            high + 1,
+                            (1,),
+                            generator=rng,
+                            device=accelerator.device,
+                        ).item()
+                    )
                     jittered.append(jt)
                 self.validation_timesteps = jittered
             else:
