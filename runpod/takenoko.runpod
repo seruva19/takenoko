@@ -1,0 +1,27 @@
+# One-file RunPod configuration for Takenoko (bash syntax)
+# Copy/edit this file and run takenoko_train.sh
+
+# Takenoko repository
+REPO_ROOT = https://github.com/seruva19/takenoko
+
+# Persistent root on RunPod volume
+PERSIST_ROOT=/runpod-volume/takenoko
+
+# Optional custom subdirectories (default derived from PERSIST_ROOT)
+# DATA_DIR=
+# OUTPUT_DIR=
+# MODELS_DIR=
+# VENV_DIR=
+
+# Install CUDA 12.6 Torch wheels (set to "false" if image already has torch)
+USE_TORCH_CU126=true
+
+# Training config TOML; if relative, it's resolved relative to this file
+CONFIG=config.toml
+
+# Dataset sources (choose one)
+#   Provide a space-separated list of direct URLs:
+# URLS="https://example.com/data1.zip https://example.com/data2.tar.gz"
+
+
+
