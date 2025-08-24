@@ -127,17 +127,17 @@ max_grad_norm = 1.0
 # =============================================================================
 
 # Scheduler type
-# "constant": fixed LR for all steps (must have lr_warmup_steps = 0)
-# "constant_with_warmup": linear warmup to base LR, then hold constant
-# "linear": linear warmup, then linear decay to 0 over training steps
-# "cosine": linear warmup, then cosine decay to 0 over training steps
-# "cosine_with_restarts": warmup then cosine with restarts; uses lr_scheduler_num_cycles
-# "polynomial": warmup then polynomial decay; uses lr_scheduler_power
-# "inverse_sqrt": warmup then 1/sqrt(t) decay; uses lr_scheduler_timescale (defaults to lr_warmup_steps)
-# "cosine_with_min_lr": warmup then cosine decay to (min_lr_ratio * base LR); uses lr_scheduler_min_lr_ratio and half of lr_scheduler_num_cycles
-# "warmup_stable_decay": warmup -> flat (stable) -> decay; requires lr_warmup_steps and lr_decay_steps; uses lr_scheduler_min_lr_ratio and half of lr_scheduler_num_cycles
-# "piecewise_constant": step-wise schedule (from diffusers); requires lr_scheduler_args with step_rules
-# "adafactor:<initial_lr>": only valid with Adafactor optimizer (relative_step=True); no warmup/decay used
+# - "constant": fixed LR for all steps (must have lr_warmup_steps = 0)
+# - "constant_with_warmup": linear warmup to base LR, then hold constant
+# - "linear": linear warmup, then linear decay to 0 over training steps
+# - "cosine": linear warmup, then cosine decay to 0 over training steps
+# - "cosine_with_restarts": warmup then cosine with restarts; uses lr_scheduler_num_cycles
+# - "polynomial": warmup then polynomial decay; uses lr_scheduler_power
+# - "inverse_sqrt": warmup then 1/sqrt(t) decay; uses lr_scheduler_timescale (defaults to lr_warmup_steps)
+# - "cosine_with_min_lr": warmup then cosine decay to (min_lr_ratio * base LR); uses lr_scheduler_min_lr_ratio and half of lr_scheduler_num_cycles
+# - "warmup_stable_decay": warmup -> flat (stable) -> decay; requires lr_warmup_steps and lr_decay_steps; uses lr_scheduler_min_lr_ratio and half of lr_scheduler_num_cycles
+# - "piecewise_constant": step-wise schedule (from diffusers); requires lr_scheduler_args with step_rules
+# - "adafactor:<initial_lr>": only valid with Adafactor optimizer (relative_step=True); no warmup/decay used
 # All schedulers except "constant" require lr_warmup_steps to be provided (0 is allowed)
 # "linear" and "cosine" ignore lr_decay_steps; "warmup_stable_decay" and some advanced schedules require lr_decay_steps > 0
 lr_scheduler = "constant"
@@ -173,7 +173,7 @@ lr_scheduler_args = ''
 # NETWORK SETTINGS
 # =============================================================================
 
-# network module to train: "networks.lora_wan", "networks.control_lora_wan", "networks.reward_lora", "networks.vae_wan", "lycoris.kohya"
+# Network module to train: "networks.lora_wan", "networks.control_lora_wan", "networks.reward_lora", "networks.vae_wan", "lycoris.kohya", "networks.t_lora"
 # The module defines trainable adapters and is imported dynamically by the trainer.
 network_module = "networks.lora_wan"
 
@@ -190,6 +190,7 @@ network_alpha = 32
 # network_dropout = 0 
 
 # additional arguments for network (key=value). Parsed into list and consumed by network module.
+# Lycoris example is in wan21_lycoris.toml
 # network_args = '' 
 
 # LoRA+ (scaled lr on lora_up only):
@@ -198,6 +199,46 @@ network_alpha = 32
 # LoRA-GGPO regularization (perturbs Linear LoRA weights during training):
 # Parsed by `takenoko.create_args_from_config` into args.ggpo_sigma/ggpo_beta for the loss hooks.
 # network_args = ["ggpo_sigma=0.03", "ggpo_beta=0.01"]
+
+# T-LoRA (timestep-gated LoRA)
+# Activated when network_module = "networks.t_lora".
+# Parameters:
+# - tlora_trainer_type: "lora" (default) for vanilla T-LoRA, "ortho_lora" for orthogonal LoRA
+# - tlora_min_rank: minimum active rank at highest noise (int ≥ 0)
+# - tlora_alpha: curvature for r(t) = ((T - t)/T)^alpha * (max_rank - min_rank) + min_rank (float ≥ 0)
+# - tlora_boundary_timestep: boundary timestep for WAN-Video style expert partitioning (int in [0,1000])
+# Notes:
+# - Use include_patterns to target only attention projections if desired.
+#   Example include pattern: "include_patterns=['.*self_attn.*(q|k|v|to_out).*','.*cross_attn.*(q|k|v|to_out).*']"
+# Example vanilla T-LoRA configuration:
+# network_args = [
+#   "tlora_trainer_type=lora",
+#   "tlora_min_rank=1",
+#   "tlora_alpha=1.0",
+#   "tlora_boundary_timestep=875"
+# ]
+
+# Orthogonal T-LoRA (optional, preserves original TLora behavior when disabled)
+# Parameters:
+# - sig_type: initialization singulars to use {"last", "principal", "middle"}; default "last"
+# - ortho_from_layer: if true, initialize q/p/lambda from the original Linear weight SVD; otherwise use random base SVD
+# - ortho_reg_lambda: global regularization weight for orthogonality penalties (applies to both p and q if specific lambdas are not set)
+# - ortho_reg_lambda_p: regularization weight for p-layer orthogonality (||P^T P - I||_F^2)
+# - ortho_reg_lambda_q: regularization weight for q-layer orthogonality (||Q Q^T - I||_F^2)
+# Notes:
+# - Orthogonal parametrization supports Linear-based LoRA adapters; Conv2d LoRA is skipped gracefully.
+# - Timestep rank-mask and standard LoRA multiplier are still applied.
+# Example orthogonal T-LoRA configuration:
+# network_args = [
+#   "tlora_trainer_type=ortho_lora",
+#   "tlora_min_rank=1",
+#   "tlora_alpha=1.0",
+#   "tlora_boundary_timestep=875",
+#   "sig_type=last",
+#   "ortho_from_layer=true",
+#   "ortho_reg_lambda_p=1e-3",
+#   "ortho_reg_lambda_q=1e-3",
+# ]
 
 # arbitrary comment string stored in metadata
 # training_comment = "trained with Takenoko" 
@@ -224,7 +265,9 @@ network_alpha = 32
 # TIMESTEP AND FLOW MATCHING SETTINGS
 # =============================================================================
 
-# Method to sample timesteps: sigma, uniform, sigmoid, shift, flux_shift, logsnr, qwen_shift, qinglong_flux, qinglong_qwen, logit_normal, bell_shaped, half_bell, lognorm_blend, lognorm_continuous_blend, enhanced_sigmoid, fopp, content, style, content_style_blend
+# Method to sample timesteps
+# Available methods: sigma, uniform, sigmoid, shift, flux_shift, logsnr, qwen_shift, qinglong_flux, qinglong_qwen, logit_normal,
+# bell_shaped, half_bell, lognorm_blend, lognorm_continuous_blend, enhanced_sigmoid, fopp, content, style, content_style_blend
 timestep_sampling = "shift"
 
 # Shift amount for discrete timestep sampling (used with 'shift' timestep_sampling)
@@ -369,7 +412,11 @@ contrastive_flow_lambda = 0.05
 # Set to false to disable
 enable_repa = false
 
-# Name of the pretrained visual encoder from the `timm` library. DINOv2 models are recommended. Examples: "dinov2_vitb14", "dinov2_vitl14", "dinov2_vitg14" (DINOv2 models), "clip_vitb32", "clip_vitl14" (CLIP models), "efficientnet_b0", "efficientnet_b1" (EfficientNet models), "resnet50", "resnet101" (ResNet models)
+# Name of the pretrained visual encoder from the `timm` library. 
+# DINOv2 models: "dinov2_vitb14", "dinov2_vitl14", "dinov2_vitg14".
+# CLIP models: "clip_vitb32", "clip_vitl14".
+# EfficientNet models: "efficientnet_b0", "efficientnet_b1".
+# ResNet models: "resnet50", "resnet101".
 repa_encoder_name = "dinov2_vitb14"
 
 # The depth (layer index) of the diffusion transformer to align. The paper finds that aligning early layers (e.g., 8) is most effective.
@@ -657,8 +704,30 @@ validate_every_n_steps = 500
 # Enable validation at the end of each epoch (default: false)
 validate_on_epoch_end = true
 
-# comma-separated list of timesteps for validation (e.g., '100,300,500,700,900'). 
+# Validation timesteps mode:
+# - "fixed": use the list in validation_timesteps every time (default)
+# - "random": draw validation_timesteps_count integers uniformly within [validation_timesteps_min, validation_timesteps_max]
+# - "jitter": for each base timestep in validation_timesteps, draw a timestep within ±validation_timesteps_jitter, clamped to [validation_timesteps_min, validation_timesteps_max]
+validation_timesteps_mode = "fixed"
+
+# Base list of timesteps for validation.
+# - When validation_timesteps_mode = "fixed": use exactly this list every validation
+# - When validation_timesteps_mode = "jitter": apply ±validation_timesteps_jitter around each base value
+# - When validation_timesteps_mode = "random": ignored (random draws are used instead)
+# Example: '100,300,500,700,900'
 validation_timesteps = "100,300,500,700,900"
+
+# For mode == "random": number of unique timesteps to draw per validation
+validation_timesteps_count = 4
+
+# Global min clamp for random and jitter modes. If omitted, falls back to min_timestep or 0.
+validation_timesteps_min = 0
+
+# Global max clamp for random and jitter modes. If omitted, falls back to max_timestep or 1000.
+validation_timesteps_max = 1000
+
+# For mode == "jitter": radius to jitter each base timestep (in steps). Example: 50 means draw in [t-50, t+50].
+validation_timesteps_jitter = 0
 
 # Use unique noise per batch for proper validation (recommended: true for reliable metrics, false for legacy behavior)
 use_unique_noise_per_batch = true
@@ -814,11 +883,65 @@ log_throughput_metrics = true
 # Window size for throughput calculation (number of recent steps to average)
 throughput_window_size = 100
 
+# Diagnostic attention metrics, if enabled, compute lightweight cross-attention statistics (entropy, top-k mass, token focus)
+# at a configurable interval and for a small number of layers to limit overhead.
+# They DO NOT store attention maps; only scalars are logged.
+enable_attention_metrics = false
+
+# Interval to collect attention metrics (in steps)
+attention_metrics_interval = 500      
+
+# Maximum number of layers to collect attention metrics from, per step, collect from at most this many cross-attn layers
+attention_metrics_max_layers = 2      
+
+# Maximum number of queries to collect attention metrics from (subsample queries per head for bounded memory)
+attention_metrics_max_queries = 1024
+
+# Top-k mass for attention concentration metric
+attention_metrics_topk = 16
+
+# Prefix for logged metric names
+attention_metrics_log_prefix = "attn"
+
+# Log a small attention heatmap image to TensorBoard 
+# recomputes a tiny [queries x tokens] map from detached Q/K once per window.
+attention_metrics_log_heatmap = false
+
+# Max heads to average for the heatmap
+attention_metrics_heatmap_max_heads = 2
+
+# Max queries (rows) to include in heatmap (subsampled evenly)
+attention_metrics_heatmap_max_queries = 32
+
+# Prefix for heatmap tag in TensorBoard
+attention_metrics_heatmap_log_prefix = "attn_hm"
+
+# Attention heatmap colormap name (any Matplotlib colormap string, e.g., "magma", "viridis", "plasma")
+attention_metrics_heatmap_cmap = "magma"
+
+# Attention heatmap normalization: "log" for LogNorm, "linear" for no explicit normalization
+attention_metrics_heatmap_norm = "log"
+
+# Attention heatmap percentile window for contrast stretching (0-100); ignored if invalid
+attention_metrics_heatmap_vmin_pct = 60.0
+
+# Attention heatmap percentile window for contrast stretching (0-100); ignored if invalid
+attention_metrics_heatmap_vmax_pct = 99.5
+
+# Attention heatmap figure width in inches
+attention_metrics_heatmap_fig_w = 6.0
+
+# Attention heatmap figure height in inches
+attention_metrics_heatmap_fig_h = 4.0
+
 # Performance metrics verbosity level for model prediction and target analysis: minimal, standard, debug
 performance_verbosity = "standard"
 
 # Split SNR metrics into essential and other namespaces for clarity
 snr_split_namespaces = true
+
+# Split validation metrics into essential and detailed namespaces
+val_split_namespaces = true
 
 # EMA smoothing factor (0.9-0.99 typical). Higher = smoother, slower to react.
 # ema_loss_beta = 0.98

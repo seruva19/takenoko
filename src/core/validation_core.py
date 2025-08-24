@@ -80,6 +80,22 @@ class ValidationCore:
             self.validation_timesteps = [600, 700, 800, 900]
 
         logger.info(f"Validation timesteps: {self.validation_timesteps}")
+        # Store dynamic mode defaults from config if present (used when args missing)
+        self.validation_timesteps_mode = getattr(
+            self.config, "validation_timesteps_mode", "fixed"
+        )
+        self.validation_timesteps_count = int(
+            getattr(self.config, "validation_timesteps_count", 4)
+        )
+        self.validation_timesteps_min = getattr(
+            self.config, "validation_timesteps_min", None
+        )
+        self.validation_timesteps_max = getattr(
+            self.config, "validation_timesteps_max", None
+        )
+        self.validation_timesteps_jitter = int(
+            getattr(self.config, "validation_timesteps_jitter", 0)
+        )
 
     def _compute_and_gather_metrics(
         self,
@@ -165,21 +181,98 @@ class ValidationCore:
         global_step: Optional[int] = None,
         show_progress: bool = True,
     ) -> tuple[float, float]:
-        # Prefer validation timesteps provided via args (from TOML) if available
+        # Determine validation timesteps according to mode
         try:
-            # TODO: check if duplicate code
+            mode = str(
+                getattr(
+                    args, "validation_timesteps_mode", self.validation_timesteps_mode
+                )
+            ).lower()
+        except Exception:
+            mode = "fixed"
+
+        # Base fixed list from args/config
+        base_list = None
+        try:
             raw = getattr(args, "validation_timesteps", None)
+            if raw is None:
+                raw = getattr(self.config, "validation_timesteps", None)
             if raw is not None:
                 raw_str = str(raw).strip()
                 if "," in raw_str:
-                    self.validation_timesteps = [
+                    base_list = [
                         int(t.strip()) for t in raw_str.split(",") if t.strip()
                     ]
                 else:
-                    self.validation_timesteps = [int(raw_str)]
+                    base_list = [int(raw_str)]
         except Exception:
-            # Fallback to whatever was set up previously
-            pass
+            base_list = None
+
+        if base_list is None:
+            base_list = getattr(
+                self,
+                "validation_timesteps",
+                [100, 200, 300, 400, 500, 600, 700, 800, 900],
+            )
+
+        # Bounds for random/jitter
+        min_t = getattr(args, "validation_timesteps_min", self.validation_timesteps_min)
+        max_t = getattr(args, "validation_timesteps_max", self.validation_timesteps_max)
+        if min_t is None:
+            min_t = getattr(args, "min_timestep", 0)
+        if max_t is None:
+            max_t = getattr(args, "max_timestep", 1000)
+        min_t = int(min_t)
+        max_t = int(max_t)
+
+        if mode == "random":
+            count = int(
+                getattr(
+                    args, "validation_timesteps_count", self.validation_timesteps_count
+                )
+            )
+            count = max(1, count)
+            # Sample without replacement within [min_t, max_t]
+            if max_t < min_t:
+                min_t, max_t = max_t, min_t
+            rng = torch.Generator(device=accelerator.device)
+            rng.manual_seed(42)  # deterministic across processes
+            # Use torch.randint then unique to avoid dependency on numpy
+            samples = []
+            attempts = 0
+            while len(samples) < count and attempts < count * 5:
+                t = int(torch.randint(min_t, max_t + 1, (1,), generator=rng).item())
+                if t not in samples:
+                    samples.append(t)
+                attempts += 1
+            self.validation_timesteps = samples
+        elif mode == "jitter":
+            jitter = int(
+                getattr(
+                    args,
+                    "validation_timesteps_jitter",
+                    self.validation_timesteps_jitter,
+                )
+            )
+            if jitter > 0:
+                jittered = []
+                rng = torch.Generator(device=accelerator.device)
+                rng.manual_seed(
+                    42 + (global_step or 0)
+                )  # change over time but deterministic
+                for t in base_list:
+                    low = max(min_t, t - jitter)
+                    high = min(max_t, t + jitter)
+                    if high < low:
+                        low, high = high, low
+                    jt = int(torch.randint(low, high + 1, (1,), generator=rng).item())
+                    jittered.append(jt)
+                self.validation_timesteps = jittered
+            else:
+                self.validation_timesteps = base_list
+        else:
+            # fixed
+            self.validation_timesteps = base_list
         """Run validation and return average validation loss for both velocity and direct noise prediction.
 
         Args:
@@ -903,44 +996,87 @@ class ValidationCore:
                     }
                 )
 
-            base_val_logs = {
-                "val/velocity_loss_avg": velocity_final_avg_loss,
-                "val/direct_noise_loss_avg": direct_noise_final_avg_loss,
-                "val/velocity_loss_avg_weighted": velocity_weighted_avg_loss,
-                "val/direct_noise_loss_avg_weighted": direct_noise_weighted_avg_loss,
-                "val/velocity_loss_std": velocity_loss_std,
-                "val/direct_noise_loss_std": direct_noise_loss_std,
-                "val/velocity_loss_range": velocity_loss_range,
-                "val/direct_noise_loss_range": direct_noise_loss_range,
-                "val/loss_ratio": loss_ratio,
-                # Additional diagnostics
-                "val/velocity_loss_cv_across_timesteps": velocity_cv_across_timesteps,
-                "val/direct_noise_loss_cv_across_timesteps": noise_cv_across_timesteps,
-                "val/velocity_loss_avg_p25": vel_p25,
-                "val/velocity_loss_avg_p50": vel_p50,
-                "val/velocity_loss_avg_p75": vel_p75,
-                "val/direct_noise_loss_avg_p25": noi_p25,
-                "val/direct_noise_loss_avg_p50": noi_p50,
-                "val/direct_noise_loss_avg_p75": noi_p75,
-                "val/best_timestep_velocity": best_timestep_velocity,
-                "val/worst_timestep_velocity": worst_timestep_velocity,
-                "val/best_velocity_loss": best_velocity_loss,
-                "val/worst_velocity_loss": worst_velocity_loss,
-                "val/best_timestep_direct": best_timestep_direct,
-                "val/worst_timestep_direct": worst_timestep_direct,
-                "val/best_direct_loss": best_direct_loss,
-                "val/worst_direct_loss": worst_direct_loss,
-                "val/velocity_loss_timestep_correlation": velocity_loss_t_corr,
-                "val/noise_loss_timestep_correlation": noise_loss_t_corr,
-                # Evaluation throughput metrics
-                "eval/samples_per_sec": eval_throughput_metrics["samples_per_sec"],
-                "eval/steps_per_second": eval_throughput_metrics["steps_per_sec"],
-                "eval/runtime": eval_runtime,
-            }
+            # Split validation metrics into essential val/ and detailed val_other/ if enabled
+            val_essential = {}
+            val_other = {}
+
+            if getattr(args, "val_split_namespaces", True):
+                # Keep the top-line 6 charts users care about most
+                val_essential.update(
+                    {
+                        "val/velocity_loss_avg": velocity_final_avg_loss,
+                        "val/direct_noise_loss_avg": direct_noise_final_avg_loss,
+                        "val/velocity_loss_std": velocity_loss_std,
+                        "val/direct_noise_loss_std": direct_noise_loss_std,
+                        "val/best_velocity_loss": best_velocity_loss,
+                        "val/best_direct_loss": best_direct_loss,
+                    }
+                )
+
+                # Route remaining diagnostics to val_other/
+                val_other.update(
+                    {
+                        "val_other/velocity_loss_avg_weighted": velocity_weighted_avg_loss,
+                        "val_other/direct_noise_loss_avg_weighted": direct_noise_weighted_avg_loss,
+                        "val_other/velocity_loss_range": velocity_loss_range,
+                        "val_other/direct_noise_loss_range": direct_noise_loss_range,
+                        "val_other/loss_ratio": loss_ratio,
+                        "val_other/velocity_loss_cv_across_timesteps": velocity_cv_across_timesteps,
+                        "val_other/direct_noise_loss_cv_across_timesteps": noise_cv_across_timesteps,
+                        "val_other/velocity_loss_avg_p25": vel_p25,
+                        "val_other/velocity_loss_avg_p50": vel_p50,
+                        "val_other/velocity_loss_avg_p75": vel_p75,
+                        "val_other/direct_noise_loss_avg_p25": noi_p25,
+                        "val_other/direct_noise_loss_avg_p50": noi_p50,
+                        "val_other/direct_noise_loss_avg_p75": noi_p75,
+                        "val_other/best_timestep_velocity": best_timestep_velocity,
+                        "val_other/worst_timestep_velocity": worst_timestep_velocity,
+                        "val_other/worst_velocity_loss": worst_velocity_loss,
+                        "val_other/best_timestep_direct": best_timestep_direct,
+                        "val_other/worst_timestep_direct": worst_timestep_direct,
+                        "val_other/worst_direct_loss": worst_direct_loss,
+                        "val_other/velocity_loss_timestep_correlation": velocity_loss_t_corr,
+                        "val_other/noise_loss_timestep_correlation": noise_loss_t_corr,
+                    }
+                )
+            else:
+                # Original behavior: keep everything under val/
+                val_essential.update(
+                    {
+                        "val/velocity_loss_avg": velocity_final_avg_loss,
+                        "val/direct_noise_loss_avg": direct_noise_final_avg_loss,
+                        "val/velocity_loss_avg_weighted": velocity_weighted_avg_loss,
+                        "val/direct_noise_loss_avg_weighted": direct_noise_weighted_avg_loss,
+                        "val/velocity_loss_std": velocity_loss_std,
+                        "val/direct_noise_loss_std": direct_noise_loss_std,
+                        "val/velocity_loss_range": velocity_loss_range,
+                        "val/direct_noise_loss_range": direct_noise_loss_range,
+                        "val/loss_ratio": loss_ratio,
+                        "val/velocity_loss_cv_across_timesteps": velocity_cv_across_timesteps,
+                        "val/direct_noise_loss_cv_across_timesteps": noise_cv_across_timesteps,
+                        "val/velocity_loss_avg_p25": vel_p25,
+                        "val/velocity_loss_avg_p50": vel_p50,
+                        "val/velocity_loss_avg_p75": vel_p75,
+                        "val/direct_noise_loss_avg_p25": noi_p25,
+                        "val/direct_noise_loss_avg_p50": noi_p50,
+                        "val/direct_noise_loss_avg_p75": noi_p75,
+                        "val/best_timestep_velocity": best_timestep_velocity,
+                        "val/worst_timestep_velocity": worst_timestep_velocity,
+                        "val/best_velocity_loss": best_velocity_loss,
+                        "val/worst_velocity_loss": worst_velocity_loss,
+                        "val/best_timestep_direct": best_timestep_direct,
+                        "val/worst_timestep_direct": worst_timestep_direct,
+                        "val/best_direct_loss": best_direct_loss,
+                        "val/worst_direct_loss": worst_direct_loss,
+                        "val/velocity_loss_timestep_correlation": velocity_loss_t_corr,
+                        "val/noise_loss_timestep_correlation": noise_loss_t_corr,
+                    }
+                )
 
             # Merge and log
             merged_logs = {}
-            merged_logs.update(base_val_logs)
+            merged_logs.update(val_essential)
+            merged_logs.update(val_other)
             merged_logs.update(snr_essential)
             merged_logs.update(snr_other)
 

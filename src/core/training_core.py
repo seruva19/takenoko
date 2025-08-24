@@ -680,6 +680,14 @@ class TrainingCore:
             pass
         """Run the main training loop."""
 
+        # Configure attention metrics from args (non-fatal)
+        try:
+            from common import attention_metrics as _attn_metrics
+
+            _attn_metrics.configure_from_args(args)
+        except Exception:
+            pass
+
         # Calculate starting epoch when resuming from checkpoint
         if global_step > 0:
             # We're resuming from a checkpoint - calculate which epoch we should be in
@@ -746,6 +754,14 @@ class TrainingCore:
             for step, batch in enumerate(train_dataloader):
                 # Start performance timing for this step
                 start_step_timing()
+
+                # Begin gated attention-metrics window (no-op if disabled)
+                try:
+                    from common import attention_metrics as _attn_metrics
+
+                    _attn_metrics.begin_step(global_step)
+                except Exception:
+                    pass
 
                 # Skip batches when resuming in the middle of an epoch
                 if epoch == epoch_to_start and step < step_offset:
@@ -882,6 +898,16 @@ class TrainingCore:
                                     batch_timesteps_uniform,
                                 )
                             )
+
+                    # Optional: If the network supports TLora-style masking, update mask from timesteps
+                    try:
+                        unwrapped_net = accelerator.unwrap_model(network)
+                        if hasattr(unwrapped_net, "update_rank_mask_from_timesteps"):
+                            unwrapped_net.update_rank_mask_from_timesteps(
+                                timesteps, max_timestep=1000, device=accelerator.device
+                            )
+                    except Exception:
+                        pass
 
                     weighting = compute_loss_weighting_for_sd3(
                         args.weighting_scheme,
@@ -1371,7 +1397,16 @@ class TrainingCore:
                     except Exception:
                         pass
 
-                    # Log scalar metrics
+                    # Log scalar attention metrics and optional heatmap via helper
+                    try:
+                        from common.attention_logging import (
+                            attach_attention_metrics_and_maybe_heatmap as _attn_log_helper,
+                        )
+
+                        _attn_log_helper(accelerator, args, logs, global_step)
+                    except Exception:
+                        pass
+
                     accelerator.log(logs, step=global_step)
 
                     # Enhanced optimizer-specific histogram logging

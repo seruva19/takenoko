@@ -378,6 +378,19 @@ class WanCrossAttention(WanSelfAttention):
         v = v.view(b, -1, n, d)
 
         # compute attention
+        # Optionally collect attention metrics with minimal overhead
+        try:
+            from common.attention_metrics import collect_cross_attention, should_collect
+
+            if should_collect():
+                # Use detached copies to avoid graph bloat; compute on head-major views
+                q_det = q.detach().contiguous()  # [B, Lq, H, D]
+                k_det = k.detach().contiguous()  # [B, Lk, H, D]
+                collect_cross_attention(q_det, k_det)
+        except Exception:
+            logger.error("Failed to collect attention metrics")
+            pass
+
         qkv = [q, k, v]
         del q, k, v
         x = flash_attention(
@@ -484,6 +497,8 @@ class WanAttentionBlock(nn.Module):
             freqs(Tensor): Rope freqs, shape [1024, C / num_heads / 2]
             sparse_attention (bool): Whether to use sparse attention (default: False)
         """
+        org_dtype = x.dtype
+
         if self.model_version == "2.1":
             e = self.modulation.to(torch.float32) + e
             e = e.chunk(6, dim=1)
@@ -491,7 +506,7 @@ class WanAttentionBlock(nn.Module):
 
             # self-attention
             y = self.self_attn(
-                self.norm1(x).float() * (1 + e[1]) + e[0],
+                (self.norm1(x).float() * (1 + e[1]) + e[0]).to(org_dtype),
                 seq_lens,
                 grid_sizes,
                 freqs if batched_rotary is None else None,
@@ -500,14 +515,14 @@ class WanAttentionBlock(nn.Module):
                 # type: ignore[arg-type]
                 batched_rotary=batched_rotary,
             )
-            x = x + y.to(torch.float32) * e[2]
+            x = (x + y.to(torch.float32) * e[2]).to(org_dtype)
             del y
 
             # cross-attention & ffn
             x = x + self.cross_attn(self.norm3(x), context, context_lens)
             del context
-            y = self.ffn(self.norm2(x).float() * (1 + e[4]) + e[3])
-            x = x + y.to(torch.float32) * e[5]
+            y = self.ffn((self.norm2(x).float() * (1 + e[4]) + e[3]).to(org_dtype))
+            x = (x + y.to(torch.float32) * e[5]).to(org_dtype)
             del y
         else:  # For Wan2.2
             e = self.modulation.to(torch.float32) + e
@@ -516,23 +531,27 @@ class WanAttentionBlock(nn.Module):
 
             # self-attention
             y = self.self_attn(
-                self.norm1(x).float() * (1 + e[1].squeeze(2)) + e[0].squeeze(2),
+                (self.norm1(x).float() * (1 + e[1].squeeze(2)) + e[0].squeeze(2)).to(
+                    org_dtype
+                ),
                 seq_lens,
                 grid_sizes,
                 freqs if batched_rotary is None else None,
                 sparse_attention=sparse_attention,
                 batched_rotary=batched_rotary,  # type: ignore[arg-type]
             )
-            x = x + y.to(torch.float32) * e[2].squeeze(2)
+            x = (x + y.to(torch.float32) * e[2].squeeze(2)).to(org_dtype)
             del y
 
             # cross-attention & ffn
             x = x + self.cross_attn(self.norm3(x), context, context_lens)
             del context
             y = self.ffn(
-                self.norm2(x).float() * (1 + e[4].squeeze(2)) + e[3].squeeze(2)
+                (self.norm2(x).float() * (1 + e[4].squeeze(2)) + e[3].squeeze(2)).to(
+                    org_dtype
+                )
             )
-            x = x + y.to(torch.float32) * e[5].squeeze(2)
+            x = (x + y.to(torch.float32) * e[5].squeeze(2)).to(org_dtype)
 
             del y
         return x

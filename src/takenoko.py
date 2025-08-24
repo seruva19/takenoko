@@ -355,11 +355,73 @@ def create_args_from_config(
     )  # Default to True for better UX
     args.logging_level = config.get("logging_level", "INFO")
 
+    # Attention metrics (gated; off by default)
+    args.enable_attention_metrics = bool(config.get("enable_attention_metrics", False))
+    args.attention_metrics_interval = int(config.get("attention_metrics_interval", 500))
+    args.attention_metrics_max_layers = int(
+        config.get("attention_metrics_max_layers", 2)
+    )
+    args.attention_metrics_max_queries = int(
+        config.get("attention_metrics_max_queries", 1024)
+    )
+    args.attention_metrics_topk = int(config.get("attention_metrics_topk", 16))
+    args.attention_metrics_log_prefix = str(
+        config.get("attention_metrics_log_prefix", "attn")
+    )
+
+    # Attention heatmap logging (fully gated; off by default)
+    args.attention_metrics_log_heatmap = bool(
+        config.get("attention_metrics_log_heatmap", False)
+    )
+    args.attention_metrics_heatmap_max_heads = int(
+        config.get("attention_metrics_heatmap_max_heads", 1)
+    )
+    args.attention_metrics_heatmap_max_queries = int(
+        config.get("attention_metrics_heatmap_max_queries", 64)
+    )
+    args.attention_metrics_heatmap_log_prefix = str(
+        config.get("attention_metrics_heatmap_log_prefix", "attn_hm")
+    )
+    # Attention heatmap rendering preferences
+    args.attention_metrics_heatmap_cmap = str(
+        config.get("attention_metrics_heatmap_cmap", "magma")
+    )
+    args.attention_metrics_heatmap_norm = str(
+        config.get("attention_metrics_heatmap_norm", "log")
+    )  # "log" | "linear"
+    try:
+        args.attention_metrics_heatmap_vmin_pct = float(
+            config.get("attention_metrics_heatmap_vmin_pct", 60.0)
+        )
+    except Exception:
+        args.attention_metrics_heatmap_vmin_pct = 60.0
+    try:
+        args.attention_metrics_heatmap_vmax_pct = float(
+            config.get("attention_metrics_heatmap_vmax_pct", 99.5)
+        )
+    except Exception:
+        args.attention_metrics_heatmap_vmax_pct = 99.5
+    # Figure size (inches)
+    try:
+        args.attention_metrics_heatmap_fig_w = float(
+            config.get("attention_metrics_heatmap_fig_w", 6.0)
+        )
+    except Exception:
+        args.attention_metrics_heatmap_fig_w = 6.0
+    try:
+        args.attention_metrics_heatmap_fig_h = float(
+            config.get("attention_metrics_heatmap_fig_h", 4.0)
+        )
+    except Exception:
+        args.attention_metrics_heatmap_fig_h = 4.0
+
     # Extra training metrics (periodic)
     args.log_extra_train_metrics = config.get("log_extra_train_metrics", True)
     args.train_metrics_interval = config.get("train_metrics_interval", 50)
     # Prefer essential SNR metrics under `snr/` and move others to `snr_other/`
     args.snr_split_namespaces = config.get("snr_split_namespaces", True)
+    # Prefer essential Validation metrics under `val/` and move others to `val_other/`
+    args.val_split_namespaces = config.get("val_split_namespaces", True)
     # EMA loss display config
     args.ema_loss_beta = float(config.get("ema_loss_beta", 0.98))
     args.ema_loss_bias_warmup_steps = int(config.get("ema_loss_bias_warmup_steps", 100))
@@ -418,6 +480,16 @@ def create_args_from_config(
     args.validate_every_n_steps = config.get("validate_every_n_steps", None)
     args.validate_on_epoch_end = config.get("validate_on_epoch_end", False)
     args.validation_timesteps = config.get("validation_timesteps", "500")
+    # Dynamic validation timesteps controls
+    # mode: "fixed" | "random" | "jitter"
+    args.validation_timesteps_mode = config.get("validation_timesteps_mode", "fixed")
+    # number of timesteps to draw when mode == "random"
+    args.validation_timesteps_count = int(config.get("validation_timesteps_count", 4))
+    # bounds for random/jittered timesteps (inclusive). If None, fall back to args.min/max_timestep or [0,1000]
+    args.validation_timesteps_min = config.get("validation_timesteps_min")
+    args.validation_timesteps_max = config.get("validation_timesteps_max")
+    # integer jitter radius applied per base timestep when mode == "jitter"
+    args.validation_timesteps_jitter = int(config.get("validation_timesteps_jitter", 0))
     args.use_unique_noise_per_batch = config.get("use_unique_noise_per_batch", True)
     # SNR / perceptual validation toggles
     args.enable_perceptual_snr = config.get("enable_perceptual_snr", False)

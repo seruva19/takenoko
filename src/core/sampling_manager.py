@@ -769,6 +769,16 @@ class SamplingManager:
                 timestep = t.unsqueeze(0)
 
                 with accelerator.autocast():
+                    # Apply T-LoRA rank mask at inference time if supported
+                    try:
+                        unwrapped_net = accelerator.unwrap_model(transformer)
+                        if hasattr(unwrapped_net, "update_rank_mask_from_timesteps"):
+                            unwrapped_net.update_rank_mask_from_timesteps(
+                                timestep, max_timestep=1000, device=device
+                            )
+                    except Exception:
+                        pass
+
                     noise_pred_cond = model(latent_model_input, t=timestep, **arg_c)[0]
                     if do_classifier_free_guidance:
                         noise_pred_uncond = model(

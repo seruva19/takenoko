@@ -47,6 +47,8 @@ class LossComponents:
     dispersive_loss: Optional[torch.Tensor] = None
     optical_flow_loss: Optional[torch.Tensor] = None
     repa_loss: Optional[torch.Tensor] = None
+    ortho_reg_p: Optional[torch.Tensor] = None
+    ortho_reg_q: Optional[torch.Tensor] = None
 
 
 class TrainingLossComputer:
@@ -394,6 +396,40 @@ class TrainingLossComputer:
             except Exception as e:
                 logger.warning(f"DOP loss computation failed: {e}")
 
+        # ---- Optional Orthogonal LoRA regularization (T-LoRA orthogonal mode) ----
+        ortho_p_val: Optional[torch.Tensor] = None
+        ortho_q_val: Optional[torch.Tensor] = None
+        try:
+            if network is not None:
+                lam_p = float(getattr(network, "ortho_reg_lambda_p", 0.0))
+                lam_q = float(getattr(network, "ortho_reg_lambda_q", 0.0))
+                if (lam_p > 0.0 or lam_q > 0.0) and hasattr(network, "unet_loras"):
+                    p_sum: Optional[torch.Tensor] = None
+                    q_sum: Optional[torch.Tensor] = None
+                    for lora in getattr(network, "unet_loras", []):
+                        if hasattr(lora, "_ortho_enabled") and getattr(
+                            lora, "_ortho_enabled", False
+                        ):
+                            if hasattr(lora, "regularization"):
+                                try:
+                                    p_reg, q_reg = lora.regularization()  # type: ignore
+                                except Exception:
+                                    p_reg, q_reg = None, None
+                            else:
+                                p_reg, q_reg = None, None
+                            if p_reg is not None:
+                                p_sum = p_reg if p_sum is None else p_sum + p_reg
+                            if q_reg is not None:
+                                q_sum = q_reg if q_sum is None else q_sum + q_reg
+                    if p_sum is not None and lam_p > 0.0:
+                        loss = loss + lam_p * p_sum
+                        ortho_p_val = p_sum.detach()
+                    if q_sum is not None and lam_q > 0.0:
+                        loss = loss + lam_q * q_sum
+                        ortho_q_val = q_sum.detach()
+        except Exception as e:
+            logger.warning(f"Orthogonal LoRA regularization failed: {e}")
+
         return LossComponents(
             total_loss=loss,
             base_loss=base_loss.detach(),
@@ -401,6 +437,8 @@ class TrainingLossComputer:
             dispersive_loss=dispersive_loss_value,
             optical_flow_loss=optical_flow_loss_value,
             repa_loss=repa_loss_value,
+            ortho_reg_p=ortho_p_val,
+            ortho_reg_q=ortho_q_val,
         )
 
     @torch.no_grad()

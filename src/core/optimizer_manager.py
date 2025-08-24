@@ -553,6 +553,23 @@ class OptimizerManager:
         # using any lr_scheduler from other library
         if args.lr_scheduler_type:
             lr_scheduler_type = args.lr_scheduler_type
+
+            # Built-in aliases for custom schedulers
+            alias_map = {
+                # Short alias → fully-qualified class path
+                "per_cycle_cosine": "optimizers.custom_schedulers.per_cycle_cosine.PerCycleWarmupCosineWithFloor",
+            }
+
+            if lr_scheduler_type in alias_map:
+                fqcn = alias_map[lr_scheduler_type]
+                module_path, class_name = fqcn.rsplit(".", 1)
+                logger.info(
+                    f"using alias '{lr_scheduler_type}' → {fqcn} | {lr_scheduler_kwargs} as lr_scheduler"
+                )
+                lr_scheduler_module = importlib.import_module(module_path)
+                lr_scheduler_class = getattr(lr_scheduler_module, class_name)
+                return lr_scheduler_class(optimizer, **lr_scheduler_kwargs)
+
             logger.info(
                 f"using {lr_scheduler_type} | {lr_scheduler_kwargs} as lr_scheduler"
             )
