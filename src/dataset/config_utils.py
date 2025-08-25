@@ -519,7 +519,7 @@ def _format_dataset_details_table(
 def generate_dataset_group_by_blueprint(
     dataset_group_blueprint: DatasetGroupBlueprint,
     training: bool = False,
-    enable_control_lora: bool = False,
+    load_pixels_for_batches: bool = False,
     prior_loss_weight: float = 1.0,
     num_timestep_buckets: Optional[int] = None,
 ) -> DatasetGroup:
@@ -572,7 +572,9 @@ def generate_dataset_group_by_blueprint(
                 if "require_text_encoder_cache" in sig.parameters:
                     kwargs["require_text_encoder_cache"] = True
                 if "load_pixels_for_control" in sig.parameters:
-                    kwargs["load_pixels_for_control"] = enable_control_lora
+                    # This flag controls whether original pixels are included in batches
+                    # for things like perceptual metrics or control preprocessing.
+                    kwargs["load_pixels_for_control"] = load_pixels_for_batches
                 if "prior_loss_weight" in sig.parameters:
                     kwargs["prior_loss_weight"] = prior_loss_weight
                 if "num_timestep_buckets" in sig.parameters:

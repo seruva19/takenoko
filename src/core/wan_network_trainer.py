@@ -367,7 +367,7 @@ class WanNetworkTrainer:
         train_dataset_group = config_utils.generate_dataset_group_by_blueprint(
             blueprint.train_dataset_group,
             training=True,
-            enable_control_lora=getattr(args, "enable_control_lora", False),
+            load_pixels_for_batches=getattr(args, "enable_control_lora", False),
             prior_loss_weight=getattr(args, "prior_loss_weight", 1.0),
             num_timestep_buckets=(
                 None
@@ -388,10 +388,17 @@ class WanNetworkTrainer:
         # Only create validation dataset group if there are validation datasets
         val_dataset_group = None
         if len(blueprint.val_dataset_group.datasets) > 0:
+            # For validation, we might want pixels available in batches without enabling Control LoRA.
+            # When args.load_val_pixels is True, piggyback on the dataset preparation flag
+            # that loads original pixels for control processing.
+            val_enable_control_lora = bool(getattr(args, "enable_control_lora", False))
+            if bool(getattr(args, "load_val_pixels", False)):
+                val_enable_control_lora = True
+
             val_dataset_group = config_utils.generate_dataset_group_by_blueprint(
                 blueprint.val_dataset_group,
                 training=True,
-                enable_control_lora=getattr(args, "enable_control_lora", False),
+                load_pixels_for_batches=val_enable_control_lora,
                 prior_loss_weight=getattr(args, "prior_loss_weight", 1.0),
                 num_timestep_buckets=(
                     None
