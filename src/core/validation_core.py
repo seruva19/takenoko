@@ -850,6 +850,106 @@ class ValidationCore:
                         except Exception:
                             pass
 
+                    # Flow-warped SSIM (RAFT via torchvision): small subsample
+                    if (
+                        bool(getattr(args, "enable_flow_warped_ssim", False))
+                        and vae is not None
+                        and "pixels" in batch
+                    ):
+                        try:
+                            import torchvision
+                            from torchvision.models.optical_flow import (
+                                Raft_Small_Weights,
+                            )
+                            from torchvision.transforms.functional import resize
+
+                            if not hasattr(self, "_raft_model"):
+                                weights = Raft_Small_Weights.DEFAULT
+                                self._raft_model = (
+                                    torchvision.models.optical_flow.raft_small(
+                                        weights=weights
+                                    ).to(accelerator.device)
+                                )
+                                self._raft_model.eval()
+
+                            if "pred_frames" not in locals():
+                                pred_latents = pred.detach().to(torch.float32)
+                                with torch.autocast(
+                                    device_type=str(accelerator.device).split(":")[0],
+                                    enabled=False,
+                                ):
+                                    decoded = vae.decode(
+                                        pred_latents
+                                        / getattr(vae, "scaling_factor", 1.0)
+                                    )
+                                    pred_frames = (
+                                        torch.stack(decoded, dim=0)
+                                        if isinstance(decoded, list)
+                                        else decoded
+                                    )
+                            # Use only the prediction frames; warp t->t+1 and compare to t+1
+                            max_items = int(
+                                getattr(args, "flow_warped_ssim_max_items", 2)
+                            )
+                            stride = int(
+                                getattr(args, "flow_warped_ssim_frame_stride", 2)
+                            )
+                            b = min(pred_frames.shape[0], max_items)
+                            if b > 0 and pred_frames.shape[2] > 1:
+                                pf = pred_frames[:b]  # [B,C,F,H,W] in [0,1]
+                                # RAFT expects [N,2,C,H,W] input pairs and often 520x960-ish sizes; we can work at native size.
+                                # Compute flow per pair (t->t+1)
+                                eps = 1e-6
+                                ssim_vals = []
+                                for i in range(0, pf.shape[2] - 1, max(1, stride)):
+                                    f1 = pf[:, :, i]
+                                    f2 = pf[:, :, i + 1]
+
+                                    # Normalize to [-1,1] for RAFT backbone
+                                    def to_raft_range(x: torch.Tensor) -> torch.Tensor:
+                                        return x.clamp(0, 1) * 2.0 - 1.0
+
+                                    _f1 = to_raft_range(f1)
+                                    _f2 = to_raft_range(f2)
+                                    flow = self._raft_model(_f1, _f2)[-1]  # [B,2,H,W]
+                                    # Warp f1 toward f2
+                                    # Build sampling grid: grid = (x + flow_x, y + flow_y) normalized to [-1,1]
+                                    Bc, Cc, Hc, Wc = f1.shape
+                                    yy, xx = torch.meshgrid(
+                                        torch.arange(Hc, device=flow.device),
+                                        torch.arange(Wc, device=flow.device),
+                                        indexing="ij",
+                                    )
+                                    xx = xx.float().unsqueeze(0).expand(Bc, -1, -1)
+                                    yy = yy.float().unsqueeze(0).expand(Bc, -1, -1)
+                                    grid_x = (xx + flow[:, 0]) / max(Wc - 1, 1) * 2 - 1
+                                    grid_y = (yy + flow[:, 1]) / max(Hc - 1, 1) * 2 - 1
+                                    grid = torch.stack([grid_x, grid_y], dim=-1)
+                                    f1_warp = torch.nn.functional.grid_sample(
+                                        f1,
+                                        grid,
+                                        mode="bilinear",
+                                        padding_mode="border",
+                                        align_corners=True,
+                                    )
+                                    # SSIM approx on luminance
+                                    w1 = f1_warp.mean(dim=1)
+                                    w2 = f2.mean(dim=1)
+                                    num = (w1 - w2) ** 2
+                                    den = w1**2 + w2**2 + eps
+                                    ssim_approx = 1.0 - (num / den)
+                                    ssim_approx = torch.clamp(ssim_approx, 0.0, 1.0)
+                                    ssim_vals.append(ssim_approx.mean())
+                                if ssim_vals:
+                                    flow_ssim = torch.stack(ssim_vals).mean()
+                                    if "batch_flow_warped_ssim_vals" not in locals():
+                                        batch_flow_warped_ssim_vals = []
+                                    batch_flow_warped_ssim_vals.append(
+                                        flow_ssim.unsqueeze(0)
+                                    )
+                        except Exception:
+                            pass
+
                 # Gather and compute metrics efficiently (refactored approach)
                 velocity_metrics = self._compute_and_gather_metrics(
                     accelerator, batch_velocity_losses, "velocity_loss"
@@ -879,6 +979,14 @@ class ValidationCore:
                     )
                 except Exception:
                     temporal_lpips_metrics = {}
+
+                # Flow-warped SSIM (adjacent-frame): gather if computed
+                try:
+                    flow_warped_ssim_metrics = self._compute_and_gather_metrics(
+                        accelerator, batch_flow_warped_ssim_vals, "flow_warped_ssim"
+                    )
+                except Exception:
+                    flow_warped_ssim_metrics = {}
 
                 # SNR-binned loss and coverage per timestep (quantile bins on gathered per-sample loss)
                 if accelerator.is_main_process and batch_velocity_losses:
@@ -970,6 +1078,8 @@ class ValidationCore:
                         for key, value in temporal_ssim_metrics.items():
                             log_dict[f"val_timesteps/{key}_t{current_timestep}"] = value
                         for key, value in temporal_lpips_metrics.items():
+                            log_dict[f"val_timesteps/{key}_t{current_timestep}"] = value
+                        for key, value in flow_warped_ssim_metrics.items():
                             log_dict[f"val_timesteps/{key}_t{current_timestep}"] = value
 
                         try:

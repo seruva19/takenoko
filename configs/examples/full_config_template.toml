@@ -776,6 +776,18 @@ temporal_lpips_max_items = 2
 # Subsample frames for speed
 temporal_lpips_frame_stride = 2
 
+# Flow-warped SSIM (RAFT)
+enable_flow_warped_ssim = false
+
+# Model for flow-warped SSIM validation (torchvision_raft_small|torchvision_raft_large)
+flow_warped_ssim_model = "torchvision_raft_small"  
+
+# Per-step cap for flow-warped SSIM validation
+flow_warped_ssim_max_items = 2
+
+# Subsample frames for speed
+flow_warped_ssim_frame_stride = 2
+
 # =============================================================================
 # ⚠️ OPTICAL FLOW LOSS SETTINGS
 # =============================================================================

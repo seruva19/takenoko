@@ -541,6 +541,16 @@ def create_args_from_config(
     args.temporal_lpips_max_items = int(config.get("temporal_lpips_max_items", 2))
     args.temporal_lpips_frame_stride = int(config.get("temporal_lpips_frame_stride", 2))
 
+    # Flow-warped SSIM (RAFT via torchvision, optional)
+    args.enable_flow_warped_ssim = bool(config.get("enable_flow_warped_ssim", False))
+    args.flow_warped_ssim_model = str(
+        config.get("flow_warped_ssim_model", "torchvision_raft_small")
+    )
+    args.flow_warped_ssim_max_items = int(config.get("flow_warped_ssim_max_items", 2))
+    args.flow_warped_ssim_frame_stride = int(
+        config.get("flow_warped_ssim_frame_stride", 2)
+    )
+
     # Logging settings
     args.logging_dir = config.get("logging_dir", "logs")
 
