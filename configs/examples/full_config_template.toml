@@ -803,6 +803,24 @@ fvd_clip_len = 16
 # Subsample frames for speed
 fvd_frame_stride = 2
 
+# VMAF (requires ffmpeg with libvmaf installed)
+enable_vmaf = false
+
+# Path to VMAF model (optional, empty = ffmpeg default model)
+vmaf_model_path = ""          
+
+# Per-step cap for VMAF validation
+vmaf_max_items = 1
+
+# Length of each VMAF clip
+vmaf_clip_len = 16
+
+# Subsample frames for speed
+vmaf_frame_stride = 2
+
+# Path to ffmpeg executable
+vmaf_ffmpeg_path = "ffmpeg"
+
 # =============================================================================
 # ⚠️ OPTICAL FLOW LOSS SETTINGS
 # =============================================================================

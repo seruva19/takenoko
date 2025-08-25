@@ -679,10 +679,19 @@ class ValidationCore:
 
                             if not hasattr(self, "_lpips_net"):
                                 net_name = str(getattr(args, "lpips_network", "vgg"))
-                                self._lpips_net = lpips.LPIPS(net=net_name).to(
-                                    accelerator.device
-                                )
+                                # Validate network name
+                                valid_networks = ["alex", "vgg", "squeeze"]
+                                if net_name not in valid_networks:
+                                    logger.warning(f"Invalid LPIPS network '{net_name}', defaulting to 'vgg'")
+                                    net_name = "vgg"
+                                
+                                self._lpips_net = lpips.LPIPS(
+                                    net=net_name, 
+                                    pretrained=True,
+                                    version='0.1'  # Use latest version like reference implementation
+                                ).to(accelerator.device)
                                 self._lpips_net.eval()
+                                logger.info(f"Initialized LPIPS with {net_name} network")
 
                             pred_latents = pred.detach().to(torch.float32)
                             with torch.autocast(
@@ -706,19 +715,40 @@ class ValidationCore:
                             b = min(
                                 pred_frames.shape[0], ref_frames.shape[0], max_items
                             )
-                            if b > 0:
+                            
+                            # Validate frame shapes
+                            if b > 0 and pred_frames.shape == ref_frames.shape:
                                 pf = pred_frames[:b]
                                 rf = ref_frames[:b]
+                                
+                                # Ensure frames have minimum required dimensions for LPIPS
+                                if pf.shape[-1] < 64 or pf.shape[-2] < 64:
+                                    logger.warning(f"LPIPS frames too small: {pf.shape[-2]}x{pf.shape[-1]}, skipping")
+                                    continue
 
-                                def to_lpips_range(x: torch.Tensor) -> torch.Tensor:
-                                    return x.clamp(0, 1) * 2.0 - 1.0
+                                def preprocess_for_lpips(x: torch.Tensor) -> torch.Tensor:
+                                    """Convert frames to LPIPS input format using standard preprocessing.
+                                    
+                                    LPIPS expects inputs in [-1, 1] range, which matches the reference
+                                    implementation's im2tensor function behavior.
+                                    """
+                                    # Ensure input is in [0, 1] range, then convert to [-1, 1]
+                                    x_clamped = x.clamp(0, 1)
+                                    return x_clamped * 2.0 - 1.0
 
                                 lpips_vals = []
-                                for i in range(0, pf.shape[2], max(1, stride)):
-                                    pf_i = to_lpips_range(pf[:, :, i])  # [B,C,H,W]
-                                    rf_i = to_lpips_range(rf[:, :, i])
-                                    val = self._lpips_net(pf_i, rf_i)
-                                    lpips_vals.append(val.squeeze().detach())
+                                # Process frames with better temporal sampling
+                                frame_count = pf.shape[2]
+                                for i in range(0, frame_count, max(1, stride)):
+                                    if i >= frame_count:
+                                        break
+                                    pf_i = preprocess_for_lpips(pf[:, :, i])  # [B,C,H,W]
+                                    rf_i = preprocess_for_lpips(rf[:, :, i])
+                                    
+                                    # Ensure inputs are properly formatted for LPIPS
+                                    with torch.no_grad():
+                                        val = self._lpips_net(pf_i, rf_i)
+                                        lpips_vals.append(val.squeeze().detach())
                                 if lpips_vals:
                                     lpips_tensor = torch.stack(lpips_vals).mean()
                                     # Reuse metrics gatherer
@@ -729,7 +759,12 @@ class ValidationCore:
                                     if "batch_lpips_vals" not in locals():
                                         batch_lpips_vals = []
                                     batch_lpips_vals.append(lpips_tensor.unsqueeze(0))
-                        except Exception:
+                                else:
+                                    logger.warning("No valid LPIPS values computed for this batch")
+                            else:
+                                logger.warning(f"Skipping LPIPS: shape mismatch pred={pred_frames.shape} vs ref={ref_frames.shape}")
+                        except Exception as e:
+                            logger.warning(f"LPIPS computation failed: {e}")
                             pass
 
                     # Temporal SSIM (adjacent-frame): small subsample
@@ -800,9 +835,17 @@ class ValidationCore:
 
                             if not hasattr(self, "_lpips_net"):
                                 net_name = str(getattr(args, "lpips_network", "vgg"))
-                                self._lpips_net = lpips.LPIPS(net=net_name).to(
-                                    accelerator.device
-                                )
+                                # Validate network name
+                                valid_networks = ["alex", "vgg", "squeeze"]
+                                if net_name not in valid_networks:
+                                    logger.warning(f"Invalid LPIPS network '{net_name}', defaulting to 'vgg'")
+                                    net_name = "vgg"
+                                
+                                self._lpips_net = lpips.LPIPS(
+                                    net=net_name,
+                                    pretrained=True,
+                                    version='0.1'
+                                ).to(accelerator.device)
                                 self._lpips_net.eval()
 
                             if "pred_frames" not in locals():
@@ -830,16 +873,29 @@ class ValidationCore:
                             b = min(pred_frames.shape[0], max_items)
                             if b > 0 and pred_frames.shape[2] > 1:
                                 pf = pred_frames[:b]
+                                
+                                # Validate frame dimensions for temporal LPIPS
+                                if pf.shape[-1] < 64 or pf.shape[-2] < 64:
+                                    logger.warning(f"Temporal LPIPS frames too small: {pf.shape[-2]}x{pf.shape[-1]}, skipping")
+                                    continue
 
-                                def to_lpips_range(x: torch.Tensor) -> torch.Tensor:
-                                    return x.clamp(0, 1) * 2.0 - 1.0
+                                def preprocess_for_lpips(x: torch.Tensor) -> torch.Tensor:
+                                    """Convert frames to LPIPS input format using standard preprocessing."""
+                                    # Ensure input is in [0, 1] range, then convert to [-1, 1]
+                                    x_clamped = x.clamp(0, 1)
+                                    return x_clamped * 2.0 - 1.0
 
                                 vals = []
-                                for i in range(0, pf.shape[2] - 1, max(1, stride)):
-                                    f1 = to_lpips_range(pf[:, :, i])
-                                    f2 = to_lpips_range(pf[:, :, i + 1])
-                                    val = self._lpips_net(f1, f2)
-                                    vals.append(val.squeeze().detach())
+                                frame_count = pf.shape[2]
+                                for i in range(0, frame_count - 1, max(1, stride)):
+                                    if i + 1 >= frame_count:
+                                        break
+                                    f1 = preprocess_for_lpips(pf[:, :, i])
+                                    f2 = preprocess_for_lpips(pf[:, :, i + 1])
+                                    
+                                    with torch.no_grad():
+                                        val = self._lpips_net(f1, f2)
+                                        vals.append(val.squeeze().detach())
                                 if vals:
                                     t_lpips = torch.stack(vals).mean()
                                     if "batch_temporal_lpips_vals" not in locals():
@@ -1067,6 +1123,152 @@ class ValidationCore:
                         except Exception:
                             pass
 
+                    # VMAF (via ffmpeg libvmaf). Encode short clips and call ffmpeg; log average.
+                    if (
+                        bool(getattr(args, "enable_vmaf", False))
+                        and vae is not None
+                        and "pixels" in batch
+                    ):
+                        try:
+                            import tempfile, os, subprocess
+
+                            if "pred_frames" not in locals():
+                                pred_latents = pred.detach().to(torch.float32)
+                                with torch.autocast(
+                                    device_type=str(accelerator.device).split(":")[0],
+                                    enabled=False,
+                                ):
+                                    decoded = vae.decode(
+                                        pred_latents
+                                        / getattr(vae, "scaling_factor", 1.0)
+                                    )
+                                    pred_frames = (
+                                        torch.stack(decoded, dim=0)
+                                        if isinstance(decoded, list)
+                                        else decoded
+                                    )
+                            ref_frames = torch.stack(batch["pixels"], dim=0).to(
+                                device=pred_frames.device, dtype=pred_frames.dtype
+                            )
+
+                            max_items = int(getattr(args, "vmaf_max_items", 1))
+                            clip_len = int(getattr(args, "vmaf_clip_len", 16))
+                            stride = int(getattr(args, "vmaf_frame_stride", 2))
+                            ffmpeg_path = str(
+                                getattr(args, "vmaf_ffmpeg_path", "ffmpeg")
+                            )
+                            b = min(
+                                pred_frames.shape[0], ref_frames.shape[0], max_items
+                            )
+                            if b > 0 and pred_frames.shape[2] >= clip_len:
+                                # Write tiny raw videos to temp files and call ffmpeg libvmaf
+                                with tempfile.TemporaryDirectory() as tmpd:
+                                    vlist = []
+                                    for tag, vid in [
+                                        ("pred", pred_frames[:b]),
+                                        ("ref", ref_frames[:b]),
+                                    ]:
+                                        out = os.path.join(tmpd, f"{tag}.mp4")
+                                        # Build frame sequence (T,H,W,C) in [0,255]
+                                        clip = vid[
+                                            0, :, 0 : 0 + clip_len : stride
+                                        ]  # [C,F,H,W]
+                                        clip = (
+                                            (
+                                                clip.permute(1, 2, 3, 0).clamp(0, 1)
+                                                * 255.0
+                                            )
+                                            .byte()
+                                            .cpu()
+                                            .numpy()
+                                        )
+                                        # Write using ffmpeg pipe
+                                        h, w = clip.shape[1], clip.shape[2]
+                                        cmd = [
+                                            ffmpeg_path,
+                                            "-y",
+                                            "-f",
+                                            "rawvideo",
+                                            "-pix_fmt",
+                                            "rgb24",
+                                            "-s",
+                                            f"{w}x{h}",
+                                            "-r",
+                                            "16",
+                                            "-i",
+                                            "-",
+                                            "-an",
+                                            "-vcodec",
+                                            "libx264",
+                                            out,
+                                        ]
+                                        p = subprocess.Popen(
+                                            cmd,
+                                            stdin=subprocess.PIPE,
+                                            stdout=subprocess.PIPE,
+                                            stderr=subprocess.PIPE,
+                                        )
+                                        # Write frames
+                                        for t in range(clip.shape[0]):
+                                            p.stdin.write(clip[t].tobytes())  # type: ignore
+                                        p.stdin.close()  # type: ignore
+                                        p.wait()
+                                        vlist.append(out)
+
+                                    # Run ffmpeg vmaf
+                                    pred_mp4, ref_mp4 = vlist
+                                    vmaf_model = getattr(args, "vmaf_model_path", None)
+                                    model_opt = (
+                                        f"model_path={vmaf_model}" if vmaf_model else ""
+                                    )
+                                    log_path = os.path.join(tmpd, "vmaf.json")
+                                    cmd = [
+                                        ffmpeg_path,
+                                        "-i",
+                                        pred_mp4,
+                                        "-i",
+                                        ref_mp4,
+                                        "-lavfi",
+                                        f"libvmaf={model_opt}:log_fmt=json:log_path={log_path}",
+                                        "-f",
+                                        "null",
+                                        "-",
+                                    ]
+                                    subprocess.run(
+                                        cmd,
+                                        check=False,
+                                        stdout=subprocess.PIPE,
+                                        stderr=subprocess.PIPE,
+                                    )
+                                    # Parse result
+                                    try:
+                                        import json
+
+                                        with open(log_path, "r", encoding="utf-8") as f:
+                                            j = json.load(f)
+                                        # Average VMAF over frames
+                                        frames = j.get("frames", [])
+                                        scores = [
+                                            float(
+                                                fr.get("metrics", {}).get("vmaf", 0.0)
+                                            )
+                                            for fr in frames
+                                        ]
+                                        if scores:
+                                            vmaf_val = torch.tensor(
+                                                sum(scores) / len(scores),
+                                                device=accelerator.device,
+                                            )
+                                            if "batch_vmaf_vals" not in locals():
+                                                batch_vmaf_vals = []
+                                            batch_vmaf_vals.append(
+                                                vmaf_val.unsqueeze(0)
+                                            )
+                                    except Exception:
+                                        pass
+                        except Exception:
+                            pass
+
                 # Gather and compute metrics efficiently (refactored approach)
                 velocity_metrics = self._compute_and_gather_metrics(
                     accelerator, batch_velocity_losses, "velocity_loss"
@@ -1112,6 +1314,14 @@ class ValidationCore:
                     )
                 except Exception:
                     fvd_metrics = {}
+
+                # VMAF (via ffmpeg libvmaf) – gather if computed
+                try:
+                    vmaf_metrics = self._compute_and_gather_metrics(
+                        accelerator, batch_vmaf_vals, "vmaf"
+                    )
+                except Exception:
+                    vmaf_metrics = {}
 
                 # SNR-binned loss and coverage per timestep (quantile bins on gathered per-sample loss)
                 if accelerator.is_main_process and batch_velocity_losses:
@@ -1207,6 +1417,8 @@ class ValidationCore:
                         for key, value in flow_warped_ssim_metrics.items():
                             log_dict[f"val_timesteps/{key}_t{current_timestep}"] = value
                         for key, value in fvd_metrics.items():
+                            log_dict[f"val_timesteps/{key}_t{current_timestep}"] = value
+                        for key, value in vmaf_metrics.items():
                             log_dict[f"val_timesteps/{key}_t{current_timestep}"] = value
 
                         try:

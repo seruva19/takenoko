@@ -558,6 +558,14 @@ def create_args_from_config(
     args.fvd_clip_len = int(config.get("fvd_clip_len", 16))
     args.fvd_frame_stride = int(config.get("fvd_frame_stride", 2))
 
+    # VMAF (requires ffmpeg with libvmaf; optional)
+    args.enable_vmaf = bool(config.get("enable_vmaf", False))
+    args.vmaf_model_path = config.get("vmaf_model_path")  # optional explicit path
+    args.vmaf_max_items = int(config.get("vmaf_max_items", 1))
+    args.vmaf_clip_len = int(config.get("vmaf_clip_len", 16))
+    args.vmaf_frame_stride = int(config.get("vmaf_frame_stride", 2))
+    args.vmaf_ffmpeg_path = config.get("vmaf_ffmpeg_path", "ffmpeg")
+
     # Logging settings
     args.logging_dir = config.get("logging_dir", "logs")
 
