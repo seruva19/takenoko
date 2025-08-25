@@ -138,6 +138,7 @@ def load_safetensors_with_lora_and_fp8(
                 return model_weight
 
             original_device = model_weight.device
+            original_dtype = model_weight.dtype
             if original_device != calc_device:
                 model_weight = model_weight.to(
                     calc_device
@@ -205,8 +206,8 @@ def load_safetensors_with_lora_and_fp8(
                     lora_weight_keys.remove(alpha_key)
 
             model_weight = model_weight.to(
-                original_device
-            )  # move back to original device
+                original_device, original_dtype
+            )  # move back to original device and dtype
             return model_weight
 
         weight_hook = weight_hook_func
