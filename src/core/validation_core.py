@@ -732,6 +732,124 @@ class ValidationCore:
                         except Exception:
                             pass
 
+                    # Temporal SSIM (adjacent-frame): small subsample
+                    if (
+                        bool(getattr(args, "enable_temporal_ssim", False))
+                        and vae is not None
+                        and "pixels" in batch
+                    ):
+                        try:
+                            # Reuse decoded frames if available; else decode now
+                            if "pred_frames" not in locals():
+                                pred_latents = pred.detach().to(torch.float32)
+                                with torch.autocast(
+                                    device_type=str(accelerator.device).split(":")[0],
+                                    enabled=False,
+                                ):
+                                    decoded = vae.decode(
+                                        pred_latents
+                                        / getattr(vae, "scaling_factor", 1.0)
+                                    )
+                                    pred_frames = (
+                                        torch.stack(decoded, dim=0)
+                                        if isinstance(decoded, list)
+                                        else decoded
+                                    )
+                            ref_frames = torch.stack(batch["pixels"], dim=0).to(
+                                device=pred_frames.device, dtype=pred_frames.dtype
+                            )
+
+                            max_items = int(getattr(args, "temporal_ssim_max_items", 2))
+                            stride = int(getattr(args, "temporal_ssim_frame_stride", 1))
+                            b = min(
+                                pred_frames.shape[0], ref_frames.shape[0], max_items
+                            )
+                            if b > 0 and pred_frames.shape[2] > 1:
+                                pf = pred_frames[:b]
+                                # Compute SSIM between consecutive frames per item
+                                eps = 1e-6
+                                t_vals = []
+                                for i in range(0, pf.shape[2] - 1, max(1, stride)):
+                                    # Take luminance-like mean over channels
+                                    f1 = pf[:, :, i].mean(dim=1)  # [B,H,W]
+                                    f2 = pf[:, :, i + 1].mean(dim=1)
+                                    num = (f1 - f2) ** 2
+                                    den = f1**2 + f2**2 + eps
+                                    ssim_approx = 1.0 - (num / den)
+                                    ssim_approx = torch.clamp(ssim_approx, 0.0, 1.0)
+                                    t_vals.append(ssim_approx.mean())
+                                if t_vals:
+                                    temporal_ssim_mean = torch.stack(t_vals).mean()
+                                    # Reuse metrics gatherer
+                                    if "batch_temporal_ssim_vals" not in locals():
+                                        batch_temporal_ssim_vals = []
+                                    batch_temporal_ssim_vals.append(
+                                        temporal_ssim_mean.unsqueeze(0)
+                                    )
+                        except Exception:
+                            pass
+
+                    # Temporal LPIPS (adjacent-frame): small subsample
+                    if (
+                        bool(getattr(args, "enable_temporal_lpips", False))
+                        and vae is not None
+                        and "pixels" in batch
+                    ):
+                        try:
+                            import lpips  # type: ignore
+
+                            if not hasattr(self, "_lpips_net"):
+                                net_name = str(getattr(args, "lpips_network", "vgg"))
+                                self._lpips_net = lpips.LPIPS(net=net_name).to(
+                                    accelerator.device
+                                )
+                                self._lpips_net.eval()
+
+                            if "pred_frames" not in locals():
+                                pred_latents = pred.detach().to(torch.float32)
+                                with torch.autocast(
+                                    device_type=str(accelerator.device).split(":")[0],
+                                    enabled=False,
+                                ):
+                                    decoded = vae.decode(
+                                        pred_latents
+                                        / getattr(vae, "scaling_factor", 1.0)
+                                    )
+                                    pred_frames = (
+                                        torch.stack(decoded, dim=0)
+                                        if isinstance(decoded, list)
+                                        else decoded
+                                    )
+
+                            max_items = int(
+                                getattr(args, "temporal_lpips_max_items", 2)
+                            )
+                            stride = int(
+                                getattr(args, "temporal_lpips_frame_stride", 2)
+                            )
+                            b = min(pred_frames.shape[0], max_items)
+                            if b > 0 and pred_frames.shape[2] > 1:
+                                pf = pred_frames[:b]
+
+                                def to_lpips_range(x: torch.Tensor) -> torch.Tensor:
+                                    return x.clamp(0, 1) * 2.0 - 1.0
+
+                                vals = []
+                                for i in range(0, pf.shape[2] - 1, max(1, stride)):
+                                    f1 = to_lpips_range(pf[:, :, i])
+                                    f2 = to_lpips_range(pf[:, :, i + 1])
+                                    val = self._lpips_net(f1, f2)
+                                    vals.append(val.squeeze().detach())
+                                if vals:
+                                    t_lpips = torch.stack(vals).mean()
+                                    if "batch_temporal_lpips_vals" not in locals():
+                                        batch_temporal_lpips_vals = []
+                                    batch_temporal_lpips_vals.append(
+                                        t_lpips.unsqueeze(0)
+                                    )
+                        except Exception:
+                            pass
+
                 # Gather and compute metrics efficiently (refactored approach)
                 velocity_metrics = self._compute_and_gather_metrics(
                     accelerator, batch_velocity_losses, "velocity_loss"
@@ -746,6 +864,21 @@ class ValidationCore:
                     )
                 except Exception:
                     lpips_metrics = {}
+                # Gather Temporal SSIM if computed
+                try:
+                    temporal_ssim_metrics = self._compute_and_gather_metrics(
+                        accelerator, batch_temporal_ssim_vals, "temporal_ssim"
+                    )
+                except Exception:
+                    temporal_ssim_metrics = {}
+
+                # Temporal LPIPS (adjacent-frame): gather if computed
+                try:
+                    temporal_lpips_metrics = self._compute_and_gather_metrics(
+                        accelerator, batch_temporal_lpips_vals, "temporal_lpips"
+                    )
+                except Exception:
+                    temporal_lpips_metrics = {}
 
                 # SNR-binned loss and coverage per timestep (quantile bins on gathered per-sample loss)
                 if accelerator.is_main_process and batch_velocity_losses:
@@ -833,6 +966,10 @@ class ValidationCore:
                         for key, value in noise_metrics.items():
                             log_dict[f"val_timesteps/{key}_t{current_timestep}"] = value
                         for key, value in lpips_metrics.items():
+                            log_dict[f"val_timesteps/{key}_t{current_timestep}"] = value
+                        for key, value in temporal_ssim_metrics.items():
+                            log_dict[f"val_timesteps/{key}_t{current_timestep}"] = value
+                        for key, value in temporal_lpips_metrics.items():
                             log_dict[f"val_timesteps/{key}_t{current_timestep}"] = value
 
                         try:

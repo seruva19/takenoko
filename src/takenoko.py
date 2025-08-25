@@ -531,6 +531,16 @@ def create_args_from_config(
     args.lpips_network = str(config.get("lpips_network", "vgg"))  # vgg|alex|squeeze
     args.lpips_frame_stride = int(config.get("lpips_frame_stride", 8))
 
+    # Temporal SSIM (adjacent-frame) validation (optional)
+    args.enable_temporal_ssim = bool(config.get("enable_temporal_ssim", False))
+    args.temporal_ssim_max_items = int(config.get("temporal_ssim_max_items", 2))
+    args.temporal_ssim_frame_stride = int(config.get("temporal_ssim_frame_stride", 1))
+
+    # Temporal LPIPS (adjacent-frame) validation (optional)
+    args.enable_temporal_lpips = bool(config.get("enable_temporal_lpips", False))
+    args.temporal_lpips_max_items = int(config.get("temporal_lpips_max_items", 2))
+    args.temporal_lpips_frame_stride = int(config.get("temporal_lpips_frame_stride", 2))
+
     # Logging settings
     args.logging_dir = config.get("logging_dir", "logs")
 

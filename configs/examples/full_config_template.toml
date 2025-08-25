@@ -746,6 +746,15 @@ enable_perceptual_snr = false
 # Max samples per validation step for perceptual SNR
 perceptual_snr_max_items = 4        
 
+# Temporal SSIM (adjacent-frame) validation
+enable_temporal_ssim = false
+
+# Per-step cap for temporal SSIM validation
+temporal_ssim_max_items = 2
+
+# Subsample frames for speed
+temporal_ssim_frame_stride = 1
+
 # LPIPS validation
 enable_lpips = false
 
@@ -757,6 +766,15 @@ lpips_network = "vgg"
 
 # Subsample frames for speed
 lpips_frame_stride = 8         
+
+# Temporal LPIPS (adjacent-frame) validation
+enable_temporal_lpips = false
+
+# Per-step cap for temporal LPIPS validation
+temporal_lpips_max_items = 2
+
+# Subsample frames for speed
+temporal_lpips_frame_stride = 2
 
 # =============================================================================
 # ⚠️ OPTICAL FLOW LOSS SETTINGS
