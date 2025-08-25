@@ -551,6 +551,13 @@ def create_args_from_config(
         config.get("flow_warped_ssim_frame_stride", 2)
     )
 
+    # FVD (Fréchet Video Distance) validation (optional)
+    args.enable_fvd = bool(config.get("enable_fvd", False))
+    args.fvd_model = str(config.get("fvd_model", "torchvision_r3d_18"))
+    args.fvd_max_items = int(config.get("fvd_max_items", 2))
+    args.fvd_clip_len = int(config.get("fvd_clip_len", 16))
+    args.fvd_frame_stride = int(config.get("fvd_frame_stride", 2))
+
     # Logging settings
     args.logging_dir = config.get("logging_dir", "logs")
 

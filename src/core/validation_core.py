@@ -950,6 +950,123 @@ class ValidationCore:
                         except Exception:
                             pass
 
+                    # FVD (Fréchet Video Distance) using a lightweight video backbone
+                    if (
+                        bool(getattr(args, "enable_fvd", False))
+                        and vae is not None
+                        and "pixels" in batch
+                    ):
+                        try:
+                            import torchvision
+
+                            if not hasattr(self, "_fvd_backbone"):
+                                # Simple choice: r3d_18 pretrained on Kinetics; acts as a video feature extractor
+                                self._fvd_backbone = torchvision.models.video.r3d_18(
+                                    weights=torchvision.models.video.R3D_18_Weights.DEFAULT
+                                ).to(accelerator.device)
+                                self._fvd_backbone.eval()
+                                # Strip classifier to get penultimate features
+                                if hasattr(self._fvd_backbone, "fc"):
+                                    self._fvd_backbone.fc = torch.nn.Identity()
+
+                            # Ensure decoded frames
+                            if "pred_frames" not in locals():
+                                pred_latents = pred.detach().to(torch.float32)
+                                with torch.autocast(
+                                    device_type=str(accelerator.device).split(":")[0],
+                                    enabled=False,
+                                ):
+                                    decoded = vae.decode(
+                                        pred_latents
+                                        / getattr(vae, "scaling_factor", 1.0)
+                                    )
+                                    pred_frames = (
+                                        torch.stack(decoded, dim=0)
+                                        if isinstance(decoded, list)
+                                        else decoded
+                                    )
+                            ref_frames = torch.stack(batch["pixels"], dim=0).to(
+                                device=pred_frames.device, dtype=pred_frames.dtype
+                            )
+
+                            max_items = int(getattr(args, "fvd_max_items", 2))
+                            clip_len = int(getattr(args, "fvd_clip_len", 16))
+                            stride = int(getattr(args, "fvd_frame_stride", 2))
+                            b = min(
+                                pred_frames.shape[0], ref_frames.shape[0], max_items
+                            )
+                            if b > 0 and pred_frames.shape[2] >= clip_len:
+                                pf = pred_frames[:b]  # [B,C,F,H,W] in [0,1]
+                                rf = ref_frames[:b]
+
+                                # Build temporal clips (take first window with stride for speed)
+                                def to_backbone(x: torch.Tensor) -> torch.Tensor:
+                                    # torchvision video models expect [B,C,T,H,W] in [0,1], float32
+                                    return x.to(torch.float32)
+
+                                # Slice a single clip per item for a cheap estimate
+                                pf_clip = to_backbone(
+                                    pf[:, :, 0 : 0 + clip_len : stride]
+                                )
+                                rf_clip = to_backbone(
+                                    rf[:, :, 0 : 0 + clip_len : stride]
+                                )
+
+                                with torch.no_grad():
+                                    pf_feat = self._fvd_backbone(pf_clip)
+                                    rf_feat = self._fvd_backbone(rf_clip)
+
+                                # Compute Fréchet distance between feature sets
+                                # Here we do a simple per-batch approximation: mean & cov across batch
+                                def mean_and_cov(
+                                    x: torch.Tensor,
+                                ) -> tuple[torch.Tensor, torch.Tensor]:
+                                    x2 = x.flatten(1)
+                                    mu = x2.mean(dim=0)
+                                    xc = x2 - mu
+                                    # Unbiased covariance can be expensive; use (1/N) for stability
+                                    cov = (xc.T @ xc) / max(x2.size(0), 1)
+                                    return mu, cov
+
+                                mu_p, cov_p = mean_and_cov(pf_feat)
+                                mu_r, cov_r = mean_and_cov(rf_feat)
+
+                                # FID-style distance: ||mu1 - mu2||^2 + Tr(C1 + C2 - 2*(C1*C2)^{1/2})
+                                diff = mu_p - mu_r
+                                diff_term = diff.dot(diff)
+                                # For numerical stability, skip the matrix sqrt and use trace(C1 + C2) - 2*trace_sqrt approx
+                                # We approximate trace_sqrt via eigen decomposition on CPU if small (fallback otherwise)
+                                try:
+                                    # Move small cov to CPU for eig if needed
+                                    C1 = cov_p.detach().cpu()
+                                    C2 = cov_r.detach().cpu()
+                                    import numpy as _np
+
+                                    w1, v1 = _np.linalg.eigh(C1.numpy())
+                                    w2, v2 = _np.linalg.eigh(C2.numpy())
+                                    # crude approx: trace_sqrt(C1*C2) ~ sum(sqrt(w1))*sum(sqrt(w2)) / dim
+                                    trace_sqrt_approx = float(
+                                        _np.sqrt(_np.maximum(w1, 0.0)).sum()
+                                        * _np.sqrt(_np.maximum(w2, 0.0)).sum()
+                                        / max(len(w1), 1)
+                                    )
+                                    cov_term = float(
+                                        C1.trace().item()
+                                        + C2.trace().item()
+                                        - 2.0 * trace_sqrt_approx
+                                    )
+                                except Exception:
+                                    cov_term = float(
+                                        cov_p.trace().item() + cov_r.trace().item()
+                                    )
+
+                                fvd_val = (diff_term + cov_term).to(accelerator.device)
+                                if "batch_fvd_vals" not in locals():
+                                    batch_fvd_vals = []
+                                batch_fvd_vals.append(fvd_val.unsqueeze(0))
+                        except Exception:
+                            pass
+
                 # Gather and compute metrics efficiently (refactored approach)
                 velocity_metrics = self._compute_and_gather_metrics(
                     accelerator, batch_velocity_losses, "velocity_loss"
@@ -987,6 +1104,14 @@ class ValidationCore:
                     )
                 except Exception:
                     flow_warped_ssim_metrics = {}
+
+                # FVD (feature Fréchet distance over short clips)
+                try:
+                    fvd_metrics = self._compute_and_gather_metrics(
+                        accelerator, batch_fvd_vals, "fvd"
+                    )
+                except Exception:
+                    fvd_metrics = {}
 
                 # SNR-binned loss and coverage per timestep (quantile bins on gathered per-sample loss)
                 if accelerator.is_main_process and batch_velocity_losses:
@@ -1080,6 +1205,8 @@ class ValidationCore:
                         for key, value in temporal_lpips_metrics.items():
                             log_dict[f"val_timesteps/{key}_t{current_timestep}"] = value
                         for key, value in flow_warped_ssim_metrics.items():
+                            log_dict[f"val_timesteps/{key}_t{current_timestep}"] = value
+                        for key, value in fvd_metrics.items():
                             log_dict[f"val_timesteps/{key}_t{current_timestep}"] = value
 
                         try:

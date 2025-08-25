@@ -788,6 +788,21 @@ flow_warped_ssim_max_items = 2
 # Subsample frames for speed
 flow_warped_ssim_frame_stride = 2
 
+# FVD (Fréchet Video Distance)
+enable_fvd = false
+
+# Model for FVD validation (torchvision_r3d_18|torchvision_i3d_r50|torchvision_i3d_r101)
+fvd_model = "torchvision_r3d_18"
+
+# Per-step cap for FVD validation
+fvd_max_items = 2
+
+# Length of each FVD clip
+fvd_clip_len = 16
+
+# Subsample frames for speed
+fvd_frame_stride = 2
+
 # =============================================================================
 # ⚠️ OPTICAL FLOW LOSS SETTINGS
 # =============================================================================
