@@ -111,18 +111,124 @@ def estimate_peak_vram_gb_from_config(
     lat_w = max(1, width // vae_stride_w)
     tokens_per_sample = (frames * lat_h * lat_w) // (patch_t * patch_h * patch_w)
 
+    # -------------------------------------------------------------
+    # TREAD-aware activation scaling (token routing reduces L)
+    # -------------------------------------------------------------
+    # Default to model's configured number of layers for activation estimate
+    num_layers_model = int(config.get("dit_num_layers", num_layers))
+
+    tread_enabled = bool(config.get("enable_tread", False))
+    tread_mode = str(config.get("tread_mode", "full"))
+
+    # Per-layer keep ratio (1.0 = keep all tokens). Initialize to 1.0
+    keep_per_layer = [1.0] * max(1, num_layers_model)
+    tread_routes_count = 0
+
+    def _norm_idx(idx: int, total: int) -> int:
+        try:
+            i = int(idx)
+        except Exception:
+            i = 0
+        if i < 0:
+            i = total + i
+        if i < 0:
+            i = 0
+        if i >= total:
+            i = total - 1
+        return i
+
+    def _parse_route_kv_string(s: str) -> Dict[str, Any]:
+        route: Dict[str, Any] = {}
+        for part in str(s).split(";"):
+            part = part.strip()
+            if not part or "=" not in part:
+                continue
+            k, v = [t.strip() for t in part.split("=", 1)]
+            try:
+                if v.lower() == "true":
+                    route[k] = True
+                elif v.lower() == "false":
+                    route[k] = False
+                elif v.startswith("-") and v[1:].isdigit() or v.isdigit():
+                    route[k] = int(v)
+                else:
+                    route[k] = float(v)
+            except Exception:
+                route[k] = v
+        return route
+
+    if tread_enabled:
+        routes: List[Dict[str, Any]] = []
+        # Native TOML table form: tread_config.routes = [ {...}, ... ]
+        tc = config.get("tread_config")
+        if isinstance(tc, dict):
+            raw_routes = tc.get("routes", [])
+            if isinstance(raw_routes, list):
+                for r in raw_routes:
+                    if isinstance(r, dict):
+                        routes.append(dict(r))
+        # Simplified frame-based block: tread = { start_layer, end_layer, keep_ratio }
+        t_simple = config.get("tread")
+        if isinstance(t_simple, dict):
+            try:
+                start_layer = int(t_simple.get("start_layer", 0))
+                end_layer = int(t_simple.get("end_layer", num_layers_model - 1))
+                keep_ratio = float(t_simple.get("keep_ratio", 1.0))
+                selection_ratio = max(0.0, min(1.0, 1.0 - keep_ratio))
+                routes.append(
+                    {
+                        "selection_ratio": selection_ratio,
+                        "start_layer_idx": start_layer,
+                        "end_layer_idx": end_layer,
+                    }
+                )
+            except Exception:
+                pass
+        # Shorthand routes: top-level keys like tread_config_route1 = "selection_ratio=...; start_layer_idx=...; end_layer_idx=..."
+        for key, val in list(config.items()):
+            if isinstance(key, str) and key.lower().startswith("tread_config_route"):
+                if isinstance(val, str):
+                    r = _parse_route_kv_string(val)
+                    if r:
+                        routes.append(r)
+
+        # Apply routes to per-layer keep ratios
+        if routes:
+            tread_routes_count = len(routes)
+            total = max(1, num_layers_model)
+            for r in routes:
+                try:
+                    sel = float(r.get("selection_ratio", 0.0))
+                except Exception:
+                    sel = 0.0
+                sel = max(0.0, min(1.0, sel))
+                keep_ratio = max(0.0, min(1.0, 1.0 - sel))
+
+                s = _norm_idx(r.get("start_layer_idx", 0), total)
+                e = _norm_idx(r.get("end_layer_idx", total - 1), total)
+                if e < s:
+                    s, e = e, s
+                for li in range(s, e + 1):
+                    # Use min to avoid overestimating reduction if multiple routes overlap
+                    keep_per_layer[li] = min(keep_per_layer[li], keep_ratio)
+
+    # Average keep ratio across layers (1.0 = no reduction)
+    tread_avg_keep_ratio = sum(keep_per_layer) / float(max(1, len(keep_per_layer)))
+
     # Activation memory dominates under flash attention (linear in L)
     k_attn = 4.0
     k_ffn = 2.0
     per_token_per_layer = k_attn * dim + k_ffn * ffn_dim
-    activations_bytes = (
+    # Base activation bytes across all layers, then scale by TREAD average keep ratio
+    activations_bytes_base = (
         batch_size
         * tokens_per_sample
         * per_token_per_layer
-        * num_layers
+        * max(1, num_layers_model)
         * bytes_per
         * chk_factor
     )
+    activations_bytes = int(activations_bytes_base * float(tread_avg_keep_ratio))
 
     # Latents (BCFHW) and a noisy copy
     cin = 16 * (2 if enable_control_lora else 1)
@@ -207,5 +313,10 @@ def estimate_peak_vram_gb_from_config(
         "model_gb": model_bytes / (1024**3),
         "model_base_gb_per_model": base_model_bytes / (1024**3),
         "model_dual_factor": dual_factor,
+        # TREAD details
+        "tread_enabled": tread_enabled,
+        "tread_mode": tread_mode,
+        "tread_avg_keep_ratio": tread_avg_keep_ratio,
+        "tread_routes": tread_routes_count,
     }
     return gb, details

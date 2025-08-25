@@ -79,6 +79,8 @@ from common.performance_logger import (
     get_hardware_metrics,
     log_performance_summary,
     configure_verbosity,
+    get_last_train_iter_ms,
+    get_last_total_step_ms,
 )
 
 import logging
@@ -124,6 +126,9 @@ class TrainingCore:
 
         # Centralized loss computation
         self.loss_computer = TrainingLossComputer(self.config)
+
+        # Toggle for alternating progress postfix (iter_ms vs peak VRAM)
+        self._perf_display_toggle: bool = False
 
     def set_ema_beta(self, beta: float) -> None:
         """Set the EMA smoothing factor. Higher values (closer to 1.0) = more smoothing."""
@@ -1364,9 +1369,28 @@ class TrainingCore:
                             total_steps_in_epoch,
                         )
 
-                        # Add hardware metrics to progress bar
-                        hardware_metrics = get_hardware_metrics()
-                        enhanced_logs.update(hardware_metrics)
+                        # Alternate between last iteration ms and peak VRAM/util
+                        try:
+                            # Use full last step duration (incl. data loading)
+                            total_ms = get_last_total_step_ms()
+                            if total_ms > 0:
+                                enhanced_logs["step_ms"] = f"{total_ms:.1f}"
+
+                            if getattr(args, "alternate_perf_postfix", True):
+                                # Alternate between timing and hardware each step
+                                self._perf_display_toggle = (
+                                    not self._perf_display_toggle
+                                )
+                                if not self._perf_display_toggle:
+                                    hardware_metrics = get_hardware_metrics()
+                                    enhanced_logs.update(hardware_metrics)
+                            else:
+                                # Show both timing and hardware every step
+                                hardware_metrics = get_hardware_metrics()
+                                enhanced_logs.update(hardware_metrics)
+                        except Exception:
+                            pass
+
                         progress_bar.set_postfix(enhanced_logs)
                     except Exception:
                         # Fallback to original simple display if enhanced metrics fail

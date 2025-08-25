@@ -605,6 +605,8 @@ def create_args_from_config(
     # Throughput metrics logging settings
     args.log_throughput_metrics = config.get("log_throughput_metrics", True)
     args.throughput_window_size = config.get("throughput_window_size", 100)
+    # Progress postfix alternation settings
+    args.alternate_perf_postfix = config.get("alternate_perf_postfix", True)
 
     # TensorBoard server settings
     args.launch_tensorboard_server = config.get("launch_tensorboard_server", False)
@@ -1879,6 +1881,18 @@ class UnifiedTrainer:
                             details["overhead_gb"],
                         )
                     )
+                    # Optional TREAD summary
+                    try:
+                        if details.get("tread_enabled", False):
+                            logger.info(
+                                "   TREAD: enabled (mode='{}', routes={}, avg_keep_ratio={:.2f})".format(
+                                    details.get("tread_mode", "full"),
+                                    details.get("tread_routes", 0),
+                                    float(details.get("tread_avg_keep_ratio", 1.0)),
+                                )
+                            )
+                    except Exception:
+                        pass
                 except Exception as e:
                     logger.exception(f"❌ Error estimating VRAM usage: {e}")
                 input("Press Enter to continue...")

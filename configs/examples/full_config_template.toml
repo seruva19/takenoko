@@ -980,6 +980,11 @@ log_throughput_metrics = true
 # Window size for throughput calculation (number of recent steps to average)
 throughput_window_size = 100
 
+# Progress bar postfix metrics mode:
+# true  - alternate each step between showing timing (step_ms) and hardware metrics (peak/util)
+# false - show both timing and hardware metrics every step
+alternate_perf_postfix = true
+
 # Diagnostic attention metrics, if enabled, compute lightweight cross-attention statistics (entropy, top-k mass, token focus)
 # at a configurable interval and for a small number of layers to limit overhead.
 # They DO NOT store attention maps; only scalars are logged.

@@ -49,6 +49,7 @@ class PerformanceLogger:
         self.backward_pass_end_time = None
         self.optimizer_step_start_time = None
         self.optimizer_step_end_time = None
+        self.last_metrics: Dict[str, float] = {}
 
     def start_step_timing(self) -> None:
         """Start timing for the current training step."""
@@ -82,8 +83,15 @@ class PerformanceLogger:
         self.optimizer_step_end_time = time.perf_counter()
 
     def end_step_timing(self) -> None:
-        """End timing for the current training step."""
+        """End timing for the current training step.
+
+        Stores a snapshot of timing metrics for access in the next step.
+        """
         self.loop_end_time = time.perf_counter()
+        try:
+            self.last_metrics = self.get_timing_metrics() or {}
+        except Exception:
+            self.last_metrics = {}
 
     def get_timing_metrics(self) -> Dict[str, float]:
         """Get timing metrics for the current step.
@@ -125,10 +133,43 @@ class PerformanceLogger:
             step_total_time = self.loop_end_time - self.step_start_time  # type: ignore
             timings["timing/total_step_ms"] = step_total_time * 1000
 
+            # Actual train iteration time (excludes validation/sampling overhead):
+            # forward + backward + optimizer
+            try:
+                last_train_iter_ms = (
+                    timings["timing/forward_pass_ms"]
+                    + timings["timing/backward_pass_ms"]
+                    + timings["timing/optimizer_step_ms"]
+                )
+                timings["timing/last_train_iter_ms"] = last_train_iter_ms
+            except Exception:
+                pass
+
             return timings
         except Exception as e:
             logger.debug(f"Failed to calculate timing metrics: {e}")
             return {}
+
+    def get_last_train_iter_ms(self) -> float:
+        """Return the last measured training-iteration duration in milliseconds.
+
+        This is computed as forward+backward+optimizer of the previous completed step.
+        """
+        try:
+            if self.last_metrics and "timing/last_train_iter_ms" in self.last_metrics:
+                return float(self.last_metrics["timing/last_train_iter_ms"])
+        except Exception:
+            pass
+        return 0.0
+
+    def get_last_total_step_ms(self) -> float:
+        """Return the last completed step total wall time in milliseconds."""
+        try:
+            if self.last_metrics and "timing/total_step_ms" in self.last_metrics:
+                return float(self.last_metrics["timing/total_step_ms"])
+        except Exception:
+            pass
+        return 0.0
 
     def get_model_statistics(
         self,
@@ -676,6 +717,16 @@ def end_step_timing() -> None:
 def get_timing_metrics() -> Dict[str, float]:
     """Get timing metrics for the current step."""
     return performance_logger.get_timing_metrics()
+
+
+def get_last_train_iter_ms() -> float:
+    """Get last measured training-iteration duration (ms)."""
+    return performance_logger.get_last_train_iter_ms()
+
+
+def get_last_total_step_ms() -> float:
+    """Get last completed step total duration (ms)."""
+    return performance_logger.get_last_total_step_ms()
 
 
 def configure_verbosity(verbosity: VerbosityLevel) -> None:
