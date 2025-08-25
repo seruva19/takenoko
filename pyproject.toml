@@ -16,6 +16,7 @@ dependencies = [
   "ftfy==6.3.1",
   "hpsv2==1.2.0",
   "huggingface-hub==0.30.0",
+  "lpips>=0.1.4",
   "lycoris-lora>=3.2.0.post2",
   "matplotlib>=3.10.0",
   "mmcv==1.7.2",
@@ -46,7 +47,8 @@ dependencies = [
   "torchvision>=0.21.0,<0.22.0",
   "tqdm==4.67.1",
   "transformers==4.46.3",
-  "voluptuous==0.15.2",
+  "voluptuous==0.15.2"
+
 ]
 
 [project.optional-dependencies]

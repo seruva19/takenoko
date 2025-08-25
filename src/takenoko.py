@@ -151,9 +151,12 @@ def create_args_from_config(
     # TREAD configuration (optional)
     # 1) Native TOML tables: tread_config.routes = [ {selection_ratio=..., start_layer_idx=..., end_layer_idx=...}, ... ]
     # 2) Shorthand strings: tread_config_route1 = "selection_ratio=0.2; start_layer_idx=2; end_layer_idx=-2"
+    # 3) Simplified frame-based block: tread = { start_layer=2, end_layer=28, keep_ratio=0.5 }
     # Enable flag gates activation
     args.enable_tread = config.get("enable_tread", False)
-    args.tread_mode = config.get("tread_mode", "full")  # "full" or "ffn"
+    args.tread_mode = config.get(
+        "tread_mode", "full"
+    )  # "full" | "frame_contiguous" | "frame_stride"
 
     def _parse_route_kv_string(s: str) -> Dict[str, Any]:
         route: Dict[str, Any] = {}
@@ -182,6 +185,24 @@ def create_args_from_config(
     # Collect from native TOML if present
     if isinstance(config.get("tread_config"), dict):
         routes.extend(config["tread_config"].get("routes", []) or [])
+    # Collect from simplified 'tread' block if present (maps to one route)
+    if isinstance(config.get("tread"), dict):
+        _t = config["tread"]
+        try:
+            start_layer = int(_t.get("start_layer", -1))
+            end_layer = int(_t.get("end_layer", -1))
+            keep_ratio = float(_t.get("keep_ratio", 1.0))
+            # Convert frame keep_ratio to token drop selection_ratio used by router path
+            selection_ratio = max(0.0, min(1.0, 1.0 - keep_ratio))
+            routes.append(
+                {
+                    "selection_ratio": selection_ratio,
+                    "start_layer_idx": start_layer,
+                    "end_layer_idx": end_layer,
+                }
+            )
+        except Exception:
+            pass
     # Collect shorthand: any top-level key like tread_config_routeX
     for key, val in list(config.items()):
         if isinstance(key, str) and key.lower().startswith("tread_config_route"):
@@ -193,6 +214,11 @@ def create_args_from_config(
     args.tread_config = (
         {"routes": routes} if args.enable_tread and len(routes) > 0 else None
     )
+
+    # Wan model gated features (RoPE/time embedding/safety)
+    args.rope_on_the_fly = bool(config.get("rope_on_the_fly", False))
+    args.broadcast_time_embed = bool(config.get("broadcast_time_embed", False))
+    args.strict_e_slicing_checks = bool(config.get("strict_e_slicing_checks", False))
 
     # Dataset config - set to the same as config file since it's included in main config
     args.dataset_config = config_path
@@ -498,6 +524,12 @@ def create_args_from_config(
     # SNR / perceptual validation toggles
     args.enable_perceptual_snr = config.get("enable_perceptual_snr", False)
     args.perceptual_snr_max_items = config.get("perceptual_snr_max_items", 4)
+
+    # LPIPS validation (optional)
+    args.enable_lpips = bool(config.get("enable_lpips", False))
+    args.lpips_max_items = int(config.get("lpips_max_items", 2))
+    args.lpips_network = str(config.get("lpips_network", "vgg"))  # vgg|alex|squeeze
+    args.lpips_frame_stride = int(config.get("lpips_frame_stride", 8))
 
     # Logging settings
     args.logging_dir = config.get("logging_dir", "logs")

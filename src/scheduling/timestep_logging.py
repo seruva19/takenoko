@@ -110,16 +110,40 @@ def log_initial_timestep_distribution(accelerator, args, timestep_distribution) 
     if dist is None:
         # Simulate by sampling many timesteps via the configured sampler
         try:
-            from scheduling.timestep_utils import (
-                _generate_timesteps_from_distribution,
-                _apply_timestep_constraints,
-            )
-
+            method = str(getattr(args, "timestep_sampling", "")).lower()
             samples = int(getattr(args, "log_timestep_distribution_samples", 20000))
-            device = accelerator.device
-            t = _generate_timesteps_from_distribution(args, samples, device)
-            t = _apply_timestep_constraints(t, args, samples, device)
-            dist = t
+            if method == "sigma":
+                # Mirror sigma-path sampling used in training
+                from utils.train_utils import compute_density_for_timestep_sampling
+                import torch as _torch
+
+                _wm = str(getattr(args, "weighting_scheme", "none"))
+                _lm = float(getattr(args, "logit_mean", 0.0) or 0.0)
+                _ls = float(getattr(args, "logit_std", 1.0) or 1.0)
+                _ms = float(getattr(args, "mode_scale", 1.29) or 1.29)
+                u = compute_density_for_timestep_sampling(
+                    weighting_scheme=_wm,
+                    batch_size=samples,
+                    logit_mean=_lm,
+                    logit_std=_ls,
+                    mode_scale=_ms,
+                )
+                t_min = int(getattr(args, "min_timestep", 0) or 0)
+                t_max = int(getattr(args, "max_timestep", 1000) or 1000)
+                indices = (u * (t_max - t_min) + t_min).long()
+                # Convert to normalized [0,1] like the non-sigma path
+                t = (indices.to(dtype=_torch.float32) + 1.0) / 1000.0
+                dist = t
+            else:
+                from scheduling.timestep_utils import (
+                    _generate_timesteps_from_distribution,
+                    _apply_timestep_constraints,
+                )
+
+                device = accelerator.device
+                t = _generate_timesteps_from_distribution(args, samples, device)
+                t = _apply_timestep_constraints(t, args, samples, device)
+                dist = t
         except Exception:
             return
 
@@ -595,7 +619,28 @@ def log_show_timesteps_figure_unconditional(
             ):
                 t = timestep_distribution.sample(samples, _device)
             else:
-                t = _generate_timesteps_from_distribution(args, samples, _device)
+                method = str(getattr(args, "timestep_sampling", "")).lower()
+                if method == "sigma":
+                    from utils.train_utils import compute_density_for_timestep_sampling
+                    import torch as _torch
+
+                    _wm = str(getattr(args, "weighting_scheme", "none"))
+                    _lm = float(getattr(args, "logit_mean", 0.0) or 0.0)
+                    _ls = float(getattr(args, "logit_std", 1.0) or 1.0)
+                    _ms = float(getattr(args, "mode_scale", 1.29) or 1.29)
+                    u = compute_density_for_timestep_sampling(
+                        weighting_scheme=_wm,
+                        batch_size=samples,
+                        logit_mean=_lm,
+                        logit_std=_ls,
+                        mode_scale=_ms,
+                    )
+                    t_min = int(getattr(args, "min_timestep", 0) or 0)
+                    t_max = int(getattr(args, "max_timestep", 1000) or 1000)
+                    indices = (u * (t_max - t_min) + t_min).long()
+                    t = (indices.to(dtype=_torch.float32) + 1.0) / 1000.0
+                else:
+                    t = _generate_timesteps_from_distribution(args, samples, _device)
 
             # Apply the same constraint utility used in training (respects skip flag)
             t = _apply_timestep_constraints(t, args, samples, _device)

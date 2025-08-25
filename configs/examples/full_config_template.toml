@@ -104,6 +104,14 @@ mixed_precision = "fp16"
 # Weight for regularization loss (1.0 = normal, higher = stronger regularization)
 prior_loss_weight = 1.0
 
+# Compute RoPE multipliers on-the-fly instead of using
+# cached per-(F,H,W) precomputation. Off by default for speed.
+rope_on_the_fly = false
+
+# Use broadcasted per-sample time embedding for Wan 2.2/FVDM (L=1 per sample),
+# instead of per-token embeddings. Off by default for maximal expressiveness.
+broadcast_time_embed = false
+
 # =============================================================================
 # OPTIMIZER SETTINGS
 # =============================================================================
@@ -738,6 +746,18 @@ enable_perceptual_snr = false
 # Max samples per validation step for perceptual SNR
 perceptual_snr_max_items = 4        
 
+# LPIPS validation
+enable_lpips = false
+
+# Per-step cap for LPIPS validation
+lpips_max_items = 2            
+
+# Network for LPIPS validation (vgg|alex|squeeze)
+lpips_network = "vgg"          
+
+# Subsample frames for speed
+lpips_frame_stride = 8         
+
 # =============================================================================
 # ⚠️ OPTICAL FLOW LOSS SETTINGS
 # =============================================================================
@@ -749,13 +769,15 @@ enable_optical_flow_loss = false
 lambda_optical_flow = 0.01
 
 # =============================================================================
-# ⚠️ TREAD SETTINGS
+# TREAD SETTINGS
 # =============================================================================
 
 # Enable TREAD routing for training
 enable_tread = false
 
-# TREAD mode: "full" or "ffn"
+# TREAD mode: "full", "frame_contiguous", "frame_stride"
+# 'full' is used with tread_config_route parameters
+# 'frame_contiguous'/'frame_stride' are used with 'tread' parameter
 tread_mode = "full"
 
 # Each route is a semicolon-separated string of key=value pairs. Keys: selection_ratio (0-1), start_layer_idx, end_layer_idx (negative allowed)
@@ -765,6 +787,15 @@ tread_config_route1 = "selection_ratio=0.1; start_layer_idx=2; end_layer_idx=-2"
 # tread_config_route4 = "selection_ratio=0.35; start_layer_idx=12; end_layer_idx=15"
 # tread_config_route5 = "selection_ratio=0.25; start_layer_idx=16; end_layer_idx=23"
 # tread_config_route6 = "selection_ratio=0.1; start_layer_idx=24; end_layer_idx=-2"
+
+# Simplified frame routing block:
+# Use tread_mode to select contiguous vs stride
+# keep_ratio: fraction of frames to keep within the routed band
+# tread = { start_layer = 2, end_layer = 36, keep_ratio = 0.6 }
+
+# Enable strict sanity checks when slicing per-token time projections during
+# frame-based routing (verifies index bounds, shapes, and dtypes). Off by default.
+strict_e_slicing_checks = false
 
 # =============================================================================
 # OUTPUT SETTINGS

@@ -557,7 +557,10 @@ class WanNetworkTrainer:
                         )
                     except Exception:
                         pass
-                    logger.info("TREAD routing enabled with %d route(s)", len(routes))
+
+                    logger.info(
+                        "🛣️  TREAD routing enabled with %d route(s)", len(routes)
+                    )
                 except Exception as e:
                     logger.warning(f"Failed to enable TREAD routing: {e}")
             else:

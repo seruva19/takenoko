@@ -668,6 +668,70 @@ class ValidationCore:
                         except Exception:
                             pass
 
+                    # LPIPS (optional): small subsample for speed
+                    if (
+                        bool(getattr(args, "enable_lpips", False))
+                        and vae is not None
+                        and "pixels" in batch
+                    ):
+                        try:
+                            import lpips  # type: ignore
+
+                            if not hasattr(self, "_lpips_net"):
+                                net_name = str(getattr(args, "lpips_network", "vgg"))
+                                self._lpips_net = lpips.LPIPS(net=net_name).to(
+                                    accelerator.device
+                                )
+                                self._lpips_net.eval()
+
+                            pred_latents = pred.detach().to(torch.float32)
+                            with torch.autocast(
+                                device_type=str(accelerator.device).split(":")[0],
+                                enabled=False,
+                            ):
+                                decoded = vae.decode(
+                                    pred_latents / getattr(vae, "scaling_factor", 1.0)
+                                )
+                                pred_frames = (
+                                    torch.stack(decoded, dim=0)
+                                    if isinstance(decoded, list)
+                                    else decoded
+                                )
+                            ref_frames = torch.stack(batch["pixels"], dim=0).to(
+                                device=pred_frames.device, dtype=pred_frames.dtype
+                            )
+
+                            max_items = int(getattr(args, "lpips_max_items", 2))
+                            stride = int(getattr(args, "lpips_frame_stride", 8))
+                            b = min(
+                                pred_frames.shape[0], ref_frames.shape[0], max_items
+                            )
+                            if b > 0:
+                                pf = pred_frames[:b]
+                                rf = ref_frames[:b]
+
+                                def to_lpips_range(x: torch.Tensor) -> torch.Tensor:
+                                    return x.clamp(0, 1) * 2.0 - 1.0
+
+                                lpips_vals = []
+                                for i in range(0, pf.shape[2], max(1, stride)):
+                                    pf_i = to_lpips_range(pf[:, :, i])  # [B,C,H,W]
+                                    rf_i = to_lpips_range(rf[:, :, i])
+                                    val = self._lpips_net(pf_i, rf_i)
+                                    lpips_vals.append(val.squeeze().detach())
+                                if lpips_vals:
+                                    lpips_tensor = torch.stack(lpips_vals).mean()
+                                    # Reuse metrics gatherer
+                                    batch_direct_noise_losses.append(
+                                        torch.zeros_like(lpips_tensor)
+                                    )  # alignment no-op
+                                    # Store LPIPS in a separate list; gather later
+                                    if "batch_lpips_vals" not in locals():
+                                        batch_lpips_vals = []
+                                    batch_lpips_vals.append(lpips_tensor.unsqueeze(0))
+                        except Exception:
+                            pass
+
                 # Gather and compute metrics efficiently (refactored approach)
                 velocity_metrics = self._compute_and_gather_metrics(
                     accelerator, batch_velocity_losses, "velocity_loss"
@@ -675,6 +739,13 @@ class ValidationCore:
                 noise_metrics = self._compute_and_gather_metrics(
                     accelerator, batch_direct_noise_losses, "direct_noise_loss"
                 )
+                # Gather LPIPS if computed in this step
+                try:
+                    lpips_metrics = self._compute_and_gather_metrics(
+                        accelerator, batch_lpips_vals, "lpips"
+                    )
+                except Exception:
+                    lpips_metrics = {}
 
                 # SNR-binned loss and coverage per timestep (quantile bins on gathered per-sample loss)
                 if accelerator.is_main_process and batch_velocity_losses:
@@ -760,6 +831,8 @@ class ValidationCore:
                         for key, value in velocity_metrics.items():
                             log_dict[f"val_timesteps/{key}_t{current_timestep}"] = value
                         for key, value in noise_metrics.items():
+                            log_dict[f"val_timesteps/{key}_t{current_timestep}"] = value
+                        for key, value in lpips_metrics.items():
                             log_dict[f"val_timesteps/{key}_t{current_timestep}"] = value
 
                         try:
