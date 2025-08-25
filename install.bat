@@ -63,6 +63,9 @@ echo Checking for existing virtual environment...
 if exist ".venv" (
     echo Virtual environment already exists at .venv
     echo.
+    echo NOTE: Choosing 'N' will use the existing environment and verify installation.
+    echo If you do not want to reinstall or make changes at all, close this window now.
+    echo.
     echo Do you want to recreate it? ^(y/N^)
     set /p recreate_venv=
     if /i "!recreate_venv!"=="y" (

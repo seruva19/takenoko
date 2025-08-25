@@ -1233,6 +1233,41 @@ class TrainingCore:
                                 global_step,
                             )
 
+                            # Determine if validation metrics require a VAE and lazily load if needed
+                            requires_vae_for_val = any(
+                                [
+                                    bool(getattr(args, "enable_perceptual_snr", False)),
+                                    bool(getattr(args, "enable_temporal_ssim", False)),
+                                    bool(getattr(args, "enable_temporal_lpips", False)),
+                                    bool(
+                                        getattr(args, "enable_flow_warped_ssim", False)
+                                    ),
+                                    bool(getattr(args, "enable_fvd", False)),
+                                    bool(getattr(args, "enable_vmaf", False)),
+                                ]
+                            )
+                            temp_val_vae = None
+                            val_vae_to_use = vae
+                            if val_vae_to_use is None and requires_vae_for_val:
+                                try:
+                                    if sampling_manager is not None:
+                                        if accelerator.is_main_process:
+                                            logger.info(
+                                                "🔄 Loading VAE temporarily for validation metrics..."
+                                            )
+                                        temp_val_vae = sampling_manager._load_vae_lazy()  # type: ignore[attr-defined]
+                                        val_vae_to_use = temp_val_vae
+                                    else:
+                                        if accelerator.is_main_process:
+                                            logger.warning(
+                                                "Validation metrics requiring a VAE are enabled but no SamplingManager is available to lazy-load one. Metrics may be skipped."
+                                            )
+                                except Exception as e:
+                                    if accelerator.is_main_process:
+                                        logger.warning(
+                                            f"Failed to load VAE for validation metrics: {e}"
+                                        )
+
                             val_loss = self.validation_core.validate(
                                 accelerator,
                                 transformer,
@@ -1240,12 +1275,30 @@ class TrainingCore:
                                 noise_scheduler,
                                 args,
                                 control_signal_processor,
-                                vae,
+                                val_vae_to_use,
                                 global_step,
                             )
                             self.validation_core.log_validation_results(
                                 accelerator, val_loss, global_step
                             )
+
+                            # Unload temporary VAE if it was loaded for validation
+                            if (
+                                temp_val_vae is not None
+                                and sampling_manager is not None
+                            ):
+                                try:
+                                    sampling_manager._unload_vae(temp_val_vae)  # type: ignore[attr-defined]
+                                    if accelerator.is_main_process:
+                                        logger.info(
+                                            "🧹 Unloaded temporary VAE after validation"
+                                        )
+                                except Exception as e:
+                                    if accelerator.is_main_process:
+                                        logger.debug(
+                                            f"Failed to unload temporary VAE after validation: {e}"
+                                        )
+
                             # Track that validation occurred at this step
                             last_validated_step = global_step
 
