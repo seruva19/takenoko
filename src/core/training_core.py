@@ -1371,9 +1371,13 @@ class TrainingCore:
 
                         # Alternate between last iteration ms and peak VRAM/util
                         try:
-                            # Use full last step duration (incl. data loading)
+                            # Prefer actual train iteration time (fwd+bwd+opt),
+                            # fallback to total step ms if iter time not available
+                            iter_ms = get_last_train_iter_ms()
+                            if iter_ms > 0:
+                                enhanced_logs["iter_ms"] = f"{iter_ms:.1f}"
                             total_ms = get_last_total_step_ms()
-                            if total_ms > 0:
+                            if total_ms > 0 and "iter_ms" not in enhanced_logs:
                                 enhanced_logs["step_ms"] = f"{total_ms:.1f}"
 
                             if getattr(args, "alternate_perf_postfix", True):

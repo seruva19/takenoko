@@ -97,53 +97,45 @@ class PerformanceLogger:
         """Get timing metrics for the current step.
 
         Returns:
-            Dict containing timing metrics in milliseconds
+            Dict containing timing metrics in milliseconds. Computes whatever
+            segments are available so it still works during gradient accumulation
+            steps where no optimizer step occurs.
         """
-        if not all(
-            [
-                self.step_start_time,
-                self.forward_pass_start_time,
-                self.forward_pass_end_time,
-                self.backward_pass_start_time,
-                self.backward_pass_end_time,
-                self.optimizer_step_start_time,
-                self.optimizer_step_end_time,
-                self.loop_end_time,
-            ]
-        ):
+        # Require at least a started step and loop end to report a total
+        if not self.step_start_time or not self.loop_end_time:
             return {}
 
         try:
-            timings = {
-                "timing/data_loading_ms": self.data_loading_time * 1000,
-                "timing/forward_pass_ms": (
-                    self.forward_pass_end_time - self.forward_pass_start_time
-                )  # type: ignore
-                * 1000,
-                "timing/backward_pass_ms": (
-                    self.backward_pass_end_time - self.backward_pass_start_time
-                )  # type: ignore
-                * 1000,
-                "timing/optimizer_step_ms": (
-                    self.optimizer_step_end_time - self.optimizer_step_start_time
-                )  # type: ignore
-                * 1000,
+            timings: Dict[str, float] = {
+                "timing/total_step_ms": (self.loop_end_time - self.step_start_time) * 1000,  # type: ignore
+                "timing/data_loading_ms": (
+                    (self.data_loading_time * 1000)
+                    if getattr(self, "data_loading_time", None) is not None
+                    else 0.0
+                ),
             }
 
-            step_total_time = self.loop_end_time - self.step_start_time  # type: ignore
-            timings["timing/total_step_ms"] = step_total_time * 1000
+            # Optional segments (present when measured)
+            if self.forward_pass_start_time and self.forward_pass_end_time:
+                timings["timing/forward_pass_ms"] = (
+                    self.forward_pass_end_time - self.forward_pass_start_time
+                ) * 1000
+            if self.backward_pass_start_time and self.backward_pass_end_time:
+                timings["timing/backward_pass_ms"] = (
+                    self.backward_pass_end_time - self.backward_pass_start_time
+                ) * 1000
+            if self.optimizer_step_start_time and self.optimizer_step_end_time:
+                timings["timing/optimizer_step_ms"] = (
+                    self.optimizer_step_end_time - self.optimizer_step_start_time
+                ) * 1000
 
-            # Actual train iteration time (excludes validation/sampling overhead):
-            # forward + backward + optimizer
-            try:
-                last_train_iter_ms = (
-                    timings["timing/forward_pass_ms"]
-                    + timings["timing/backward_pass_ms"]
-                    + timings["timing/optimizer_step_ms"]
-                )
-                timings["timing/last_train_iter_ms"] = last_train_iter_ms
-            except Exception:
-                pass
+            # Compute last train iter as sum of whichever segments exist
+            iter_ms = 0.0
+            iter_ms += float(timings.get("timing/forward_pass_ms", 0.0))
+            iter_ms += float(timings.get("timing/backward_pass_ms", 0.0))
+            iter_ms += float(timings.get("timing/optimizer_step_ms", 0.0))
+            if iter_ms > 0.0:
+                timings["timing/last_train_iter_ms"] = iter_ms
 
             return timings
         except Exception as e:
