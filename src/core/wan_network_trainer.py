@@ -858,12 +858,26 @@ class WanNetworkTrainer:
 
         # ========== Training Loop Setup ==========
         global_step = restored_step if restored_step is not None else 0
+        # Customize tqdm bar format when enhanced progress bar is enabled to avoid
+        # the default rate field's wide alignment ("s/it" spacing). We keep ETA
+        # and elapsed, and move performance metrics to postfix via set_postfix.
+        try:
+            use_enhanced_bar = bool(getattr(args, "enhanced_progress_bar", True))
+        except Exception:
+            use_enhanced_bar = True
+        custom_bar_format = (
+            "{l_bar}{bar} {n_fmt}/{total_fmt} [{elapsed}<{remaining}] {postfix}"
+            if use_enhanced_bar
+            else None
+        )
         progress_bar = tqdm(
             range(args.max_train_steps),
             initial=global_step,  # Ensure progress bar resumes at correct step
             smoothing=0,
             disable=not accelerator.is_local_main_process,
             desc="steps",
+            dynamic_ncols=True,
+            bar_format=custom_bar_format,
         )
 
         noise_scheduler = FlowMatchDiscreteScheduler(

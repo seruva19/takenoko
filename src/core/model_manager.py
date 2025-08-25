@@ -145,7 +145,45 @@ class ModelManager:
                 getattr(args, "exclude_ffn_from_scaled_mm", False)
             ),
             scale_input_tensor=getattr(args, "scale_input_tensor", None),
+            rope_on_the_fly=bool(getattr(args, "rope_on_the_fly", False)),
+            broadcast_time_embed=bool(getattr(args, "broadcast_time_embed", False)),
+            strict_e_slicing_checks=bool(
+                getattr(args, "strict_e_slicing_checks", False)
+            ),
+            lower_precision_attention=bool(
+                getattr(args, "lower_precision_attention", False)
+            ),
+            simple_modulation=bool(getattr(args, "simple_modulation", False)),
+            optimized_compile=bool(getattr(args, "optimized_compile", False)),
+            rope_func=str(getattr(args, "rope_func", "default")),
+            lean_attention_fp32_default=bool(
+                getattr(args, "lean_attention_fp32_default", False)
+            ),
+            compile_args=(
+                list(args.compile_args)
+                if hasattr(args, "compile_args") and args.compile_args is not None
+                else None
+            ),
         )
+
+        # Optional: enable lean attention math from config
+        try:
+            if bool(getattr(args, "lean_attn_math", False)):
+                setattr(transformer, "_lean_attn_math", True)  # type: ignore
+                logger.info("Lean attention math enabled for Wan blocks")
+            if bool(getattr(args, "lower_precision_attention", False)):
+                setattr(transformer, "_lower_precision_attention", True)  # type: ignore
+                try:
+                    for _blk in transformer.blocks:  # type: ignore[attr-defined]
+                        setattr(_blk, "_lower_precision_attention", True)
+                except Exception:
+                    pass
+                logger.info("Lower precision attention enabled (fp16 compute path)")
+            if bool(getattr(args, "simple_modulation", False)):
+                setattr(transformer, "_simple_modulation", True)  # type: ignore
+                logger.info("Simple modulation enabled (Wan 2.1 style for 2.2)")
+        except Exception:
+            pass
         # WanModel was constructed with use_fvdm above; no runtime mutation needed
 
         # If dual-model training is disabled, return as-is

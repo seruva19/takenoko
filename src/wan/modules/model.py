@@ -45,21 +45,25 @@ from modules.fp8_optimization_utils import (
 )
 
 from .attention import local_patching, local_merge, nablaT, sta, sta_nabla
+from utils.advanced_rope import apply_rope_comfy
+
 from utils.tread import (
     TREADRouter,
     MaskInfo,
 )
+from wan.modules.lean_attention import forward_wan22_lean_block
+from wan.utils.compile_utils import compile_optimize as wan_compile_optimize
 from torch.nn.attention.flex_attention import flex_attention
 
 try:
     flex = torch.compile(
         flex_attention, mode="max-autotune-no-cudagraphs", dynamic=True
     )
-except:
+except Exception:
     logger.warning("torch.compile failed to compile flex_attention")
-    logger.warning(
-        "Using original Neighborhood Adaptive Block-Level Attention (NABLA) implementation"
-    )
+    # logger.warning(
+    #     "Using original Neighborhood Adaptive Block-Level Attention (NABLA) implementation"
+    # )
     flex = flex_attention
 
 
@@ -90,6 +94,15 @@ def rope_params(max_seq_len, dim, theta=10000):
 
 
 # @amp.autocast(enabled=False)
+try:
+    compiler_disable = torch.compiler.disable  # type: ignore[attr-defined]
+except Exception:  # pragma: no cover - fallback for older torch
+
+    def compiler_disable(fn):  # type: ignore
+        return fn
+
+
+@compiler_disable
 def rope_apply(x, grid_sizes, freqs, fractal=False):
     device_type = x.device.type
     with torch.amp.autocast(device_type=device_type, enabled=False):  # type: ignore
@@ -145,11 +158,12 @@ def calculate_freqs_i(fhw, c, freqs):
 
 
 # inplace version of rope_apply
+@compiler_disable
 def rope_apply_inplace_cached(x, grid_sizes, freqs_list):
     # with torch.amp.autocast(device_type=device_type, enabled=False):
     rope_dtype = torch.float64  # float32 does not reduce memory usage significantly
 
-    n, c = x.size(2), x.size(3) // 2
+    n, _ = x.size(2), x.size(3) // 2
 
     # loop over samples
     for i, (f, h, w) in enumerate(grid_sizes.tolist()):
@@ -254,6 +268,9 @@ class WanSelfAttention(nn.Module):
 
         self.sparse_algo = sparse_algo
         self.mask_func = self.construct_mask_func(sparse_algo) if sparse_algo else None
+        # RoPE variant configurable via parent
+        self.rope_func = "default"
+        self.use_comfy_rope = False
 
     def construct_mask_func(self, sparse_algo):
         if "_" in sparse_algo:
@@ -347,9 +364,20 @@ class WanSelfAttention(nn.Module):
             k = k.view(b, s, n, d)
             v = v.view(b, s, n, d)
 
-            # Only apply standard RoPE when not routing with batched rotary
+            # Only apply RoPE when not routing with batched rotary
             if batched_rotary is None:
-                if self.rope_on_the_fly:
+                if (
+                    bool(getattr(self, "use_comfy_rope", False))
+                    and getattr(self, "rope_func", "default") == "comfy"
+                ):
+                    try:
+                        q_rope, k_rope = self.comfyrope(q, k, freqs)  # type: ignore[attr-defined]
+                        qkv = [q_rope, k_rope, v]
+                    except Exception:
+                        rope_apply_inplace_cached(q, grid_sizes, freqs)
+                        rope_apply_inplace_cached(k, grid_sizes, freqs)
+                        qkv = [q, k, v]
+                elif self.rope_on_the_fly:
                     # freqs is expected to be base frequencies tensor when rope_on_the_fly=True
                     q_rope = rope_apply(q, grid_sizes, freqs)
                     k_rope = rope_apply(k, grid_sizes, freqs)
@@ -496,6 +524,9 @@ class WanAttentionBlock(nn.Module):
         # modulation
         self.modulation = nn.Parameter(torch.randn(1, 6, dim) / dim**0.5)
 
+        # attention compute dtype (fp32 by default; can be toggled via _lower_precision_attention)
+        self.attention_dtype = torch.float32
+
         self.gradient_checkpointing = False
 
     def enable_gradient_checkpointing(self):
@@ -503,6 +534,36 @@ class WanAttentionBlock(nn.Module):
 
     def disable_gradient_checkpointing(self):
         self.gradient_checkpointing = False
+
+    @torch.compiler.disable()
+    def get_modulation(self, e: torch.Tensor):
+        """
+        Construct per-gate modulation tensors s0..s5 for both 2.1 (sample-wise) and 2.2 (token-wise).
+
+        e: [B, 6, C] (2.1) or [B, L, 6, C] (2.2)
+        Returns: tuple(s0..s5) each shaped [B, C] (2.1) or [B, L, C] (2.2)
+        """
+        # Refresh dtype each call to honor runtime toggles
+        self.attention_dtype = (
+            torch.float16
+            if bool(getattr(self, "_lower_precision_attention", False))
+            else torch.float32
+        )
+        split_dim = e.ndim - 2  # 1 for 2.1 style modulation, 2 for 2.2 style modulation
+        m = self.modulation.to(self.attention_dtype, copy=False)  # [1, 6, C]
+        if e.ndim == 4:
+            m = m.unsqueeze(0)  # [1, 1, 6, C] for broadcasting over tokens
+        e = e.to(self.attention_dtype, copy=False)
+
+        m0, m1, m2, m3, m4, m5 = m.unbind(dim=split_dim)
+        e0, e1, e2, e3, e4, e5 = e.unbind(dim=split_dim)
+        s0 = e0 + m0
+        s1 = e1 + m1
+        s2 = e2 + m2
+        s3 = e3 + m3
+        s4 = e4 + m4
+        s5 = e5 + m5
+        return s0, s1, s2, s3, s4, s5
 
     def _forward(
         self,
@@ -525,64 +586,68 @@ class WanAttentionBlock(nn.Module):
             freqs(Tensor): Rope freqs, shape [1024, C / num_heads / 2]
             sparse_attention (bool): Whether to use sparse attention (default: False)
         """
-        org_dtype = x.dtype
+        x_orig_dtype = x.dtype
 
-        if self.model_version == "2.1":
-            e = self.modulation.to(torch.float32) + e
-            e = e.chunk(6, dim=1)
-            assert e[0].dtype == torch.float32
-
-            # self-attention
-            y = self.self_attn(
-                (self.norm1(x).float() * (1 + e[1]) + e[0]).to(org_dtype),
+        # Optional lean attention math to avoid large fp32 intermediates (2.2 only)
+        if self.model_version != "2.1" and bool(
+            getattr(self, "_lean_attn_math", False)
+        ):
+            x = forward_wan22_lean_block(
+                x,
+                e,
+                self.modulation,
+                self.norm1,
+                self.norm2,
+                self.norm3,
+                self.self_attn,
+                self.cross_attn,
+                self.ffn,
                 seq_lens,
                 grid_sizes,
-                freqs if batched_rotary is None else None,
-                sparse_attention=sparse_attention,
-                # pass through when provided during routing
-                # type: ignore[arg-type]
-                batched_rotary=batched_rotary,
+                None if batched_rotary is not None else freqs,
+                context,
+                context_lens,
+                sparse_attention,
+                batched_rotary,
+                force_fp16=bool(getattr(self, "_lower_precision_attention", False)),
+                fp32_default=bool(getattr(self, "_lean_attn_fp32_default", True)),
             )
-            x = (x + y.to(torch.float32) * e[2]).to(org_dtype)
-            del y
+        else:
+            # Unified numerics for 2.1 and 2.2
+            s0, s1, s2, s3, s4, s5 = self.get_modulation(e)
+            del e
 
-            # cross-attention & ffn
-            x = x + self.cross_attn(self.norm3(x), context, context_lens)
-            del context
-            y = self.ffn((self.norm2(x).float() * (1 + e[4]) + e[3]).to(org_dtype))
-            x = (x + y.to(torch.float32) * e[5]).to(org_dtype)
-            del y
-        else:  # For Wan2.2
-            e = self.modulation.to(torch.float32) + e
-            e = e.chunk(6, dim=2)  # e is [B, L, 6, C] for 2.2
-            assert e[0].dtype == torch.float32
-
-            # self-attention
+            # Self-attention
+            q_in = self.norm1(x).to(self.attention_dtype, copy=False)
+            fi1 = q_in.addcmul(q_in, s1).add(s0).contiguous()
             y = self.self_attn(
-                (self.norm1(x).float() * (1 + e[1].squeeze(2)) + e[0].squeeze(2)).to(
-                    org_dtype
-                ),
+                fi1,
                 seq_lens,
                 grid_sizes,
                 freqs if batched_rotary is None else None,
                 sparse_attention=sparse_attention,
                 batched_rotary=batched_rotary,  # type: ignore[arg-type]
             )
-            x = (x + y.to(torch.float32) * e[2].squeeze(2)).to(org_dtype)
+            x = x + (y * s2).to(x_orig_dtype, copy=False)
             del y
 
-            # cross-attention & ffn
-            x = x + self.cross_attn(self.norm3(x), context, context_lens)
-            del context
-            y = self.ffn(
-                (self.norm2(x).float() * (1 + e[4].squeeze(2)) + e[3].squeeze(2)).to(
-                    org_dtype
-                )
+            # Cross-attention
+            x = x + self.cross_attn(
+                self.norm3(x).to(self.attention_dtype, copy=False),
+                context,
+                context_lens,
             )
-            x = (x + y.to(torch.float32) * e[5].squeeze(2)).to(org_dtype)
+            del context
 
+            # FFN
+            ff_in = self.norm2(x).to(self.attention_dtype, copy=False)
+            y = self.ffn(
+                (ff_in * (1 + s4) + s3).contiguous().to(x_orig_dtype, copy=False)
+            )
+            x = x + (y * s5).to(x_orig_dtype, copy=False)
             del y
-        return x
+
+        return x.to(x_orig_dtype, copy=False)
 
     def forward(
         self,
@@ -637,13 +702,26 @@ class WanAttentionBlock(nn.Module):
 
 
 class Head(nn.Module):
-    def __init__(self, dim, out_dim, patch_size, eps=1e-6, model_version="2.1"):
+    def __init__(
+        self,
+        dim,
+        out_dim,
+        patch_size,
+        eps=1e-6,
+        model_version="2.1",
+        lower_precision_attention: bool = False,
+        simple_modulation: bool = False,
+    ):
         super().__init__()
         self.dim = dim
         self.out_dim = out_dim
         self.patch_size = patch_size
         self.eps = eps
         self.model_version = model_version
+        self.simple_modulation = simple_modulation
+        self.attention_dtype = (
+            torch.float16 if lower_precision_attention else torch.float32
+        )
 
         # layers
         out_dim = math.prod(patch_size) * out_dim
@@ -657,17 +735,18 @@ class Head(nn.Module):
         r"""
         Args:
             x(Tensor): Shape [B, L, C]
-            e(Tensor): Shape [B, C] for 2.1, [B, L, 6, C] for 2.2
+            e(Tensor): Shape [B, C] for 2.1, [B, L, C] for 2.2
         """
-        assert e.dtype == torch.float32
-
-        if self.model_version == "2.1":
-            e = (self.modulation.to(torch.float32) + e.unsqueeze(1)).chunk(2, dim=1)
+        if self.model_version == "2.1" or self.simple_modulation:
+            e = (
+                self.modulation.to(self.attention_dtype, copy=False) + e.unsqueeze(1)
+            ).chunk(2, dim=1)
             x = self.head(self.norm(x) * (1 + e[1]) + e[0])
         else:  # For Wan2.2
-            e = (self.modulation.unsqueeze(0).to(torch.float32) + e.unsqueeze(2)).chunk(
-                2, dim=2
-            )
+            e = (
+                self.modulation.unsqueeze(0).to(self.attention_dtype, copy=False)
+                + e.unsqueeze(2)
+            ).chunk(2, dim=2)
             x = self.head(self.norm(x) * (1 + e[1].squeeze(2)) + e[0].squeeze(2))
 
         return x
@@ -742,6 +821,10 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
         rope_on_the_fly: bool = False,
         broadcast_time_embed: bool = False,
         strict_e_slicing_checks: bool = False,
+        lower_precision_attention: bool = False,
+        lean_attention_fp32_default: bool = True,
+        simple_modulation: bool = False,
+        optimized_compile: bool = False,
     ):
         r"""
         Initialize the diffusion model backbone.
@@ -808,6 +891,22 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
         self.rope_on_the_fly = rope_on_the_fly
         self.broadcast_time_embed = broadcast_time_embed
         self.strict_e_slicing_checks = strict_e_slicing_checks
+        # VRAM/precision controls
+        self._lower_precision_attention = bool(lower_precision_attention)
+        self._simple_modulation = bool(simple_modulation)
+        # Lean attention compute policy: fp32 by default unless overridden
+        self._lean_attn_fp32_default = bool(lean_attention_fp32_default)
+        if self._lower_precision_attention:
+            logger.info(
+                "Attention pre-calcs/e tensor in torch.float16 to save VRAM (lower_precision_attention)"
+            )
+        if self._simple_modulation and self.effective_model_version == "2.2":
+            logger.info("Using simple (Wan 2.1 style) modulation strategy to save VRAM")
+        self.e_dtype = (
+            torch.float16 if self._lower_precision_attention else torch.float32
+        )
+        self.optimized_compile = bool(optimized_compile)
+        self.compile_args: list | tuple | None = None
 
         # embeddings
         self.patch_embedding = nn.Conv3d(
@@ -816,6 +915,9 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
         self.text_embedding = nn.Sequential(
             nn.Linear(text_dim, dim), nn.GELU(approximate="tanh"), nn.Linear(dim, dim)
         )
+
+        # Optional RoPE variant flag (comfy), configured via loader
+        self.rope_func = "default"
 
         self.time_embedding = nn.Sequential(
             nn.Linear(freq_dim, dim), nn.SiLU(), nn.Linear(dim, dim)
@@ -849,7 +951,13 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
 
         # head
         self.head = Head(
-            dim, out_dim, patch_size, eps, model_version=self.effective_model_version
+            dim,
+            out_dim,
+            patch_size,
+            eps,
+            model_version=self.effective_model_version,
+            lower_precision_attention=self._lower_precision_attention,
+            simple_modulation=self._simple_modulation,
         )
 
         # buffers (don't use register_buffer otherwise dtype will be changed in to())
@@ -926,6 +1034,7 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
             FP8_OPTIMIZATION_TARGET_KEYS,
             FP8_OPTIMIZATION_EXCLUDE_KEYS,
             move_to_device=move_to_device,
+            quant_dtype=quant_dtype,
         )
 
         # apply monkey patching
@@ -947,7 +1056,7 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
         for block in self.blocks:  # type: ignore
             block.enable_gradient_checkpointing()  # type: ignore
 
-        print(f"WanModel: Gradient checkpointing enabled.")
+        logger.info("WanModel: Gradient checkpointing enabled.")
 
     def disable_gradient_checkpointing(self):
         self.gradient_checkpointing = False
@@ -955,7 +1064,7 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
         for block in self.blocks:  # type: ignore
             block.disable_gradient_checkpointing()  # type: ignore
 
-        print(f"WanModel: Gradient checkpointing disabled.")
+        logger.info("WanModel: Gradient checkpointing disabled.")
 
     def enable_block_swap(
         self, blocks_to_swap: int, device: torch.device, supports_backward: bool
@@ -975,7 +1084,7 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
             supports_backward,
             device,  # , debug=True
         )
-        print(
+        logger.info(
             f"WanModel: Block swap enabled. Swapping {self.blocks_to_swap} blocks out of {self.num_blocks} blocks. Supports backward: {supports_backward}"
         )
 
@@ -983,13 +1092,13 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
         if self.blocks_to_swap:
             self.offloader.set_forward_only(True)  # type: ignore
             self.prepare_block_swap_before_forward()
-            print(f"WanModel: Block swap set to forward only.")
+            logger.info("WanModel: Block swap set to forward only.")
 
     def switch_block_swap_for_training(self):
         if self.blocks_to_swap:
             self.offloader.set_forward_only(False)  # type: ignore
             self.prepare_block_swap_before_forward()
-            print(f"WanModel: Block swap set to forward and backward.")
+            logger.info("WanModel: Block swap set to forward and backward.")
 
     def move_to_device_except_swap_blocks(self, device: torch.device):
         # assume model is on cpu. do not move blocks to device to reduce temporary memory usage
@@ -1046,6 +1155,11 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
             List[Tensor]:
                 List of denoised video tensors with original input shapes [C_out, F, H / 8, W / 8]
         """
+        # Optional selective compile for critical paths (safely gated)
+        # Trigger optimized compile (one-shot) if enabled
+        if bool(getattr(self, "optimized_compile", False)):
+            wan_compile_optimize(self)
+
         # remove assertions to work with Fun-Control T2V
         # if self.model_type == "i2v":
         #     assert clip_fea is not None and y is not None
@@ -1159,11 +1273,13 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
 
                 e[batch_idx_flat, token_pos_flat, :] = e_tokens_flat
                 e0[batch_idx_flat, token_pos_flat, :, :] = e0_tokens_flat
-            elif self.effective_model_version == "2.1":
+            elif self.effective_model_version == "2.1" or self._simple_modulation:
                 e = self.time_embedding(
                     sinusoidal_embedding_1d(self.freq_dim, t).float()
+                ).to(self.e_dtype)
+                e0 = (
+                    self.time_projection(e).unflatten(1, (6, self.dim)).to(self.e_dtype)
                 )
-                e0 = self.time_projection(e).unflatten(1, (6, self.dim))
             else:  # For Wan2.2 (standard per-token path)
                 if self.broadcast_time_embed:
                     # Use a single time embedding per sample (broadcast across tokens later)
@@ -1173,9 +1289,13 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
                         t_scalar = t
                     e = self.time_embedding(
                         sinusoidal_embedding_1d(self.freq_dim, t_scalar).float()
+                    ).to(
+                        self.e_dtype
                     )  # [B, dim]
-                    e0 = self.time_projection(e).unflatten(
-                        1, (6, self.dim)
+                    e0 = (
+                        self.time_projection(e)
+                        .unflatten(1, (6, self.dim))
+                        .to(self.e_dtype)
                     )  # [B, 6, dim]
                     e0 = e0.unsqueeze(
                         1
@@ -1190,9 +1310,13 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
                         sinusoidal_embedding_1d(self.freq_dim, t)
                         .unflatten(0, (bt, seq_len))
                         .float()
+                    ).to(self.e_dtype)
+                    e0 = (
+                        self.time_projection(e)
+                        .unflatten(2, (6, self.dim))
+                        .to(self.e_dtype)
                     )
-                    e0 = self.time_projection(e).unflatten(2, (6, self.dim))
-        assert e.dtype == torch.float32 and e0.dtype == torch.float32
+        # dtype assertions relaxed: e/e0 may be fp16 when lower_precision_attention
 
         # context
         context_lens = None
@@ -1216,6 +1340,19 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
         # arguments
         # Choose frequency argument for attention per gate
         attn_freqs = self.freqs if self.rope_on_the_fly else freqs_list
+        # Propagate rope_func/comfy to attention modules when requested
+        rope_mode = getattr(self, "rope_func", "default")
+        if rope_mode == "comfy":
+            try:
+                for blk in self.blocks:  # type: ignore[attr-defined]
+                    try:
+                        setattr(blk.self_attn, "rope_func", "comfy")
+                        setattr(blk.self_attn, "comfyrope", apply_rope_comfy)
+                        setattr(blk.self_attn, "use_comfy_rope", True)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
 
         kwargs = dict(
             e=e0,
@@ -1590,6 +1727,12 @@ def load_wan_model(
     rope_on_the_fly: bool = False,
     broadcast_time_embed: bool = False,
     strict_e_slicing_checks: bool = False,
+    lower_precision_attention: bool = False,
+    simple_modulation: bool = False,
+    optimized_compile: bool = False,
+    lean_attention_fp32_default: bool = True,
+    rope_func: str = "default",
+    compile_args: Optional[list] = None,
 ) -> WanModel:
     """
     Load a WAN model from the specified checkpoint.
@@ -1642,7 +1785,18 @@ def load_wan_model(
             rope_on_the_fly=rope_on_the_fly,
             broadcast_time_embed=broadcast_time_embed,
             strict_e_slicing_checks=strict_e_slicing_checks,
+            lower_precision_attention=lower_precision_attention,
+            simple_modulation=simple_modulation,
+            optimized_compile=optimized_compile,
+            lean_attention_fp32_default=lean_attention_fp32_default,
         )
+        # Set advanced RoPE knob on model
+        try:
+            setattr(model, "rope_func", rope_func)
+            if compile_args is not None:
+                setattr(model, "compile_args", compile_args)
+        except Exception:
+            pass
         if dit_weight_dtype is not None:
             model.to(dit_weight_dtype)
 

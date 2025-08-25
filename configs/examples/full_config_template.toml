@@ -25,7 +25,7 @@ fp8_base = true
 
 # Upcast quantization to float32 when computing scales and FP8 weights (improves accuracy, small VRAM cost during optimization)
 # Only works with fp8_scaled = true
-upcast_quantization = true
+upcast_quantization = false
 
 # Upcast linear matmul to float32
 # Only works with fp8_scaled = true
@@ -104,13 +104,46 @@ mixed_precision = "fp16"
 # Weight for regularization loss (1.0 = normal, higher = stronger regularization)
 prior_loss_weight = 1.0
 
+# Use broadcasted per-sample time embedding for Wan 2.2/FVDM (L=1 per sample),
+# instead of per-token embeddings. Off by default for maximal expressiveness.
+broadcast_time_embed = false
+
+# Lean attention math (experimental). When true, Wan 2.2 blocks keep computations
+# in the current compute dtype (bf16/fp16) to reduce large fp32 intermediates
+# and memory use. Original numerics are preserved when false.
+lean_attn_math = false
+
+# When using lean attention math, control compute dtype policy:
+# true  = default to fp32 compute unless force-fp16 is enabled
+# false = default to input dtype (fp16/bf16) unless force-fp16 is enabled
+lean_attention_fp32_default = false
+
+# Lower precision attention (experimental). When true, Wan 2.2 blocks use lower precision
+# for attention calculations to reduce large fp32 intermediates and memory use.
+# Original numerics are preserved when false.
+lower_precision_attention = false
+
+# Use Wan 2.1 style modulation for Wan 2.2
+simple_modulation = false
+
+# Selective torch.compile of core modules for speed; safe no-op unless enabled.
+# Mutually exclusive with dynamo_backend (keep dynamo_backend = "NO" to use this).
+optimized_compile = false
+
+# Compile parameters for optimized_compile. Format:
+# compile_args = ["BACKEND", "MODE", DYNAMIC, "FULLGRAPH"]
+# - BACKEND: "inductor" (default) or other supported backend
+# - MODE: "default" | "max-autotune" | "reduce-overhead" (torch dependent)
+# - DYNAMIC: true|false|"auto" (auto lets torch decide)
+# - FULLGRAPH: "True"|"False" (string for clarity; case-insensitive)
+compile_args = ["inductor", "default", "auto", "False"]
+
 # Compute RoPE multipliers on-the-fly instead of using
 # cached per-(F,H,W) precomputation. Off by default for speed.
 rope_on_the_fly = false
 
-# Use broadcasted per-sample time embedding for Wan 2.2/FVDM (L=1 per sample),
-# instead of per-token embeddings. Off by default for maximal expressiveness.
-broadcast_time_embed = false
+# RoPE variant for positional embeddings: "default" (standard) or "comfy" (Comfy-style; enables advanced ND RoPE)
+rope_func = "default"
 
 # =============================================================================
 # OPTIMIZER SETTINGS

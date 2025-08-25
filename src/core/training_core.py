@@ -130,6 +130,13 @@ class TrainingCore:
         # Toggle for alternating progress postfix (iter_ms vs peak VRAM)
         self._perf_display_toggle: bool = False
 
+        # One-time warning flag for skipping perceptual metrics without pixels
+        self._warned_no_val_pixels_for_perceptual = False
+
+        # EMA for iteration time display (seconds)
+        self._iter_time_ema_sec: Optional[float] = None
+        self._iter_time_ema_beta: float = 0.95
+
     def set_ema_beta(self, beta: float) -> None:
         """Set the EMA smoothing factor. Higher values (closer to 1.0) = more smoothing."""
         if not 0.0 < beta < 1.0:
@@ -161,6 +168,13 @@ class TrainingCore:
         logger.info(
             f"Performance logging verbosity set to: {args.performance_verbosity}"
         )
+
+        # Enhanced progress bar defaults
+        if not hasattr(args, "enhanced_progress_bar"):
+            args.enhanced_progress_bar = True
+        # Always show timing on every step by default (no alternation)
+        if not hasattr(args, "alternate_perf_postfix"):
+            args.alternate_perf_postfix = False
 
         # Parameter statistics logging
         if not hasattr(args, "log_param_stats"):
@@ -236,6 +250,26 @@ class TrainingCore:
 
         corrected_ema = self.ema_loss / (1 - self.ema_beta**self.ema_step_count)
         return float(corrected_ema)
+
+    def _update_iter_time_ema(self, last_iter_seconds: float) -> float:
+        """Update EMA of iteration time in seconds.
+
+        Args:
+            last_iter_seconds: Duration of last iteration in seconds (>0)
+
+        Returns:
+            The updated EMA value in seconds.
+        """
+        if last_iter_seconds <= 0:
+            return float(self._iter_time_ema_sec) if self._iter_time_ema_sec else 0.0
+        if self._iter_time_ema_sec is None:
+            self._iter_time_ema_sec = float(last_iter_seconds)
+        else:
+            b = self._iter_time_ema_beta
+            self._iter_time_ema_sec = b * float(self._iter_time_ema_sec) + (
+                1 - b
+            ) * float(last_iter_seconds)
+        return float(self._iter_time_ema_sec)
 
     # Metric helpers moved to trainer.metrics
     # kept methods as thin wrappers for backward compatibility
@@ -1239,7 +1273,7 @@ class TrainingCore:
                             )
 
                             # Determine if validation metrics require a VAE and lazily load if needed
-                            requires_vae_for_val = any(
+                            metrics_enabled = any(
                                 [
                                     bool(getattr(args, "enable_perceptual_snr", False)),
                                     bool(getattr(args, "enable_temporal_ssim", False)),
@@ -1251,6 +1285,23 @@ class TrainingCore:
                                     bool(getattr(args, "enable_vmaf", False)),
                                 ]
                             )
+                            # Only consider loading a VAE if validation batches include pixels
+                            requires_vae_for_val = (
+                                bool(getattr(args, "load_val_pixels", False))
+                                and metrics_enabled
+                            )
+
+                            # If metrics are enabled but pixels are not loaded, warn once and skip VAE loading
+                            if (
+                                metrics_enabled
+                                and not getattr(args, "load_val_pixels", False)
+                                and accelerator.is_main_process
+                                and not self._warned_no_val_pixels_for_perceptual
+                            ):
+                                logger.warning(
+                                    "Perceptual/temporal validation metrics are enabled but load_val_pixels=false; skipping these metrics and not loading a VAE. Set load_val_pixels=true to enable them."
+                                )
+                                self._warned_no_val_pixels_for_perceptual = True
                             temp_val_vae = None
                             val_vae_to_use = vae
                             if val_vae_to_use is None and requires_vae_for_val:
@@ -1270,7 +1321,12 @@ class TrainingCore:
                                 except Exception as e:
                                     if accelerator.is_main_process:
                                         logger.warning(
-                                            f"Failed to load VAE for validation metrics: {e}"
+                                            (
+                                                "Failed to load VAE for validation metrics: %s. "
+                                                "Ensure a valid 'vae' checkpoint path is set in the config, network access is available to download it, "
+                                                "and that its dtype (vae_dtype) is compatible with the current device."
+                                            ),
+                                            e,
                                         )
 
                             val_loss = self.validation_core.validate(
@@ -1375,10 +1431,32 @@ class TrainingCore:
                             # fallback to total step ms if iter time not available
                             iter_ms = get_last_train_iter_ms()
                             if iter_ms > 0:
-                                enhanced_logs["iter_ms"] = f"{iter_ms:.1f}"
-                            total_ms = get_last_total_step_ms()
-                            if total_ms > 0 and "iter_ms" not in enhanced_logs:
-                                enhanced_logs["step_ms"] = f"{total_ms:.1f}"
+                                # Convert to seconds and update EMA
+                                last_iter_s = iter_ms / 1000.0
+                                avg_iter_s = self._update_iter_time_ema(last_iter_s)
+                                # Expose with 1 decimal in postfix for readability
+                                enhanced_logs["iter_s"] = f"{last_iter_s:.1f}"
+                                enhanced_logs["avg_iter_s"] = f"{avg_iter_s:.1f}"
+                                try:
+                                    # Show label as "avg.s (last.s)" with one decimal
+                                    progress_bar.set_description(
+                                        f"{avg_iter_s:.1f}s ({last_iter_s:.1f}s)"
+                                    )
+                                except Exception:
+                                    pass
+                            else:
+                                total_ms = get_last_total_step_ms()
+                                if total_ms > 0:
+                                    last_step_s = total_ms / 1000.0
+                                    avg_iter_s = self._update_iter_time_ema(last_step_s)
+                                    enhanced_logs["step_s"] = f"{last_step_s:.1f}"
+                                    enhanced_logs["avg_iter_s"] = f"{avg_iter_s:.1f}"
+                                    try:
+                                        progress_bar.set_description(
+                                            f"{avg_iter_s:.1f}s ({last_step_s:.1f}s)"
+                                        )
+                                    except Exception:
+                                        pass
 
                             if getattr(args, "alternate_perf_postfix", True):
                                 # Alternate between timing and hardware each step

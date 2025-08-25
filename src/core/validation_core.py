@@ -54,6 +54,23 @@ class ValidationCore:
         self.fluxflow_config = fluxflow_config
         self._setup_validation_timesteps()
 
+        # One-time warning toggles to avoid log spam during validation
+        self._warned_no_vae_for_metrics = False
+        self._warned_no_pixels_for_metrics = False
+        self._warned_missing_lpips = False
+        self._warned_missing_torchvision = False
+        self._warned_missing_ffmpeg = False
+        self._warned_insufficient_frames_temporal = False
+
+    def _warn_once(self, key: str, message: str) -> None:
+        try:
+            if not getattr(self, key, False):
+                logger.warning(message)
+                setattr(self, key, True)
+        except Exception:
+            # Never let warnings interfere with validation
+            pass
+
     def _setup_validation_timesteps(self) -> None:
         """Parse and setup validation timesteps from configuration only.
 
@@ -169,7 +186,7 @@ class ValidationCore:
                 return stats
         return {}  # Return empty dict on non-main processes
 
-    def validate(
+    def validate(  # type: ignore
         self,
         accelerator: Accelerator,
         transformer: Any,
@@ -653,8 +670,16 @@ class ValidationCore:
                                     if getattr(args, "snr_split_namespaces", False)
                                     else "snr"
                                 )
+                                per_ns = str(
+                                    getattr(
+                                        args,
+                                        "perception_metrics_namespace",
+                                        "perception",
+                                    )
+                                )
                                 log_obj = {
-                                    f"{psnr_prefix}/val/psnr_ssim_t{current_timestep}": psnr_ssim_mean
+                                    f"{psnr_prefix}/val/psnr_ssim_t{current_timestep}": psnr_ssim_mean,
+                                    f"{per_ns}/val/psnr_ssim_t{current_timestep}": psnr_ssim_mean,
                                 }
                                 try:
                                     from utils.tensorboard_utils import (
@@ -665,8 +690,23 @@ class ValidationCore:
                                 except Exception:
                                     pass
                                 accelerator.log(log_obj, step=global_step)
-                        except Exception:
+                        except Exception as e:
+                            if accelerator.is_main_process:
+                                logger.warning(f"PSNR-SSIM computation failed: {e}")
                             pass
+                    elif enable_psnr:
+                        # Warn once if prerequisites are missing
+                        if accelerator.is_main_process:
+                            if vae is None:
+                                self._warn_once(
+                                    "_warned_no_vae_for_metrics",
+                                    "Perceptual SNR requested but VAE is not available; skipping PSNR-SSIM. Ensure 'vae' is configured or lazy-load succeeded.",
+                                )
+                            if "pixels" not in batch:
+                                self._warn_once(
+                                    "_warned_no_pixels_for_metrics",
+                                    "Perceptual SNR requested but validation batches do not include 'pixels'; set load_val_pixels=true.",
+                                )
 
                     # LPIPS (optional): small subsample for speed
                     if (
@@ -682,16 +722,20 @@ class ValidationCore:
                                 # Validate network name
                                 valid_networks = ["alex", "vgg", "squeeze"]
                                 if net_name not in valid_networks:
-                                    logger.warning(f"Invalid LPIPS network '{net_name}', defaulting to 'vgg'")
+                                    logger.warning(
+                                        f"Invalid LPIPS network '{net_name}', defaulting to 'vgg'"
+                                    )
                                     net_name = "vgg"
-                                
+
                                 self._lpips_net = lpips.LPIPS(
-                                    net=net_name, 
+                                    net=net_name,
                                     pretrained=True,
-                                    version='0.1'  # Use latest version like reference implementation
+                                    version="0.1",  # Use latest version like reference implementation
                                 ).to(accelerator.device)
                                 self._lpips_net.eval()
-                                logger.info(f"Initialized LPIPS with {net_name} network")
+                                logger.info(
+                                    f"Initialized LPIPS with {net_name} network"
+                                )
 
                             pred_latents = pred.detach().to(torch.float32)
                             with torch.autocast(
@@ -715,20 +759,24 @@ class ValidationCore:
                             b = min(
                                 pred_frames.shape[0], ref_frames.shape[0], max_items
                             )
-                            
+
                             # Validate frame shapes
                             if b > 0 and pred_frames.shape == ref_frames.shape:
                                 pf = pred_frames[:b]
                                 rf = ref_frames[:b]
-                                
+
                                 # Ensure frames have minimum required dimensions for LPIPS
                                 if pf.shape[-1] < 64 or pf.shape[-2] < 64:
-                                    logger.warning(f"LPIPS frames too small: {pf.shape[-2]}x{pf.shape[-1]}, skipping")
+                                    logger.warning(
+                                        f"LPIPS frames too small: {pf.shape[-2]}x{pf.shape[-1]}, skipping"
+                                    )
                                     continue
 
-                                def preprocess_for_lpips(x: torch.Tensor) -> torch.Tensor:
+                                def preprocess_for_lpips(
+                                    x: torch.Tensor,
+                                ) -> torch.Tensor:
                                     """Convert frames to LPIPS input format using standard preprocessing.
-                                    
+
                                     LPIPS expects inputs in [-1, 1] range, which matches the reference
                                     implementation's im2tensor function behavior.
                                     """
@@ -742,9 +790,11 @@ class ValidationCore:
                                 for i in range(0, frame_count, max(1, stride)):
                                     if i >= frame_count:
                                         break
-                                    pf_i = preprocess_for_lpips(pf[:, :, i])  # [B,C,H,W]
+                                    pf_i = preprocess_for_lpips(
+                                        pf[:, :, i]
+                                    )  # [B,C,H,W]
                                     rf_i = preprocess_for_lpips(rf[:, :, i])
-                                    
+
                                     # Ensure inputs are properly formatted for LPIPS
                                     with torch.no_grad():
                                         val = self._lpips_net(pf_i, rf_i)
@@ -760,12 +810,35 @@ class ValidationCore:
                                         batch_lpips_vals = []
                                     batch_lpips_vals.append(lpips_tensor.unsqueeze(0))
                                 else:
-                                    logger.warning("No valid LPIPS values computed for this batch")
+                                    logger.warning(
+                                        "No valid LPIPS values computed for this batch"
+                                    )
                             else:
-                                logger.warning(f"Skipping LPIPS: shape mismatch pred={pred_frames.shape} vs ref={ref_frames.shape}")
+                                logger.warning(
+                                    f"Skipping LPIPS: shape mismatch pred={pred_frames.shape} vs ref={ref_frames.shape}"
+                                )
+                        except ImportError as e:
+                            if accelerator.is_main_process:
+                                self._warn_once(
+                                    "_warned_missing_lpips",
+                                    f"LPIPS is enabled but not installed ({e}). Install with 'pip install lpips'. Skipping LPIPS.",
+                                )
+                            pass
                         except Exception as e:
                             logger.warning(f"LPIPS computation failed: {e}")
                             pass
+                    elif bool(getattr(args, "enable_lpips", False)):
+                        if accelerator.is_main_process:
+                            if vae is None:
+                                self._warn_once(
+                                    "_warned_no_vae_for_metrics",
+                                    "LPIPS requested but VAE is not available; skipping LPIPS. Ensure 'vae' is configured or lazy-load succeeded.",
+                                )
+                            if "pixels" not in batch:
+                                self._warn_once(
+                                    "_warned_no_pixels_for_metrics",
+                                    "LPIPS requested but validation batches do not include 'pixels'; set load_val_pixels=true.",
+                                )
 
                     # Temporal SSIM (adjacent-frame): small subsample
                     if (
@@ -821,8 +894,22 @@ class ValidationCore:
                                     batch_temporal_ssim_vals.append(
                                         temporal_ssim_mean.unsqueeze(0)
                                     )
-                        except Exception:
+                        except Exception as e:
+                            if accelerator.is_main_process:
+                                logger.warning(f"Temporal SSIM computation failed: {e}")
                             pass
+                    elif bool(getattr(args, "enable_temporal_ssim", False)):
+                        if accelerator.is_main_process:
+                            if vae is None:
+                                self._warn_once(
+                                    "_warned_no_vae_for_metrics",
+                                    "Temporal SSIM requested but VAE is not available; skipping. Ensure 'vae' is configured or lazy-load succeeded.",
+                                )
+                            if "pixels" not in batch:
+                                self._warn_once(
+                                    "_warned_no_pixels_for_metrics",
+                                    "Temporal SSIM requested but validation batches lack 'pixels'; set load_val_pixels=true.",
+                                )
 
                     # Temporal LPIPS (adjacent-frame): small subsample
                     if (
@@ -838,13 +925,13 @@ class ValidationCore:
                                 # Validate network name
                                 valid_networks = ["alex", "vgg", "squeeze"]
                                 if net_name not in valid_networks:
-                                    logger.warning(f"Invalid LPIPS network '{net_name}', defaulting to 'vgg'")
+                                    logger.warning(
+                                        f"Invalid LPIPS network '{net_name}', defaulting to 'vgg'"
+                                    )
                                     net_name = "vgg"
-                                
+
                                 self._lpips_net = lpips.LPIPS(
-                                    net=net_name,
-                                    pretrained=True,
-                                    version='0.1'
+                                    net=net_name, pretrained=True, version="0.1"
                                 ).to(accelerator.device)
                                 self._lpips_net.eval()
 
@@ -873,13 +960,17 @@ class ValidationCore:
                             b = min(pred_frames.shape[0], max_items)
                             if b > 0 and pred_frames.shape[2] > 1:
                                 pf = pred_frames[:b]
-                                
+
                                 # Validate frame dimensions for temporal LPIPS
                                 if pf.shape[-1] < 64 or pf.shape[-2] < 64:
-                                    logger.warning(f"Temporal LPIPS frames too small: {pf.shape[-2]}x{pf.shape[-1]}, skipping")
+                                    logger.warning(
+                                        f"Temporal LPIPS frames too small: {pf.shape[-2]}x{pf.shape[-1]}, skipping"
+                                    )
                                     continue
 
-                                def preprocess_for_lpips(x: torch.Tensor) -> torch.Tensor:
+                                def preprocess_for_lpips(
+                                    x: torch.Tensor,
+                                ) -> torch.Tensor:
                                     """Convert frames to LPIPS input format using standard preprocessing."""
                                     # Ensure input is in [0, 1] range, then convert to [-1, 1]
                                     x_clamped = x.clamp(0, 1)
@@ -892,7 +983,7 @@ class ValidationCore:
                                         break
                                     f1 = preprocess_for_lpips(pf[:, :, i])
                                     f2 = preprocess_for_lpips(pf[:, :, i + 1])
-                                    
+
                                     with torch.no_grad():
                                         val = self._lpips_net(f1, f2)
                                         vals.append(val.squeeze().detach())
@@ -903,8 +994,31 @@ class ValidationCore:
                                     batch_temporal_lpips_vals.append(
                                         t_lpips.unsqueeze(0)
                                     )
-                        except Exception:
+                        except ImportError as e:
+                            if accelerator.is_main_process:
+                                self._warn_once(
+                                    "_warned_missing_lpips",
+                                    f"Temporal LPIPS is enabled but lpips is not installed ({e}). Install with 'pip install lpips'. Skipping.",
+                                )
                             pass
+                        except Exception as e:
+                            if accelerator.is_main_process:
+                                logger.warning(
+                                    f"Temporal LPIPS computation failed: {e}"
+                                )
+                            pass
+                    elif bool(getattr(args, "enable_temporal_lpips", False)):
+                        if accelerator.is_main_process:
+                            if vae is None:
+                                self._warn_once(
+                                    "_warned_no_vae_for_metrics",
+                                    "Temporal LPIPS requested but VAE is not available; skipping. Ensure 'vae' is configured or lazy-load succeeded.",
+                                )
+                            if "pixels" not in batch:
+                                self._warn_once(
+                                    "_warned_no_pixels_for_metrics",
+                                    "Temporal LPIPS requested but validation batches lack 'pixels'; set load_val_pixels=true.",
+                                )
 
                     # Flow-warped SSIM (RAFT via torchvision): small subsample
                     if (
@@ -1003,8 +1117,31 @@ class ValidationCore:
                                     batch_flow_warped_ssim_vals.append(
                                         flow_ssim.unsqueeze(0)
                                     )
-                        except Exception:
+                        except ImportError as e:
+                            if accelerator.is_main_process:
+                                self._warn_once(
+                                    "_warned_missing_torchvision",
+                                    f"Flow-warped SSIM enabled but torchvision is not available ({e}). Install a matching torchvision build. Skipping.",
+                                )
                             pass
+                        except Exception as e:
+                            if accelerator.is_main_process:
+                                logger.warning(
+                                    f"Flow-warped SSIM computation failed: {e}"
+                                )
+                            pass
+                    elif bool(getattr(args, "enable_flow_warped_ssim", False)):
+                        if accelerator.is_main_process:
+                            if vae is None:
+                                self._warn_once(
+                                    "_warned_no_vae_for_metrics",
+                                    "Flow-warped SSIM requested but VAE is not available; skipping. Ensure 'vae' is configured or lazy-load succeeded.",
+                                )
+                            if "pixels" not in batch:
+                                self._warn_once(
+                                    "_warned_no_pixels_for_metrics",
+                                    "Flow-warped SSIM requested but validation batches lack 'pixels'; set load_val_pixels=true.",
+                                )
 
                     # FVD (Fréchet Video Distance) using a lightweight video backbone
                     if (
@@ -1120,8 +1257,29 @@ class ValidationCore:
                                 if "batch_fvd_vals" not in locals():
                                     batch_fvd_vals = []
                                 batch_fvd_vals.append(fvd_val.unsqueeze(0))
-                        except Exception:
+                        except ImportError as e:
+                            if accelerator.is_main_process:
+                                self._warn_once(
+                                    "_warned_missing_torchvision",
+                                    f"FVD enabled but torchvision is not available ({e}). Install a matching torchvision build. Skipping.",
+                                )
                             pass
+                        except Exception as e:
+                            if accelerator.is_main_process:
+                                logger.warning(f"FVD computation failed: {e}")
+                            pass
+                    elif bool(getattr(args, "enable_fvd", False)):
+                        if accelerator.is_main_process:
+                            if vae is None:
+                                self._warn_once(
+                                    "_warned_no_vae_for_metrics",
+                                    "FVD requested but VAE is not available; skipping. Ensure 'vae' is configured or lazy-load succeeded.",
+                                )
+                            if "pixels" not in batch:
+                                self._warn_once(
+                                    "_warned_no_pixels_for_metrics",
+                                    "FVD requested but validation batches lack 'pixels'; set load_val_pixels=true.",
+                                )
 
                     # VMAF (via ffmpeg libvmaf). Encode short clips and call ffmpeg; log average.
                     if (
@@ -1266,8 +1424,32 @@ class ValidationCore:
                                             )
                                     except Exception:
                                         pass
-                        except Exception:
+                        except FileNotFoundError as e:
+                            if accelerator.is_main_process:
+                                self._warn_once(
+                                    "_warned_missing_ffmpeg",
+                                    f"VMAF enabled but ffmpeg was not found ({e}). Ensure ffmpeg with libvmaf is installed and on PATH. Skipping VMAF.",
+                                )
                             pass
+                        except Exception as e:
+                            if accelerator.is_main_process:
+                                self._warn_once(
+                                    "_warned_missing_ffmpeg",
+                                    f"VMAF computation failed (ffmpeg/libvmaf may be missing): {e}. Skipping VMAF.",
+                                )
+                            pass
+                    elif bool(getattr(args, "enable_vmaf", False)):
+                        if accelerator.is_main_process:
+                            if vae is None:
+                                self._warn_once(
+                                    "_warned_no_vae_for_metrics",
+                                    "VMAF requested but VAE is not available; skipping. Ensure 'vae' is configured or lazy-load succeeded.",
+                                )
+                            if "pixels" not in batch:
+                                self._warn_once(
+                                    "_warned_no_pixels_for_metrics",
+                                    "VMAF requested but validation batches lack 'pixels'; set load_val_pixels=true.",
+                                )
 
                 # Gather and compute metrics efficiently (refactored approach)
                 velocity_metrics = self._compute_and_gather_metrics(
@@ -1394,6 +1576,10 @@ class ValidationCore:
                     if global_step is not None:
                         # SNR per-timestep under snr_other when splitting is enabled (to limit essentials)
                         log_dict = {}
+                        per_ns = str(
+                            getattr(args, "perception_metrics_namespace", "perception")
+                        )
+                        perception_dict = {}
                         per_ns = (
                             "snr_other"
                             if getattr(args, "snr_split_namespaces", False)
@@ -1409,17 +1595,29 @@ class ValidationCore:
                         for key, value in noise_metrics.items():
                             log_dict[f"val_timesteps/{key}_t{current_timestep}"] = value
                         for key, value in lpips_metrics.items():
-                            log_dict[f"val_timesteps/{key}_t{current_timestep}"] = value
+                            tag = f"{key}_t{current_timestep}"
+                            log_dict[f"val_timesteps/{tag}"] = value
+                            perception_dict[f"{per_ns}/val/{tag}"] = value
                         for key, value in temporal_ssim_metrics.items():
-                            log_dict[f"val_timesteps/{key}_t{current_timestep}"] = value
+                            tag = f"{key}_t{current_timestep}"
+                            log_dict[f"val_timesteps/{tag}"] = value
+                            perception_dict[f"{per_ns}/val/{tag}"] = value
                         for key, value in temporal_lpips_metrics.items():
-                            log_dict[f"val_timesteps/{key}_t{current_timestep}"] = value
+                            tag = f"{key}_t{current_timestep}"
+                            log_dict[f"val_timesteps/{tag}"] = value
+                            perception_dict[f"{per_ns}/val/{tag}"] = value
                         for key, value in flow_warped_ssim_metrics.items():
-                            log_dict[f"val_timesteps/{key}_t{current_timestep}"] = value
+                            tag = f"{key}_t{current_timestep}"
+                            log_dict[f"val_timesteps/{tag}"] = value
+                            perception_dict[f"{per_ns}/val/{tag}"] = value
                         for key, value in fvd_metrics.items():
-                            log_dict[f"val_timesteps/{key}_t{current_timestep}"] = value
+                            tag = f"{key}_t{current_timestep}"
+                            log_dict[f"val_timesteps/{tag}"] = value
+                            perception_dict[f"{per_ns}/val/{tag}"] = value
                         for key, value in vmaf_metrics.items():
-                            log_dict[f"val_timesteps/{key}_t{current_timestep}"] = value
+                            tag = f"{key}_t{current_timestep}"
+                            log_dict[f"val_timesteps/{tag}"] = value
+                            perception_dict[f"{per_ns}/val/{tag}"] = value
 
                         try:
                             from utils.tensorboard_utils import (
@@ -1427,9 +1625,14 @@ class ValidationCore:
                             )
 
                             log_dict = _adh(args, log_dict)
+                            perception_dict = _adh(args, perception_dict)
                         except Exception:
                             pass
-                        accelerator.log(log_dict, step=global_step)
+                        # Log both standard and perception namespaced metrics
+                        merged = {}
+                        merged.update(log_dict)
+                        merged.update(perception_dict)
+                        accelerator.log(merged, step=global_step)
 
                     logger.info(
                         f"Timestep {current_timestep} - Velocity loss: {timestep_velocity_avg:.5f}, "

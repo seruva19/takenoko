@@ -220,6 +220,30 @@ def create_args_from_config(
     args.broadcast_time_embed = bool(config.get("broadcast_time_embed", False))
     args.strict_e_slicing_checks = bool(config.get("strict_e_slicing_checks", False))
 
+    # Optional: lean attention math to reduce fp32 intermediates in Wan2.2 blocks
+    args.lean_attn_math = bool(config.get("lean_attn_math", False))
+    # Lean attention compute policy: default to fp32 unless disabled
+    args.lean_attention_fp32_default = bool(
+        config.get("lean_attention_fp32_default", False)
+    )
+    # RoPE variant (advanced)
+    args.rope_func = str(config.get("rope_func", "default"))
+
+    # Optional: force lower precision attention compute (fp16) for additional VRAM savings
+    args.lower_precision_attention = bool(
+        config.get("lower_precision_attention", False)
+    )
+    # Optional: use Wan 2.1 style modulation on Wan 2.2 to save VRAM
+    args.simple_modulation = bool(config.get("simple_modulation", False))
+    # Optional: optimized selective compile for critical paths (safely gated)
+    args.optimized_compile = bool(config.get("optimized_compile", False))
+    # Optional: torch.compile args for optimized_compile
+    _ca = config.get("compile_args")
+    if isinstance(_ca, list) and len(_ca) == 4:
+        args.compile_args = _ca
+    else:
+        args.compile_args = None
+
     # Dataset config - set to the same as config file since it's included in main config
     args.dataset_config = config_path
 
@@ -227,7 +251,7 @@ def create_args_from_config(
     args.max_train_steps = config.get("max_train_steps", 1600)
     args.prior_loss_weight = config.get("prior_loss_weight", 1.0)
 
-    # START OF DOP ADDITION
+    # DOP
     args.diff_output_preservation = config.get("diff_output_preservation", False)
     args.diff_output_preservation_trigger_word = config.get(
         "diff_output_preservation_trigger_word"
@@ -236,7 +260,6 @@ def create_args_from_config(
     args.diff_output_preservation_multiplier = config.get(
         "diff_output_preservation_multiplier", 1.0
     )
-    # END OF DOP ADDITION
 
     args.max_train_epochs = config.get("max_train_epochs")
     args.max_data_loader_n_workers = config.get("max_data_loader_n_workers", 8)
@@ -565,6 +588,11 @@ def create_args_from_config(
     args.vmaf_clip_len = int(config.get("vmaf_clip_len", 16))
     args.vmaf_frame_stride = int(config.get("vmaf_frame_stride", 2))
     args.vmaf_ffmpeg_path = config.get("vmaf_ffmpeg_path", "ffmpeg")
+
+    # Validation data pixels loading
+    # When enabled, validation datasets will include original/decoded pixels in batches
+    # as `batch["pixels"]`, allowing perceptual metrics without altering model inputs.
+    args.load_val_pixels = bool(config.get("load_val_pixels", False))
 
     # Logging settings
     args.logging_dir = config.get("logging_dir", "logs")
