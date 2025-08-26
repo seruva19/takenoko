@@ -67,6 +67,7 @@ def load_safetensors_with_lora_and_fp8(
     target_keys: Optional[List[str]] = None,
     exclude_keys: Optional[List[str]] = None,
     quant_dtype: Optional[torch.dtype] = None,
+    fp8_format: str = "e4m3",
 ) -> dict[str, torch.Tensor]:
     """
     Merge LoRA weights into the state dict of a model with fp8 optimization if needed.
@@ -222,6 +223,7 @@ def load_safetensors_with_lora_and_fp8(
         exclude_keys,
         weight_hook=weight_hook,
         quant_dtype=quant_dtype,
+        fp8_format=fp8_format,
     )
 
     for lora_weight_keys in list_of_lora_weight_keys:
@@ -246,6 +248,7 @@ def load_safetensors_with_fp8_optimization_and_hook(
     exclude_keys: Optional[List[str]] = None,
     weight_hook: callable = None,  # type: ignore
     quant_dtype: Optional[torch.dtype] = None,
+    fp8_format: str = "e4m3",
 ) -> dict[str, torch.Tensor]:
     """
     Load state dict from safetensors files and merge LoRA weights into the state dict with fp8 optimization if needed.
@@ -256,11 +259,24 @@ def load_safetensors_with_fp8_optimization_and_hook(
         )
 
         # dit_weight_dtype is not used because we use fp8 optimization
+        # Parse fp8_format to get exp_bits and mantissa_bits
+        if fp8_format.lower() == "e4m3":
+            exp_bits, mantissa_bits = 4, 3
+        elif fp8_format.lower() == "e5m2":
+            exp_bits, mantissa_bits = 5, 2
+        else:
+            logger.warning(
+                f"Unknown fp8_format '{fp8_format}', using E4M3FN as default"
+            )
+            exp_bits, mantissa_bits = 4, 3
+
         state_dict = load_safetensors_with_fp8_optimization(
             model_files,
             calc_device,
             target_keys,
             exclude_keys,
+            exp_bits=exp_bits,
+            mantissa_bits=mantissa_bits,
             move_to_device=move_to_device,
             weight_hook=weight_hook,
             quant_dtype=quant_dtype,

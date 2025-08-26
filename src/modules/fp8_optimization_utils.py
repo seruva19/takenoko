@@ -121,8 +121,8 @@ def optimize_state_dict_with_fp8(
         calc_device (str): Device to quantize tensors on
         target_layer_keys (list, optional): Layer key patterns to target (None for all Linear layers)
         exclude_layer_keys (list, optional): Layer key patterns to exclude
-        exp_bits (int): Number of exponent bits
-        mantissa_bits (int): Number of mantissa bits
+        exp_bits (int): Number of exponent bits (default: 4 for E4M3FN format, original behavior)
+        mantissa_bits (int): Number of mantissa bits (default: 3 for E4M3FN format, original behavior)
         move_to_device (bool): Move optimized tensors to the calculating device
 
     Returns:
@@ -248,8 +248,8 @@ def load_safetensors_with_fp8_optimization(
         calc_device (str or torch.device): Device to quantize tensors on
         target_layer_keys (list, optional): Layer key patterns to target for optimization (None for all Linear layers)
         exclude_layer_keys (list, optional): Layer key patterns to exclude from optimization
-        exp_bits (int): Number of exponent bits
-        mantissa_bits (int): Number of mantissa bits
+        exp_bits (int): Number of exponent bits (default: 4 for E4M3FN format, original behavior)
+        mantissa_bits (int): Number of mantissa bits (default: 3 for E4M3FN format, original behavior)
         move_to_device (bool): Move optimized tensors to the calculating device
         weight_hook (callable, optional): Function to apply to each weight tensor before optimization
 

@@ -122,6 +122,7 @@ def create_args_from_config(
 
     args.fp8_scaled = config.get("fp8_scaled", False)
     args.fp8_base = config.get("fp8_base", False)
+    args.fp8_format = config.get("fp8_format", "e4m3")
     # Quantization behavior controls (default False to preserve prior behavior)
     args.upcast_quantization = bool(config.get("upcast_quantization", False))
     args.upcast_linear = bool(config.get("upcast_linear", False))
@@ -236,13 +237,14 @@ def create_args_from_config(
     # Optional: use Wan 2.1 style modulation on Wan 2.2 to save VRAM
     args.simple_modulation = bool(config.get("simple_modulation", False))
     # Optional: optimized selective compile for critical paths (safely gated)
-    args.optimized_compile = bool(config.get("optimized_compile", False))
-    # Optional: torch.compile args for optimized_compile
+    args.optimized_torch_compile = bool(config.get("optimized_torch_compile", False))
+    # Optional: torch.compile args for optimized_torch_compile
     _ca = config.get("compile_args")
     if isinstance(_ca, list) and len(_ca) == 4:
         args.compile_args = _ca
     else:
-        args.compile_args = None
+        # Default to inductor if not specified
+        args.compile_args = ["inductor", "default", "auto", "False"]
 
     # Dataset config - set to the same as config file since it's included in main config
     args.dataset_config = config_path
@@ -1716,6 +1718,7 @@ class UnifiedTrainer:
         # Check which acceleration techniques are enabled
         acceleration_methods = []
 
+        # Core attention optimizations
         if getattr(args, "sdpa", False):
             acceleration_methods.append("SDPA (Scaled Dot-Product Attention)")
 
@@ -1734,30 +1737,73 @@ class UnifiedTrainer:
         if getattr(args, "split_attn", False):
             acceleration_methods.append("Split Attention")
 
-        # Check mixed precision settings
+        # Precision optimizations
         mixed_precision = getattr(args, "mixed_precision", "no")
         if mixed_precision != "no":
             acceleration_methods.append(f"Mixed Precision ({mixed_precision})")
 
-        # Check full precision settings
         if getattr(args, "full_fp16", False):
             acceleration_methods.append("Full FP16")
         if getattr(args, "full_bf16", False):
             acceleration_methods.append("Full BF16")
 
-        # Check FP8 settings
+        # FP8 optimizations
         if getattr(args, "fp8_scaled", False):
             acceleration_methods.append("FP8 Scaled")
         if getattr(args, "fp8_base", False):
             acceleration_methods.append("FP8 Base")
         if getattr(args, "fp8_t5", False):
             acceleration_methods.append("FP8 T5")
+        if (
+            getattr(args, "fp8_scaled", False)
+            or getattr(args, "fp8_base", False)
+            or getattr(args, "fp8_t5", False)
+        ):
+            fp8_format = getattr(args, "fp8_format", "e4m3")
+            acceleration_methods.append(f"FP8 Format: {fp8_format.upper()}")
 
-        # Check gradient checkpointing
+        # Memory and compute optimizations
         if getattr(args, "gradient_checkpointing", False):
             acceleration_methods.append("Gradient Checkpointing")
 
-        # Check Dynamo settings
+        if getattr(args, "persistent_data_loader_workers", False):
+            acceleration_methods.append("Persistent DataLoader Workers")
+
+        # Recent optimization techniques
+        if getattr(args, "optimized_torch_compile", False):
+            compile_args = getattr(args, "compile_args", None)
+            if compile_args and len(compile_args) >= 2:
+                backend, mode = compile_args[0], compile_args[1]
+                acceleration_methods.append(
+                    f"Optimized torch.compile ({backend}, {mode})"
+                )
+            else:
+                acceleration_methods.append("Optimized torch.compile")
+
+        if getattr(args, "lean_attn_math", False):
+            fp32_default = getattr(args, "lean_attention_fp32_default", False)
+            policy = "FP32 default" if fp32_default else "Input dtype default"
+            acceleration_methods.append(f"Lean Attention Math ({policy})")
+
+        if getattr(args, "lower_precision_attention", False):
+            acceleration_methods.append("Lower Precision Attention (FP16)")
+
+        if getattr(args, "simple_modulation", False):
+            acceleration_methods.append("Simple Modulation (Wan 2.1 style)")
+
+        rope_func = getattr(args, "rope_func", "default")
+        if rope_func != "default":
+            acceleration_methods.append(f"RoPE type: {rope_func}")
+
+        # TREAD optimization
+        if getattr(args, "enable_tread", False):
+            tread_mode = getattr(args, "tread_mode", "full")
+            if tread_mode != "full":
+                acceleration_methods.append(f"TREAD Optimization ({tread_mode})")
+            else:
+                acceleration_methods.append("TREAD Optimization")
+
+        # Compilation optimizations
         dynamo_backend = getattr(args, "dynamo_backend", "NO")
         if dynamo_backend != "NO":
             acceleration_methods.append(f"Dynamo ({dynamo_backend})")
@@ -1778,6 +1824,10 @@ class UnifiedTrainer:
             conflicts.append("FlashAttention and SageAttention may conflict")
         if getattr(args, "xformers", False) and getattr(args, "sage_attn", False):
             conflicts.append("Xformers and SageAttention may conflict")
+        if getattr(args, "optimized_torch_compile", False) and dynamo_backend != "NO":
+            conflicts.append(
+                "Optimized Torch Compile and Dynamo are mutually exclusive"
+            )
 
         if conflicts:
             logger.info("   ⚠️  Potential conflicts detected:")

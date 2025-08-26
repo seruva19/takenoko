@@ -60,10 +60,7 @@ try:
         flex_attention, mode="max-autotune-no-cudagraphs", dynamic=True
     )
 except Exception:
-    logger.warning("torch.compile failed to compile flex_attention")
-    # logger.warning(
-    #     "Using original Neighborhood Adaptive Block-Level Attention (NABLA) implementation"
-    # )
+    # logger.warning("torch.compile failed to compile flex_attention")
     flex = flex_attention
 
 
@@ -824,7 +821,7 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
         lower_precision_attention: bool = False,
         lean_attention_fp32_default: bool = True,
         simple_modulation: bool = False,
-        optimized_compile: bool = False,
+        optimized_torch_compile: bool = False,
     ):
         r"""
         Initialize the diffusion model backbone.
@@ -905,7 +902,7 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
         self.e_dtype = (
             torch.float16 if self._lower_precision_attention else torch.float32
         )
-        self.optimized_compile = bool(optimized_compile)
+        self.optimized_torch_compile = bool(optimized_torch_compile)
         self.compile_args: list | tuple | None = None
 
         # embeddings
@@ -1157,7 +1154,7 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
         """
         # Optional selective compile for critical paths (safely gated)
         # Trigger optimized compile (one-shot) if enabled
-        if bool(getattr(self, "optimized_compile", False)):
+        if bool(getattr(self, "optimized_torch_compile", False)):
             wan_compile_optimize(self)
 
         # remove assertions to work with Fun-Control T2V
@@ -1729,10 +1726,11 @@ def load_wan_model(
     strict_e_slicing_checks: bool = False,
     lower_precision_attention: bool = False,
     simple_modulation: bool = False,
-    optimized_compile: bool = False,
+    optimized_torch_compile: bool = False,
     lean_attention_fp32_default: bool = True,
     rope_func: str = "default",
     compile_args: Optional[list] = None,
+    fp8_format: str = "e4m3",
 ) -> WanModel:
     """
     Load a WAN model from the specified checkpoint.
@@ -1787,7 +1785,7 @@ def load_wan_model(
             strict_e_slicing_checks=strict_e_slicing_checks,
             lower_precision_attention=lower_precision_attention,
             simple_modulation=simple_modulation,
-            optimized_compile=optimized_compile,
+            optimized_torch_compile=optimized_torch_compile,
             lean_attention_fp32_default=lean_attention_fp32_default,
         )
         # Set advanced RoPE knob on model

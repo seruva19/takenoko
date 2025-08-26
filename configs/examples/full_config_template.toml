@@ -23,6 +23,11 @@ fp8_scaled = true
 # Use fp8 for base model
 fp8_base = true
 
+# FP8 format for quantization ("e4m3" for E4M3FN or "e5m2" for E5M2)
+# E4M3FN (e4m3): Better precision, requires RTX 40 series or newer (default)
+# E5M2 (e5m2): Compatible with RTX 3000 series, slightly lower precision
+# fp8_format = "e4m3"
+
 # Upcast quantization to float32 when computing scales and FP8 weights (improves accuracy, small VRAM cost during optimization)
 # Only works with fp8_scaled = true
 upcast_quantization = false
@@ -128,14 +133,20 @@ simple_modulation = false
 
 # Selective torch.compile of core modules for speed; safe no-op unless enabled.
 # Mutually exclusive with dynamo_backend (keep dynamo_backend = "NO" to use this).
-optimized_compile = false
+# Uses torch.compile with configurable backends (eager, inductor, etc.)
+optimized_torch_compile = false
 
-# Compile parameters for optimized_compile. Format:
+# Compile parameters for optimized_torch_compile. Format:
 # compile_args = ["BACKEND", "MODE", DYNAMIC, "FULLGRAPH"]
-# - BACKEND: "inductor" (default) or other supported backend
+# - BACKEND: "eager" (default, most compatible) or "inductor" (requires Triton + C++ compiler)
 # - MODE: "default" | "max-autotune" | "reduce-overhead" (torch dependent)
 # - DYNAMIC: true|false|"auto" (auto lets torch decide)
 # - FULLGRAPH: "True"|"False" (string for clarity; case-insensitive)
+# 
+# Backend selection logic:
+# 1. If "eager" is set, use eager backend
+# 2. If "inductor" is set but Triton/C++ compiler not available, fallback to eager
+# 3. If "inductor" is set and Triton/C++ compiler available, use inductor
 compile_args = ["inductor", "default", "auto", "False"]
 
 # Compute RoPE multipliers on-the-fly instead of using
@@ -505,7 +516,7 @@ nabla_sparse_algo = "nabla-0.9_sta-11-24-24"
 # Use SDPA for CrossAttention (requires PyTorch 2.0)
 sdpa = true
 
-# Use FlashAttention for CrossAttention, requires FlashAttention
+# Use FlashAttention for CrossAttention, requires FlashAttention (uv pip install your-flash-attn.whl)
 # flash_attn = true 
 
 # Use SageAttention, requires SageAttention

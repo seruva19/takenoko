@@ -154,7 +154,9 @@ class ModelManager:
                 getattr(args, "lower_precision_attention", False)
             ),
             simple_modulation=bool(getattr(args, "simple_modulation", False)),
-            optimized_compile=bool(getattr(args, "optimized_compile", False)),
+            optimized_torch_compile=bool(
+                getattr(args, "optimized_torch_compile", False)
+            ),
             rope_func=str(getattr(args, "rope_func", "default")),
             lean_attention_fp32_default=bool(
                 getattr(args, "lean_attention_fp32_default", False)

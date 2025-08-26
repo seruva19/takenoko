@@ -52,17 +52,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-cu124 = [
-    "torch==2.5.1+cu124",
-    "torchvision==0.20.1+cu124"
-]
 cu126 = [
     "torch==2.6.0+cu126",
     "torchvision==0.21.0+cu126"
-]
-cu128 = [
-    "torch==2.7.1+cu128",
-    "torchvision==0.22.1+cu128"
 ]
 
 [tool.uv]

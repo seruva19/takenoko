@@ -57,7 +57,7 @@ def download_model_if_needed(
 
     # Check if already downloaded
     if file_path.exists():
-        logger.info(f"Model already downloaded: {file_path}")
+        logger.info(f"Model located: {file_path}")
         return str(file_path)
 
     # Download the file
