@@ -19,6 +19,11 @@ import accelerate
 from accelerate import Accelerator, PartialState
 import torch.nn.functional as F
 
+import logging
+from common.logger import get_logger
+
+logger = get_logger(__name__, level=logging.INFO)
+
 import utils.fluxflow_augmentation as fluxflow_augmentation
 import scheduling.fvdm as fvdm
 
@@ -49,6 +54,17 @@ from scheduling.timestep_utils import (
 from core.validation_core import ValidationCore
 from criteria.dispersive_loss import dispersive_loss_info_nce
 from criteria.training_loss import TrainingLossComputer, LossComponents
+
+# Adaptive timestep sampling
+try:
+    from scheduling.adaptive_timestep_manager import (
+        AdaptiveTimestepManager,
+        create_adaptive_timestep_manager,
+    )
+except ImportError as e:
+    logger.warning(f"Could not import AdaptiveTimestepManager: {e}")
+    AdaptiveTimestepManager = None
+    create_adaptive_timestep_manager = None
 
 
 from scheduling.fopp import (
@@ -83,11 +99,6 @@ from common.performance_logger import (
     get_last_total_step_ms,
 )
 
-import logging
-from common.logger import get_logger
-
-logger = get_logger(__name__, level=logging.INFO)
-
 
 class TrainingCore:
     """Handles core training logic, model calling, and validation."""
@@ -98,6 +109,9 @@ class TrainingCore:
 
         # Initialize validation core
         self.validation_core = ValidationCore(config, fluxflow_config)
+
+        # Initialize adaptive timestep manager (initially None)
+        self.adaptive_manager: Optional[Any] = None
 
         # EMA loss tracking for smoother TensorBoard visualization
         self.ema_loss: Optional[float] = None
@@ -231,6 +245,48 @@ class TrainingCore:
             logger.info(
                 "No advanced logging features enabled (use configure_advanced_logging to enable)"
             )
+
+    def initialize_adaptive_timestep_sampling(self, args: argparse.Namespace) -> None:
+        """Initialize adaptive timestep sampling if enabled."""
+        try:
+            if create_adaptive_timestep_manager is None:
+                if getattr(args, "enable_adaptive_timestep_sampling", False):
+                    logger.warning(
+                        "Adaptive timestep sampling requested but AdaptiveTimestepManager not available"
+                    )
+                return
+
+            self.adaptive_manager = create_adaptive_timestep_manager(args)
+
+            if self.adaptive_manager and self.adaptive_manager.enabled:
+                logger.info("🎯 Adaptive Timestep Sampling initialized successfully")
+                logger.info(
+                    f"   Boundary range: [{self.adaptive_manager.min_timestep}, {self.adaptive_manager.max_timestep}]"
+                )
+                logger.info(
+                    f"   Focus strength: {self.adaptive_manager.focus_strength}"
+                )
+                logger.info(f"   Warmup steps: {self.adaptive_manager.warmup_steps}")
+                logger.info(
+                    f"   Video-specific categories: {self.adaptive_manager.video_specific_categories}"
+                )
+
+                # Connect adaptive manager to timestep distribution
+                if (
+                    hasattr(self, "timestep_distribution")
+                    and self.timestep_distribution
+                ):
+                    if hasattr(self.timestep_distribution, "set_adaptive_manager"):
+                        self.timestep_distribution.set_adaptive_manager(
+                            self.adaptive_manager
+                        )
+            else:
+                logger.debug("Adaptive Timestep Sampling is disabled")
+
+        except Exception as e:
+            logger.error(f"Failed to initialize Adaptive Timestep Sampling: {e}")
+            logger.warning("Continuing with standard timestep sampling")
+            self.adaptive_manager = None
 
     def update_ema_loss(self, current_loss: float) -> float:
         """Update EMA loss; warm-start and defer bias correction for early steps."""
@@ -1035,7 +1091,55 @@ class TrainingCore:
                         repa_helper=repa_helper,
                         raft=getattr(self, "raft", None),
                         warp_fn=getattr(self, "warp", None),
+                        adaptive_manager=self.adaptive_manager,
                     )
+
+                    # Record timestep losses for adaptive analysis
+                    if self.adaptive_manager and self.adaptive_manager.enabled:
+                        try:
+                            # Calculate per-timestep losses for analysis
+                            with torch.no_grad():
+                                # Compute individual losses per timestep
+                                per_timestep_losses = F.mse_loss(
+                                    model_pred.detach().float(),
+                                    target.detach().float(),
+                                    reduction="none",
+                                )
+
+                                # Reduce spatial and channel dimensions, keep batch
+                                if (
+                                    per_timestep_losses.ndim == 5
+                                ):  # Video: [B, C, F, H, W]
+                                    per_timestep_losses = per_timestep_losses.mean(
+                                        dim=[1, 2, 3, 4]
+                                    )
+                                elif (
+                                    per_timestep_losses.ndim == 4
+                                ):  # Image: [B, C, H, W]
+                                    per_timestep_losses = per_timestep_losses.mean(
+                                        dim=[1, 2, 3]
+                                    )
+                                else:
+                                    per_timestep_losses = per_timestep_losses.mean(
+                                        dim=list(range(1, per_timestep_losses.ndim))
+                                    )
+
+                                # Convert timesteps to 0-1 range for recording
+                                timesteps_normalized = timesteps.float() / 1000.0
+
+                                # Record losses for analysis
+                                self.adaptive_manager.record_timestep_loss(
+                                    timesteps_normalized, per_timestep_losses
+                                )
+
+                                # Update important timesteps if needed
+                                self.adaptive_manager.update_important_timesteps()
+
+                        except Exception as e:
+                            logger.debug(
+                                f"Error in adaptive timestep loss recording: {e}"
+                            )
+                            # Continue training without adaptive sampling
 
                     # Start backward pass timing
                     start_backward_pass_timing()
@@ -1598,6 +1702,89 @@ class TrainingCore:
                         logs = _adh(args, logs)
                     except Exception:
                         pass
+
+                    # Log adaptive timestep sampling statistics
+                    if self.adaptive_manager and self.adaptive_manager.enabled:
+                        try:
+                            adaptive_stats = self.adaptive_manager.get_stats()
+
+                            # Core metrics
+                            logs.update(
+                                {
+                                    "adaptive_timestep/total_important": adaptive_stats.get(
+                                        "total_important", 0
+                                    ),
+                                    "adaptive_timestep/avg_importance": adaptive_stats.get(
+                                        "avg_importance", 0
+                                    ),
+                                    "adaptive_timestep/timestep_coverage": adaptive_stats.get(
+                                        "timestep_coverage", 0
+                                    ),
+                                    "adaptive_timestep/importance_updates": adaptive_stats.get(
+                                        "importance_updates", 0
+                                    ),
+                                }
+                            )
+
+                            # Video-specific metrics
+                            if (
+                                hasattr(
+                                    self.adaptive_manager, "video_specific_categories"
+                                )
+                                and self.adaptive_manager.video_specific_categories
+                            ):
+                                logs.update(
+                                    {
+                                        "adaptive_timestep/motion_timesteps": adaptive_stats.get(
+                                            "motion_timesteps", 0
+                                        ),
+                                        "adaptive_timestep/detail_timesteps": adaptive_stats.get(
+                                            "detail_timesteps", 0
+                                        ),
+                                        "adaptive_timestep/temporal_timesteps": adaptive_stats.get(
+                                            "temporal_timesteps", 0
+                                        ),
+                                    }
+                                )
+
+                            # Boundary information
+                            logs.update(
+                                {
+                                    "adaptive_timestep/min_boundary": getattr(
+                                        self.adaptive_manager, "min_timestep", 0
+                                    ),
+                                    "adaptive_timestep/max_boundary": getattr(
+                                        self.adaptive_manager, "max_timestep", 1000
+                                    ),
+                                    "adaptive_timestep/boundary_range": getattr(
+                                        self.adaptive_manager, "max_timestep", 1000
+                                    )
+                                    - getattr(self.adaptive_manager, "min_timestep", 0),
+                                }
+                            )
+
+                            # Warmup progress
+                            warmup_remaining = adaptive_stats.get("warmup_remaining", 0)
+                            warmup_steps = getattr(
+                                self.adaptive_manager, "warmup_steps", 500
+                            )
+                            if warmup_remaining > 0:
+                                warmup_progress = (
+                                    max(0.0, 1.0 - (warmup_remaining / warmup_steps))
+                                    if warmup_steps > 0
+                                    else 1.0
+                                )
+                                logs["adaptive_timestep/warmup_progress"] = (
+                                    warmup_progress
+                                )
+                            else:
+                                logs["adaptive_timestep/warmup_progress"] = 1.0
+
+                        except Exception as e:
+                            logger.debug(
+                                f"Error logging adaptive timestep metrics: {e}"
+                            )
+
                     accelerator.log(logs, step=global_step)
 
                     # Enhanced optimizer-specific histogram logging

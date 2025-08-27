@@ -711,6 +711,62 @@ def create_args_from_config(
     args.show_timesteps = config.get("show_timesteps")
     args.guidance_scale = config.get("guidance_scale", 1.0)
 
+    # Enable adaptive timestep sampling (default: false)
+    args.enable_adaptive_timestep_sampling = config.get(
+        "enable_adaptive_timestep_sampling", False
+    )
+
+    # Core parameters
+    args.adaptive_focus_strength = config.get("adaptive_focus_strength", 2.0)
+    args.adaptive_warmup_steps = config.get("adaptive_warmup_steps", 500)
+    args.adaptive_analysis_window = config.get("adaptive_analysis_window", 1000)
+    args.adaptive_importance_threshold = config.get(
+        "adaptive_importance_threshold", 1.5
+    )
+    args.adaptive_update_frequency = config.get("adaptive_update_frequency", 100)
+
+    # Timestep constraints
+    args.adaptive_min_timesteps = config.get("adaptive_min_timesteps", 50)
+    args.adaptive_max_timesteps = config.get("adaptive_max_timesteps", 200)
+
+    # Video-specific features
+    args.adaptive_video_specific = config.get("adaptive_video_specific", True)
+    args.adaptive_motion_weight = config.get("adaptive_motion_weight", 1.0)
+    args.adaptive_detail_weight = config.get("adaptive_detail_weight", 1.0)
+    args.adaptive_temporal_weight = config.get("adaptive_temporal_weight", 1.0)
+
+    # Research paper alignment parameters
+    args.adaptive_use_beta_sampler = config.get("adaptive_use_beta_sampler", False)
+    args.adaptive_feature_selection_size = config.get(
+        "adaptive_feature_selection_size", 3
+    )
+    args.adaptive_sampler_update_frequency = config.get(
+        "adaptive_sampler_update_frequency", 40
+    )
+    args.adaptive_use_neural_sampler = config.get("adaptive_use_neural_sampler", False)
+    args.adaptive_beta_alpha_init = config.get("adaptive_beta_alpha_init", 1.0)
+    args.adaptive_beta_beta_init = config.get("adaptive_beta_beta_init", 1.0)
+    args.adaptive_neural_hidden_size = config.get("adaptive_neural_hidden_size", 64)
+
+    # Complementary approach configuration
+    args.adaptive_use_importance_weighting = config.get(
+        "adaptive_use_importance_weighting", True
+    )
+    args.adaptive_use_kl_reward_learning = config.get(
+        "adaptive_use_kl_reward_learning", False
+    )
+    args.adaptive_use_replay_buffer = config.get("adaptive_use_replay_buffer", False)
+    args.adaptive_use_statistical_features = config.get(
+        "adaptive_use_statistical_features", False
+    )
+    args.adaptive_weight_combination = config.get(
+        "adaptive_weight_combination", "fallback"
+    )
+    args.adaptive_replay_buffer_size = config.get("adaptive_replay_buffer_size", 100)
+    args.adaptive_rl_learning_rate = config.get("adaptive_rl_learning_rate", 1e-4)
+    args.adaptive_entropy_coefficient = config.get("adaptive_entropy_coefficient", 0.01)
+    args.adaptive_kl_update_frequency = config.get("adaptive_kl_update_frequency", 20)
+
     # Offloading settings
     args.blocks_to_swap = config.get("blocks_to_swap", 0)
     args.allow_mixed_block_swap_offload = config.get(

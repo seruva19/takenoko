@@ -28,6 +28,10 @@ fp8_base = true
 # E5M2 (e5m2): Compatible with RTX 3000 series, slightly lower precision
 # fp8_format = "e4m3"
 
+# Scale input tensor format for scaled_mm ("e4m3" or "e5m2", None disables input scaling)
+# Enables input tensor quantization for additional memory savings, may impact quality, only works with fp8_scaled = true
+# scale_input_tensor = null
+
 # Upcast quantization to float32 when computing scales and FP8 weights (improves accuracy, small VRAM cost during optimization)
 # Only works with fp8_scaled = true
 upcast_quantization = false
@@ -39,10 +43,6 @@ upcast_linear = false
 # Exclude feedforward layers from scaled_mm optimization (useful for WAN models where scaled_mm degrades quality)
 # May help to prevent quality degradation in feedforward layers, only works with fp8_scaled = true
 exclude_ffn_from_scaled_mm = true
-
-# Scale input tensor format for scaled_mm ("e4m3" or "e5m2", None disables input scaling)
-# Enables input tensor quantization for additional memory savings, may impact quality, only works with fp8_scaled = true
-# scale_input_tensor = null
 
 # Optional: force a uniform cast of DiT weights ("fp16" or "bf16").
 # When null, preserves default behavior (checkpoint dtype or fp8 paths).
@@ -424,6 +424,106 @@ fast_rejection_sampling = false
 # show timesteps: image, console
 # Visualizes the actual distribution produced by the current sampling+constraints path. 
 # show_timesteps = 'console' 
+
+# =============================================================================
+# ⚠️ ADAPTIVE TIMESTEP SAMPLING
+# =============================================================================
+
+# Enable adaptive timestep sampling (default: false)
+# Focuses training on timesteps that are most critical for video generation quality
+enable_adaptive_timestep_sampling = false
+
+# Core parameters
+# How much to focus on important timesteps (1.0-5.0)
+adaptive_focus_strength = 2.0         
+
+# Steps before analysis begins (100-2000)
+adaptive_warmup_steps = 500            
+
+# Recent loss samples to analyze (100-5000)
+adaptive_analysis_window = 1000        
+
+# Standard deviation multiplier for detection (0.5-3.0)
+adaptive_importance_threshold = 1.5    
+
+# Steps between analysis updates (10-500)
+adaptive_update_frequency = 100        
+
+# Timestep constraints
+# Minimum important timesteps (10-500)
+adaptive_min_timesteps = 50            
+
+# Maximum important timesteps (50-1000)
+adaptive_max_timesteps = 200           
+
+# Video-specific features
+# Enable video-specific categories
+adaptive_video_specific = true         
+
+# Motion consistency weight (0.1-3.0)
+adaptive_motion_weight = 1.0           
+
+# Detail preservation weight (0.1-3.0)
+adaptive_detail_weight = 1.0           
+
+# Temporal coherence weight (0.1-3.0)
+adaptive_temporal_weight = 1.0         
+
+# Enable Beta distribution sampling methodology (default: false)
+# Uses paper's exact approach: neural network parameterized Beta distribution
+adaptive_use_beta_sampler = false
+
+# Feature selection size |S| for approximation (1-10)
+adaptive_feature_selection_size = 3
+
+# Sampler update frequency f_S (10-100)
+adaptive_sampler_update_frequency = 40
+
+# Enable separate neural network for timestep sampling (default: false)
+adaptive_use_neural_sampler = false
+
+# Initial Alpha parameter for Beta distribution (0.1-5.0)
+adaptive_beta_alpha_init = 1.0
+
+# Initial Beta parameter for Beta distribution (0.1-5.0)
+adaptive_beta_beta_init = 1.0
+
+# Neural sampler hidden layer size (16-256)
+adaptive_neural_hidden_size = 64
+
+# Enable loss-variance importance weighting (stable, default: true)
+# This is our proven stable approach for production use
+adaptive_use_importance_weighting = true
+
+# Enable KL divergence RL learning (paper exact, default: false)
+# This is the authors' exact methodology - more experimental
+adaptive_use_kl_reward_learning = false
+
+# Enable replay buffer for historical learning (default: false)
+# Stores KL improvements across training steps for better feature selection
+adaptive_use_replay_buffer = false
+
+# Enable SelectKBest statistical feature selection (default: false)
+# Requires scikit-learn, uses regression-based feature importance
+adaptive_use_statistical_features = false
+
+# Weight combination strategy ("fallback", "ensemble", "best")
+# - fallback: Use first successful method (stable)
+# - ensemble: Average all methods (balanced)
+# - best: Choose method with highest focus (aggressive)
+adaptive_weight_combination = "fallback"
+
+# Replay buffer size for KL learning (10-1000)
+adaptive_replay_buffer_size = 100
+
+# RL learning rate for policy updates (1e-5 to 1e-3)
+adaptive_rl_learning_rate = 1e-4
+
+# Entropy coefficient for RL regularization (0.0-0.1)
+adaptive_entropy_coefficient = 0.01
+
+# KL reward update frequency (5-100)
+adaptive_kl_update_frequency = 20
 
 # =============================================================================
 # ⚠️ DISPERSIVE LOSS SETTINGS

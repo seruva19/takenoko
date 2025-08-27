@@ -122,6 +122,13 @@ class WanNetworkTrainer:
         self.vae_training_core = VaeTrainingCore(self.config)
         self.reward_training_core = RewardTrainingCore(self.config)
 
+        # Initialize adaptive timestep sampling if available
+        if hasattr(args, 'enable_adaptive_timestep_sampling'):
+            try:
+                self.training_core.initialize_adaptive_timestep_sampling(args)
+            except Exception as e:
+                logger.warning(f"Failed to initialize adaptive timestep sampling: {e}")
+
         # Initialize sampling manager now that we have config
         self.sampling_manager = SamplingManager(
             self.config, self.default_guidance_scale

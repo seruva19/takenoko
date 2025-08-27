@@ -170,6 +170,7 @@ class TrainingLossComputer:
         repa_helper: Optional[Any] = None,
         raft: Optional[Any] = None,
         warp_fn: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
+        adaptive_manager: Optional[Any] = None,
     ) -> LossComponents:
         """Compute the full training loss and its components.
 
@@ -218,6 +219,38 @@ class TrainingLossComputer:
 
         if weighting is not None:
             loss = loss * weighting
+
+        # ---- Apply adaptive timestep importance weights ----
+        if adaptive_manager is not None and adaptive_manager.enabled:
+            try:
+                # Convert timesteps to 0-1 range for importance lookup
+                timesteps_normalized = timesteps.float() / 1000.0
+                
+                # Get importance weights
+                importance_weights = adaptive_manager.get_adaptive_sampling_weights(timesteps_normalized)
+                
+                if importance_weights is not None and importance_weights.numel() > 0:
+                    # Ensure weights have correct shape for broadcasting
+                    if importance_weights.dim() > 1:
+                        importance_weights = importance_weights.view(-1)
+                    
+                    # Reshape loss to match batch dimension if needed
+                    if loss.dim() > 1:
+                        # Reduce loss to per-sample while preserving batch dimension
+                        loss_per_sample = loss.view(loss.size(0), -1).mean(dim=1)
+                    else:
+                        loss_per_sample = loss
+                    
+                    # Apply importance weights
+                    if loss_per_sample.size(0) == importance_weights.size(0):
+                        loss = loss_per_sample * importance_weights
+                        logger.debug(f"Applied adaptive importance weights: mean={importance_weights.mean():.3f}")
+                    else:
+                        logger.debug(f"Size mismatch: loss {loss_per_sample.size(0)} vs weights {importance_weights.size(0)}")
+                        
+            except Exception as e:
+                logger.debug(f"Error applying adaptive importance weights: {e}")
+                # Continue without adaptive weighting
 
         loss = loss.mean()
         base_loss = loss

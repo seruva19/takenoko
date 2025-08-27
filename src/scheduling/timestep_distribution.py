@@ -8,7 +8,7 @@ and reproducible training compared to on-the-fly random sampling.
 
 import argparse
 import logging
-from typing import Optional
+from typing import Any, Optional
 
 import torch
 
@@ -36,6 +36,19 @@ class TimestepDistribution:
         self.is_initialized: bool = False
         # One-time usage log guard so we don't spam every step
         self.usage_logged: bool = False
+
+        # Add adaptive timestep manager
+        self.adaptive_manager: Optional[Any] = None
+
+    def set_adaptive_manager(self, adaptive_manager: Any) -> None:
+        """Set the adaptive timestep manager for importance-aware sampling."""
+        self.adaptive_manager = adaptive_manager
+        if (
+            adaptive_manager
+            and hasattr(adaptive_manager, "enabled")
+            and adaptive_manager.enabled
+        ):
+            logger.info("🎯 TimestepDistribution connected to AdaptiveTimestepManager")
 
     def initialize(self, args: argparse.Namespace) -> None:
         """Initialize the pre-computed timestep distribution.
@@ -522,17 +535,102 @@ class TimestepDistribution:
             # Validate quantile is a number before conversion
             if not isinstance(quantile, (int, float)):
                 raise ValueError(f"quantile must be a number, got {type(quantile)}")
-            
+
             q = float(max(0.0, min(quantile, 1.0 - 1e-9)))
             i = (torch.full((batch_size,), q) * len(self.distribution)).to(torch.int64)
             i = torch.clamp(i, 0, len(self.distribution) - 1)
         else:
-            # Random sampling from distribution
-            i = torch.randint(
-                0, len(self.distribution), size=(batch_size,), dtype=torch.int64
-            )
+            # Random sampling - this is where we can apply adaptive weighting
+            if (
+                self.adaptive_manager
+                and hasattr(self.adaptive_manager, "enabled")
+                and self.adaptive_manager.enabled
+                and hasattr(self.adaptive_manager, "important_timesteps")
+                and len(self.adaptive_manager.important_timesteps) > 0
+            ):
+
+                try:
+                    # Apply importance-aware sampling
+                    i = self._adaptive_importance_sample(batch_size, device)
+                except Exception as e:
+                    logger.debug(
+                        f"Adaptive sampling failed, falling back to uniform: {e}"
+                    )
+                    # Fall back to uniform sampling
+                    i = torch.randint(
+                        0, len(self.distribution), size=(batch_size,), dtype=torch.int64
+                    )
+            else:
+                # Standard uniform sampling
+                i = torch.randint(
+                    0, len(self.distribution), size=(batch_size,), dtype=torch.int64
+                )
 
         return self.distribution[i].to(device)
+
+    def _adaptive_importance_sample(
+        self, batch_size: int, device: torch.device
+    ) -> torch.Tensor:
+        """Sample timesteps with importance weighting."""
+
+        # Ensure distribution exists
+        if self.distribution is None:
+            raise RuntimeError("Distribution not initialized")
+
+        # Create sampling weights based on importance
+        sampling_weights = torch.ones(len(self.distribution), device=device)
+
+        # Get boundaries in 0-1000 range from adaptive manager
+        min_t = getattr(self.adaptive_manager, "min_timestep", 0)
+        max_t = getattr(self.adaptive_manager, "max_timestep", 1000)
+
+        # Apply importance weights within boundaries
+        for important_timestep in self.adaptive_manager.important_timesteps:  # type: ignore
+            # important_timestep is already in 0-1000 range
+            important_t_float = float(important_timestep)
+
+            # Only apply weights within boundary range
+            if min_t <= important_t_float <= max_t:
+                # Find nearby timesteps in distribution
+                distances = torch.abs(self.distribution * 1000.0 - important_t_float)
+                close_mask = distances < 50.0  # Within 50 timesteps (5% of 1000 range)
+
+                # Get importance weight from adaptive manager
+                weight = getattr(self.adaptive_manager, "timestep_weights", {}).get(
+                    important_timestep, 2.0
+                )
+                focus_strength = getattr(self.adaptive_manager, "focus_strength", 2.0)
+                final_weight = 1.0 + (weight - 1.0) * focus_strength
+
+                # Apply weight to nearby timesteps
+                sampling_weights[close_mask] *= final_weight
+
+        # Ensure we only sample within boundaries (convert to 0-1 range for comparison)
+        boundary_mask = (self.distribution >= min_t / 1000.0) & (
+            self.distribution <= max_t / 1000.0
+        )
+        sampling_weights[~boundary_mask] = 0.0
+
+        # Normalize weights
+        if sampling_weights.sum() > 0:
+            sampling_weights = sampling_weights / sampling_weights.sum()
+
+            # Sample using weighted distribution
+            indices = torch.multinomial(sampling_weights, batch_size, replacement=True)
+            return indices
+        else:
+            # Fallback to uniform within boundaries
+            valid_indices = torch.where(boundary_mask)[0]
+            if len(valid_indices) > 0:
+                indices = valid_indices[
+                    torch.randint(0, len(valid_indices), (batch_size,))
+                ]
+                return indices
+            else:
+                # Final fallback - uniform sampling
+                return torch.randint(
+                    0, len(self.distribution), (batch_size,), dtype=torch.int64
+                )
 
     def get_stats(self) -> dict:
         """Get statistics about the current distribution.
