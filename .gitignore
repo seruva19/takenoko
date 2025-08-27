@@ -27,6 +27,9 @@ wheels/
 Thumbs.db 
 uv.lock
 
+# AI IDE
+.qodo
+
 # Takenoko
 prebuilt
 /logs
