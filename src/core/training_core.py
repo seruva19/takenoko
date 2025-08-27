@@ -1094,51 +1094,80 @@ class TrainingCore:
                         adaptive_manager=self.adaptive_manager,
                     )
 
-                    # Record timestep losses for adaptive analysis
+                    # Adaptive timestep sampling with gated research mode
                     if self.adaptive_manager and self.adaptive_manager.enabled:
                         try:
-                            # Calculate per-timestep losses for analysis
-                            with torch.no_grad():
-                                # Compute individual losses per timestep
-                                per_timestep_losses = F.mse_loss(
-                                    model_pred.detach().float(),
-                                    target.detach().float(),
-                                    reduction="none",
+                            # Check if research mode is enabled
+                            if (
+                                hasattr(self.adaptive_manager, "research_mode_enabled")
+                                and self.adaptive_manager.research_mode_enabled
+                            ):
+                                # Use full research algorithm (Algorithm 1 & 2)
+                                research_result = self.adaptive_manager.research_training_step(
+                                    model=training_model,  # The diffusion model
+                                    x_0=latents,  # Clean latents
+                                    diffusion=noise_scheduler,  # The noise scheduler
+                                    all_timesteps=list(
+                                        range(0, 1000, 10)
+                                    ),  # Sample every 10 timesteps for efficiency
                                 )
 
-                                # Reduce spatial and channel dimensions, keep batch
-                                if (
-                                    per_timestep_losses.ndim == 5
-                                ):  # Video: [B, C, F, H, W]
-                                    per_timestep_losses = per_timestep_losses.mean(
-                                        dim=[1, 2, 3, 4]
-                                    )
-                                elif (
-                                    per_timestep_losses.ndim == 4
-                                ):  # Image: [B, C, H, W]
-                                    per_timestep_losses = per_timestep_losses.mean(
-                                        dim=[1, 2, 3]
-                                    )
-                                else:
-                                    per_timestep_losses = per_timestep_losses.mean(
-                                        dim=list(range(1, per_timestep_losses.ndim))
+                                if research_result and research_result.get(
+                                    "research_mode"
+                                ):
+                                    # Log research statistics
+                                    if accelerator.is_main_process:
+                                        logger.info(
+                                            f"🔬 Research step: t={research_result.get('sampled_timestep')}, "
+                                            f"Δ_t_k={research_result.get('delta_t_k', 0):.6f}"
+                                        )
+
+                                        if research_result.get("selected_features"):
+                                            logger.debug(
+                                                f"   Selected features: {research_result.get('selected_features')[:5]}..."
+                                            )
+
+                            else:
+                                # Use simplified approach (current implementation)
+                                with torch.no_grad():
+                                    # Compute individual losses per timestep
+                                    per_timestep_losses = F.mse_loss(
+                                        model_pred.detach().float(),
+                                        target.detach().float(),
+                                        reduction="none",
                                     )
 
-                                # Convert timesteps to 0-1 range for recording
-                                timesteps_normalized = timesteps.float() / 1000.0
+                                    # Reduce spatial and channel dimensions, keep batch
+                                    if (
+                                        per_timestep_losses.ndim == 5
+                                    ):  # Video: [B, C, F, H, W]
+                                        per_timestep_losses = per_timestep_losses.mean(
+                                            dim=[1, 2, 3, 4]
+                                        )
+                                    elif (
+                                        per_timestep_losses.ndim == 4
+                                    ):  # Image: [B, C, H, W]
+                                        per_timestep_losses = per_timestep_losses.mean(
+                                            dim=[1, 2, 3]
+                                        )
+                                    else:
+                                        per_timestep_losses = per_timestep_losses.mean(
+                                            dim=list(range(1, per_timestep_losses.ndim))
+                                        )
 
-                                # Record losses for analysis
-                                self.adaptive_manager.record_timestep_loss(
-                                    timesteps_normalized, per_timestep_losses
-                                )
+                                    # Convert timesteps to 0-1 range for recording
+                                    timesteps_normalized = timesteps.float() / 1000.0
 
-                                # Update important timesteps if needed
-                                self.adaptive_manager.update_important_timesteps()
+                                    # Record losses for analysis
+                                    self.adaptive_manager.record_timestep_loss(
+                                        timesteps_normalized, per_timestep_losses
+                                    )
+
+                                    # Update important timesteps if needed
+                                    self.adaptive_manager.update_important_timesteps()
 
                         except Exception as e:
-                            logger.debug(
-                                f"Error in adaptive timestep loss recording: {e}"
-                            )
+                            logger.debug(f"Error in adaptive timestep processing: {e}")
                             # Continue training without adaptive sampling
 
                     # Start backward pass timing

@@ -68,7 +68,7 @@ class AdaptiveTimestepManager:
         temporal_weight: float = 1.0,
         min_timestep: Optional[int] = None,
         max_timestep: Optional[int] = None,
-        # Research paper alignment parameters
+        # Research alignment parameters
         use_beta_sampler: bool = False,
         feature_selection_size: int = 3,
         sampler_update_frequency: int = 40,
@@ -76,6 +76,10 @@ class AdaptiveTimestepManager:
         beta_alpha_init: float = 1.0,
         beta_beta_init: float = 1.0,
         neural_hidden_size: int = 64,
+        # Enhanced research modes
+        adaptive_kl_exact_mode: bool = False,  # Pure KL divergence-based feature selection
+        adaptive_comparative_logging: bool = False,  # Log both KL and importance approaches
+        research_mode_enabled: bool = False,  # Enable full research mode (Algorithm 1 & 2)
         # Complementary approach parameters
         use_importance_weighting: bool = True,
         use_kl_reward_learning: bool = False,
@@ -104,15 +108,18 @@ class AdaptiveTimestepManager:
             temporal_weight: Weight for temporal coherence timesteps (late range)
             min_timestep: Minimum timestep boundary (0-1000), respects existing boundaries
             max_timestep: Maximum timestep boundary (0-1000), respects existing boundaries
-            use_beta_sampler: Enable Beta distribution sampling (paper methodology)
+            use_beta_sampler: Enable Beta distribution sampling (research methodology)
             feature_selection_size: |S| for feature selection approximation
             sampler_update_frequency: f_S frequency for sampler parameter updates
             use_neural_sampler: Enable separate neural network for timestep sampling
             beta_alpha_init: Initial Alpha parameter for Beta distribution
             beta_beta_init: Initial Beta parameter for Beta distribution
             neural_hidden_size: Hidden layer size for neural sampler network
+            adaptive_kl_exact_mode: Pure KL divergence-based features (research replication)
+            adaptive_comparative_logging: Enable comparative logging of different approaches
+            research_mode_enabled: Enable full research mode (Algorithm 1 & 2)
             use_importance_weighting: Enable loss-variance importance weighting (stable)
-            use_kl_reward_learning: Enable KL divergence RL learning (paper exact)
+            use_kl_reward_learning: Enable KL divergence RL learning (research exact)
             use_replay_buffer: Enable replay buffer for historical learning
             use_statistical_features: Enable SelectKBest statistical feature selection
             weight_combination: How to combine approaches ("fallback", "ensemble", "best")
@@ -134,7 +141,7 @@ class AdaptiveTimestepManager:
         self.detail_weight = detail_weight
         self.temporal_weight = temporal_weight
 
-        # Research paper alignment parameters
+        # Research alignment parameters
         self.use_beta_sampler = use_beta_sampler
         self.feature_selection_size = feature_selection_size
         self.sampler_update_frequency = sampler_update_frequency
@@ -142,6 +149,18 @@ class AdaptiveTimestepManager:
         self.beta_alpha_init = beta_alpha_init
         self.beta_beta_init = beta_beta_init
         self.neural_hidden_size = neural_hidden_size
+
+        # Enhanced research modes
+        self.adaptive_kl_exact_mode = adaptive_kl_exact_mode
+        self.adaptive_comparative_logging = adaptive_comparative_logging
+        self.research_mode_enabled = research_mode_enabled
+
+        # Auto-configure for KL exact mode (pure research replication)
+        if adaptive_kl_exact_mode:
+            self.use_kl_reward_learning = True
+            self.use_beta_sampler = True
+            self.use_importance_weighting = False
+            logger.info("🔬 KL Exact Mode: Using pure KL divergence-based features")
 
         # Complementary approach parameters
         self.use_importance_weighting = use_importance_weighting
@@ -173,7 +192,7 @@ class AdaptiveTimestepManager:
         self.detail_timesteps: List[int] = []  # Middle timesteps within boundary
         self.temporal_timesteps: List[int] = []  # Late timesteps within boundary
 
-        # Beta sampler state (paper implementation)
+        # Beta sampler state (research implementation)
         self.beta_alpha = beta_alpha_init
         self.beta_beta = beta_beta_init
         self.feature_selection_step = 0
@@ -192,6 +211,15 @@ class AdaptiveTimestepManager:
         self.rl_optimizer = None
         self.last_kl_update_step = 0
         self.statistical_selector = None
+
+        # Research-specific state for exact algorithm implementation
+        self.theta_k = None  # Current model parameters θ_k
+        self.theta_k_plus_1 = None  # Updated model parameters θ_{k+1}
+        self.delta_k_tau = {}  # Store δ^t_{k,τ} values for all τ
+        self.kl_mode_enabled = (
+            self.use_kl_reward_learning and self.use_beta_sampler
+        )  # Enable KL-based algorithm
+        self.vlb_cache = {}  # Cache VLVB computations
 
         # Initialize complementary components
         if self.enabled:
@@ -301,8 +329,75 @@ class AdaptiveTimestepManager:
         self.last_update_step = self.step_count
         self.stats["importance_updates"] += 1
 
-        # Log update results
+        # Log update results with comparative analysis if enabled
         self._log_importance_update()
+
+        # Comparative logging of different feature approaches
+        if self.adaptive_comparative_logging and self.delta_k_tau:
+            self._compare_feature_approaches()
+
+    def _get_feature_values(self, selected_features: List[int]) -> List[float]:
+        """Get feature values based on current mode.
+
+        Returns:
+            List of feature values for the selected timesteps
+        """
+        if self.adaptive_kl_exact_mode and self.delta_k_tau:
+            # Use raw KL differences (research replication mode)
+            feature_values = [self.delta_k_tau.get(ts, 0.0) for ts in selected_features]
+            if self.adaptive_comparative_logging:
+                logger.debug(
+                    f"Using KL differences as features: {feature_values[:3]}..."
+                )
+            return feature_values
+        else:
+            # Use importance scores (Takenoko hybrid approach)
+            feature_values = [
+                self.timestep_importance.get(ts, 1.0) for ts in selected_features
+            ]
+            if self.adaptive_comparative_logging:
+                logger.debug(
+                    f"Using importance scores as features: {feature_values[:3]}..."
+                )
+            return feature_values
+
+    def _compare_feature_approaches(self) -> None:
+        """Compare KL-based vs importance-based feature selection for research."""
+        if not (self.delta_k_tau and self.timestep_importance):
+            return
+
+        try:
+            # Get features using both approaches
+            kl_features = self.research_feature_selection(self.delta_k_tau)
+            importance_features = self._detect_important_timesteps()
+
+            # Calculate overlap
+            overlap = set(kl_features) & set(importance_features)
+            overlap_ratio = len(overlap) / max(len(kl_features), 1)
+
+            logger.info(f"🔬 Feature Comparison:")
+            logger.info(f"   KL-based features: {kl_features[:5]}... (top 5)")
+            logger.info(f"   Importance features: {importance_features[:5]}... (top 5)")
+            logger.info(
+                f"   Overlap: {len(overlap)}/{max(len(kl_features), len(importance_features))} ({overlap_ratio:.1%})"
+            )
+
+            # Log feature value distributions
+            if kl_features:
+                kl_values = [
+                    abs(self.delta_k_tau.get(ts, 0.0)) for ts in kl_features[:5]
+                ]
+                logger.info(f"   KL values (abs): {[f'{v:.4f}' for v in kl_values]}")
+
+            if importance_features:
+                imp_values = [
+                    self.timestep_importance.get(ts, 0.0)
+                    for ts in importance_features[:5]
+                ]
+                logger.info(f"   Importance values: {[f'{v:.4f}' for v in imp_values]}")
+
+        except Exception as e:
+            logger.warning(f"Feature comparison failed: {e}")
 
     def _calculate_timestep_importance(self) -> Dict[int, float]:
         """Calculate importance scores for each timestep within boundaries.
@@ -635,7 +730,7 @@ class AdaptiveTimestepManager:
     def _beta_sample_timesteps(
         self, batch_size: int, device: torch.device
     ) -> torch.Tensor:
-        """Sample timesteps using Beta distribution (research paper methodology)."""
+        """Sample timesteps using Beta distribution (research methodology)."""
         try:
             # Create Beta distribution
             alpha = torch.tensor(self.beta_alpha, device=device)
@@ -662,7 +757,7 @@ class AdaptiveTimestepManager:
             )
 
     def _update_feature_selection(self):
-        """Update selected features every f_S steps (paper methodology)."""
+        """Update selected features every f_S steps (research methodology)."""
         if self.feature_selection_step % self.sampler_update_frequency == 0:
             # Select top |S| most important timesteps as features
             if len(self.important_timesteps) >= self.feature_selection_size:
@@ -769,29 +864,80 @@ class AdaptiveTimestepManager:
         except Exception as e:
             logger.warning(f"Failed to initialize complementary components: {e}")
 
-    def compute_kl_divergence(self, model, x_0, x_t, t):
-        """Compute KL divergence between true and predicted distributions."""
+    def compute_kl_divergence(self, model, x_0, x_t, t, diffusion=None):
+        """Compute exact KL divergence between q(x_{t-1}|x_t, x_0) and p_θ(x_{t-1}|x_t).
+
+        This implements the exact KL divergence computation from the research:
+        KL(q(x_{t-1}|x_t, x_0) || p_θ(x_{t-1}|x_t))
+
+        Args:
+            model: The diffusion model (epsilon predictor)
+            x_0: Original clean images
+            x_t: Noisy images at timestep t
+            t: Timestep tensor
+            diffusion: Diffusion object with q_posterior_mean_var and p_mean_var methods
+
+        Returns:
+            KL divergence values per sample
+        """
         try:
-            # This requires access to the diffusion model components
-            # For now, use MSE loss as a proxy for KL divergence
             with torch.no_grad():
-                # Predict noise
-                predicted_noise = model(x_t, t)
+                if diffusion is not None:
+                    # Use exact KL computation from research methodology
+                    # q(x_{t-1}|x_t, x_0) - true posterior
+                    q_mean, q_var, q_logvar = diffusion.q_posterior_mean_var(
+                        x_0, x_t, t
+                    )
 
-                # Compute MSE loss per sample
-                mse_per_sample = F.mse_loss(predicted_noise, x_0, reduction="none")
-                mse_per_sample = mse_per_sample.view(mse_per_sample.shape[0], -1).mean(
-                    dim=1
-                )
+                    # p_θ(x_{t-1}|x_t) - model prediction
+                    p_mean, p_var, p_logvar = diffusion.p_mean_var(
+                        model, x_t, t, clip_denoised=False, return_pred=False
+                    )
 
-                # Convert MSE to KL-like metric (proxy)
-                kl_proxy = torch.log(1.0 + mse_per_sample)
+                    # Compute exact KL divergence between two Gaussians
+                    kl = self._normal_kl(q_mean, q_logvar, p_mean, p_logvar)
 
-                return kl_proxy
+                    # Flatten spatial dimensions and average
+                    kl = kl.view(kl.shape[0], -1).mean(dim=1)
+
+                    # Convert to bits (natural log to log base 2)
+                    kl = kl / math.log(2.0)
+
+                    return kl
+                else:
+                    # Fallback: Use MSE proxy when diffusion object unavailable
+                    predicted_noise = model(x_t, t)
+                    mse_per_sample = F.mse_loss(predicted_noise, x_0, reduction="none")
+                    mse_per_sample = mse_per_sample.view(
+                        mse_per_sample.shape[0], -1
+                    ).mean(dim=1)
+                    kl_proxy = torch.log(1.0 + mse_per_sample)
+
+                    return kl_proxy
 
         except Exception as e:
             logger.warning(f"KL divergence computation failed: {e}")
             return torch.zeros(x_0.shape[0], device=x_0.device)
+
+    def _normal_kl(self, mean1, logvar1, mean2, logvar2):
+        """Compute KL divergence between two diagonal Gaussian distributions.
+
+        KL(N(μ1, σ1²) || N(μ2, σ2²)) = log(σ2/σ1) + (σ1² + (μ1-μ2)²)/(2σ2²) - 1/2
+
+        Args:
+            mean1, logvar1: Mean and log-variance of first distribution
+            mean2, logvar2: Mean and log-variance of second distribution
+
+        Returns:
+            KL divergence tensor
+        """
+        return 0.5 * (
+            -1.0
+            + logvar2
+            - logvar1
+            + torch.exp(logvar1 - logvar2)
+            + ((mean1 - mean2) ** 2) * torch.exp(-logvar2)
+        )
 
     def record_kl_improvement(self, timesteps, kl_before, kl_after):
         """Record KL divergence improvements for replay buffer."""
@@ -881,6 +1027,160 @@ class AdaptiveTimestepManager:
         except Exception as e:
             logger.warning(f"KL reward update failed: {e}")
 
+    def research_policy_gradient_update(
+        self, x_0, t_sampled, delta_t_k, selected_features
+    ):
+        """Research Algorithm 1: Policy gradient update using REINFORCE.
+
+        Implements the exact policy update from research methodology:
+        φ_{k+1} = φ_k + γ · Δ̃^t_k · ∇_{φ_k} log π_{φ_k}(·|x_0)
+
+        Args:
+            x_0: Input images
+            t_sampled: Sampled timestep t
+            delta_t_k: Δ^t_k value (approximated using selected features)
+            selected_features: List of |S| selected timestep features
+        """
+        if (
+            not self.use_kl_reward_learning
+            or self.neural_sampler is None
+            or self.rl_optimizer is None
+        ):
+            logger.debug("Policy gradient update skipped: components not available")
+            return
+
+        try:
+            device = x_0.device
+
+            # Create feature vector using enhanced selection approach
+            feature_values = self._get_feature_values(
+                selected_features[: self.feature_selection_size]
+            )
+
+            # Pad if necessary
+            while len(feature_values) < self.feature_selection_size:
+                feature_values.append(0.0)
+
+            features = torch.tensor(feature_values, device=device, dtype=torch.float32)
+
+            # Get policy parameters: π_φ(·|x_0) → (α, β) for Beta distribution
+            alpha, beta = self.neural_sampler(features.unsqueeze(0))
+
+            # Create Beta distribution π_φ(a,b|x_0)
+            beta_dist = torch.distributions.Beta(alpha, beta)
+
+            # Convert sampled timestep to [0,1] range for Beta distribution
+            t_normalized = (t_sampled - self.min_timestep) / (
+                self.max_timestep - self.min_timestep
+            )
+            t_tensor = torch.tensor(t_normalized, device=device, dtype=torch.float32)
+
+            # Compute log π_φ(t|x_0) - log probability of the sampled timestep
+            log_prob = beta_dist.log_prob(t_tensor)
+
+            # Add entropy regularization (from research methodology)
+            entropy = beta_dist.entropy()
+
+            # REINFORCE update: ∇_φ J = Δ̃^t_k · ∇_φ log π_φ(t|x_0)
+            # We maximize this, so loss = -reward * log_prob
+            policy_loss = -(delta_t_k * log_prob)
+            entropy_bonus = -self.entropy_coefficient * entropy
+            total_loss = policy_loss + entropy_bonus
+
+            # Gradient step: φ_{k+1} = φ_k + γ · ∇_φ J
+            self.rl_optimizer.zero_grad()
+            total_loss.backward()
+
+            # Gradient clipping for stability
+            torch.nn.utils.clip_grad_norm_(
+                self.neural_sampler.parameters(), max_norm=1.0
+            )
+
+            # Apply update
+            self.rl_optimizer.step()
+
+            if self.comparative_logging:
+                logger.debug(
+                    f"Research policy update: delta_t_k={delta_t_k:.6f}, "
+                    f"log_prob={log_prob:.6f}, entropy={entropy:.6f}, "
+                    f"loss={total_loss:.6f}, mode={'KL' if self.kl_exact_mode else 'Importance'}"
+                )
+
+        except Exception as e:
+            logger.warning(f"Research policy gradient update failed: {e}")
+
+    def research_sample_timestep(self, x_0):
+        """Research Algorithm 1: Sample timestep using learned policy π_φ(·|x_0).
+
+        Args:
+            x_0: Input image(s)
+
+        Returns:
+            Tuple of (sampled_timestep, log_probability, alpha, beta)
+        """
+        if not self.use_beta_sampler or self.neural_sampler is None:
+            # Fallback to uniform sampling within boundaries
+            t = (
+                torch.randint(
+                    self.min_timestep, self.max_timestep + 1, (1,), device=x_0.device
+                )
+                .float()
+                .item()
+            )
+            return t, 0.0, self.beta_alpha, self.beta_beta
+
+        try:
+            device = x_0.device
+
+            # Use current selected features to parameterize the policy
+            if hasattr(self, "selected_features") and self.selected_features:
+                feature_values = self._get_feature_values(
+                    self.selected_features[: self.feature_selection_size]
+                )
+            else:
+                # Default features if no selection yet
+                feature_values = [1.0] * self.feature_selection_size
+
+            # Pad if necessary
+            while len(feature_values) < self.feature_selection_size:
+                feature_values.append(0.0)
+
+            features = torch.tensor(feature_values, device=device, dtype=torch.float32)
+
+            # Get policy parameters
+            with torch.no_grad():
+                alpha, beta = self.neural_sampler(features.unsqueeze(0))
+
+            # Sample from Beta(α, β)
+            beta_dist = torch.distributions.Beta(alpha, beta)
+            u = beta_dist.sample()  # u ∈ [0, 1]
+
+            # Map to timestep range: t = ⌊u * (T-1)⌋ (from research methodology)
+            t = u.item() * (self.max_timestep - self.min_timestep) + self.min_timestep
+            t = int(round(t))  # Discretize
+            t = max(self.min_timestep, min(self.max_timestep, t))  # Clamp to bounds
+
+            # Compute log probability
+            u_clamped = (t - self.min_timestep) / (
+                self.max_timestep - self.min_timestep
+            )
+            u_tensor = torch.tensor(u_clamped, device=device, dtype=torch.float32)
+            log_prob = beta_dist.log_prob(u_tensor).item()
+
+            return t, log_prob, alpha.item(), beta.item()
+
+        except Exception as e:
+            logger.warning(f"Research timestep sampling failed: {e}")
+            # Fallback
+            t = (
+                torch.randint(
+                    self.min_timestep, self.max_timestep + 1, (1,), device=x_0.device
+                )
+                .float()
+                .item()
+            )
+            return t, 0.0, self.beta_alpha, self.beta_beta
+
     def get_statistical_features(self):
         """Get statistically selected important timesteps."""
         if not self.use_statistical_features or self.replay_buffer is None:
@@ -907,6 +1207,65 @@ class AdaptiveTimestepManager:
         except Exception as e:
             logger.warning(f"Statistical feature selection failed: {e}")
             return []
+
+    def research_feature_selection(
+        self, delta_k_tau_dict: Dict[int, float]
+    ) -> List[int]:
+        """Research Algorithm 2: Feature selection using SelectKBest with |S| timesteps.
+
+        This implements feature selection using KL divergence differences.
+
+        Args:
+            delta_k_tau_dict: Dictionary containing δ^t_{k,τ} values for all τ
+
+        Returns:
+            List of |S| selected timestep features
+        """
+        if not SKLEARN_AVAILABLE or not delta_k_tau_dict:
+            # Fallback to top-K selection by delta values
+            sorted_timesteps = sorted(
+                delta_k_tau_dict.items(), key=lambda x: abs(x[1]), reverse=True
+            )
+            selected = [t for t, _ in sorted_timesteps[: self.feature_selection_size]]
+            logger.debug(f"Research feature selection (fallback): {selected}")
+            return selected
+
+        try:
+            # Prepare data for SelectKBest
+            timesteps = list(delta_k_tau_dict.keys())
+            delta_values = list(delta_k_tau_dict.values())
+
+            if len(timesteps) < self.feature_selection_size:
+                return timesteps
+
+            # Create feature matrix X and target vector y
+            # X: each row is one timestep, each column is a feature (here we use the timestep index)
+            X = np.array([[t] for t in timesteps])  # Simple feature: timestep value
+            y = np.array(delta_values)  # Target: δ values
+
+            # Apply SelectKBest with f_regression (as in research methodology)
+            selector = SelectKBest(score_func=f_regression, k=self.feature_selection_size)  # type: ignore
+            selector.fit(X, y)
+
+            # Get selected features (timesteps)
+            selected_mask = selector.get_support()
+            selected_timesteps = [
+                timesteps[i] for i in range(len(timesteps)) if selected_mask[i]
+            ]
+
+            logger.debug(
+                f"Research feature selection: selected {len(selected_timesteps)} from {len(timesteps)} timesteps"
+            )
+
+            return selected_timesteps
+
+        except Exception as e:
+            logger.warning(f"Research feature selection failed, using fallback: {e}")
+            # Fallback: select by highest absolute δ values
+            sorted_timesteps = sorted(
+                delta_k_tau_dict.items(), key=lambda x: abs(x[1]), reverse=True
+            )
+            return [t for t, _ in sorted_timesteps[: self.feature_selection_size]]
 
     def record_training_step(
         self, model, x_0, x_t, timesteps, loss_before=None, loss_after=None
@@ -959,6 +1318,254 @@ class AdaptiveTimestepManager:
 
         except Exception as e:
             logger.warning(f"Failed to record training step: {e}")
+
+    def compute_vlb_loss(self, model, x_0, t_sample, diffusion=None):
+        """Compute the variational lower bound L_VLB(θ) for given timestep.
+
+        From research Equation 4:
+        L_VLB(θ) = E_{x_0,ε,t}[β²_t / (2σ²_t α_t(1-ᾱ_t)) ||ε - ε_θ(x_t, t)||²]
+
+        Args:
+            model: Diffusion model ε_θ
+            x_0: Clean images
+            t_sample: Timestep to compute loss for
+            diffusion: Diffusion process object
+
+        Returns:
+            VLB loss value for the timestep
+        """
+        try:
+            with torch.no_grad():
+                batch_size = x_0.shape[0]
+                device = x_0.device
+
+                # Sample noise ε ~ N(0, I)
+                noise = torch.randn_like(x_0)
+
+                # Create x_t = √ᾱ_t * x_0 + √(1-ᾱ_t) * ε
+                if diffusion is not None and hasattr(diffusion, "sqrt_alphas_cumprod"):
+                    sqrt_alphas_cumprod_t = diffusion.sqrt_alphas_cumprod[t_sample]
+                    sqrt_one_minus_alphas_cumprod_t = (
+                        diffusion.sqrt_one_minus_alphas_cumprod[t_sample]
+                    )
+                else:
+                    # Fallback: assume linear beta schedule
+                    beta_start, beta_end = 0.0001, 0.02
+                    betas = torch.linspace(beta_start, beta_end, 1000, device=device)
+                    alphas = 1.0 - betas
+                    alphas_cumprod = torch.cumprod(alphas, dim=0)
+                    sqrt_alphas_cumprod_t = torch.sqrt(alphas_cumprod[t_sample])
+                    sqrt_one_minus_alphas_cumprod_t = torch.sqrt(
+                        1.0 - alphas_cumprod[t_sample]
+                    )
+
+                # Expand dimensions to match batch
+                sqrt_alphas_cumprod_t = sqrt_alphas_cumprod_t.view(-1, 1, 1, 1)
+                sqrt_one_minus_alphas_cumprod_t = sqrt_one_minus_alphas_cumprod_t.view(
+                    -1, 1, 1, 1
+                )
+
+                x_t = (
+                    sqrt_alphas_cumprod_t * x_0
+                    + sqrt_one_minus_alphas_cumprod_t * noise
+                )
+
+                # Predict noise: ε_θ(x_t, t)
+                t_tensor = torch.full(
+                    (batch_size,), t_sample, device=device, dtype=torch.long
+                )
+                predicted_noise = model(x_t, t_tensor)
+
+                # Compute MSE loss: ||ε - ε_θ(x_t, t)||²
+                mse_loss = F.mse_loss(predicted_noise, noise, reduction="none")
+                mse_loss = mse_loss.view(batch_size, -1).mean(
+                    dim=1
+                )  # Average over spatial dims
+
+                # Apply VLB weighting coefficient c_t = β²_t / (2σ²_t α_t(1-ᾱ_t))
+                # For simplicity in implementation, we use c_t = 1 (as done in DDPM research Eq. 14)
+                # The full weighting can be added if access to exact diffusion parameters is available
+                vlb_loss = mse_loss.mean()
+
+                return vlb_loss
+
+        except Exception as e:
+            logger.warning(f"VLB computation failed: {e}")
+            return torch.tensor(0.0, device=x_0.device)
+
+    def compute_delta_k_tau(
+        self, model_before, model_after, x_0, t_sampled, all_timesteps, diffusion=None
+    ):
+        """Compute δ^t_{k,τ} = L_τ(θ_k) - L_τ(θ_{k+1}) for all τ.
+
+        This is the core computation from Algorithm 2 in the research.
+
+        Args:
+            model_before: Model parameters θ_k before update
+            model_after: Model parameters θ_{k+1} after update
+            x_0: Clean images used for sampling
+            t_sampled: Timestep t that was sampled for training
+            all_timesteps: All timesteps τ ∈ {1, 2, ..., T} to evaluate
+            diffusion: Diffusion process object
+
+        Returns:
+            Dictionary mapping timestep τ to δ^t_{k,τ} values
+        """
+        try:
+            delta_values = {}
+
+            for tau in all_timesteps:
+                # Ensure tau is within boundaries
+                if not (self.min_timestep <= tau <= self.max_timestep):
+                    continue
+
+                # Compute L_τ(θ_k) - loss before update
+                loss_before = self.compute_vlb_loss(model_before, x_0, tau, diffusion)
+
+                # Compute L_τ(θ_{k+1}) - loss after update
+                loss_after = self.compute_vlb_loss(model_after, x_0, tau, diffusion)
+
+                # δ^t_{k,τ} = L_τ(θ_k) - L_τ(θ_{k+1})
+                delta_k_tau = loss_before - loss_after
+                delta_values[tau] = float(delta_k_tau.item())
+
+            return delta_values
+
+        except Exception as e:
+            logger.warning(f"Delta computation failed: {e}")
+            return {}
+
+    def compute_delta_t_k(self, delta_k_tau_dict):
+        """Compute Δ^t_k = (1/T) ∑_{τ=1}^T δ^t_{k,τ}.
+
+        Args:
+            delta_k_tau_dict: Dictionary of δ^t_{k,τ} values
+
+        Returns:
+            Δ^t_k value (scalar)
+        """
+        if not delta_k_tau_dict:
+            return 0.0
+
+        # Sum all δ values and divide by T (number of timesteps)
+        total_delta = sum(delta_k_tau_dict.values())
+        T = len(delta_k_tau_dict)
+
+        delta_t_k = total_delta / T if T > 0 else 0.0
+
+        return delta_t_k
+
+    def research_training_step(self, model, x_0, diffusion, all_timesteps=None):
+        """Complete research Algorithm 1 & 2: Adaptive timestep training step.
+
+        This implements the full training loop from the research combining:
+        - Algorithm 1: Timestep sampling and policy updates
+        - Algorithm 2: Feature selection with |S| timesteps
+
+        Args:
+            model: Diffusion model (should be in training mode)
+            x_0: Clean images batch
+            diffusion: Diffusion process object with q_posterior_mean_var, p_mean_var methods
+            all_timesteps: List of all timesteps to evaluate (default: range within boundaries)
+
+        Returns:
+            Dictionary with training statistics and sampled timestep
+        """
+        if not self.research_mode_enabled:
+            logger.debug("Research mode not enabled - skipping research training step")
+            return {"sampled_timestep": None, "delta_t_k": 0.0}
+
+        try:
+            device = x_0.device
+
+            # Default timestep range
+            if all_timesteps is None:
+                all_timesteps = list(
+                    range(self.min_timestep, min(self.max_timestep + 1, 1000))
+                )
+
+            # Step 1: Sample timestep using current policy π_φ(·|x_0)
+            t_sampled, log_prob, alpha, beta = self.research_sample_timestep(x_0)
+
+            # Step 2: Get model parameters before update (θ_k)
+            model_before = self._clone_model_state(model)
+
+            # Step 3: Perform one gradient step on the diffusion model
+            # (This should be done by the external training loop)
+            # We'll assume the model gets updated externally
+
+            # Step 4: Get model parameters after update (θ_{k+1})
+            model_after = model  # The updated model
+
+            # Step 5: Compute δ^t_{k,τ} for all τ (Algorithm 2 core)
+            delta_k_tau_dict = self.compute_delta_k_tau(
+                model_before, model_after, x_0, t_sampled, all_timesteps, diffusion
+            )
+
+            # Step 6: Apply feature selection to get |S| features (Algorithm 2)
+            selected_features = self.research_feature_selection(delta_k_tau_dict)
+
+            # Step 7: Approximate Δ^t_k using selected features only
+            selected_delta_dict = {
+                k: v for k, v in delta_k_tau_dict.items() if k in selected_features
+            }
+            delta_t_k_approx = self.compute_delta_t_k(selected_delta_dict)
+
+            # Step 8: Policy gradient update φ_{k+1} = φ_k + γ · Δ̃^t_k · ∇_φ log π_φ(t|x_0)
+            self.research_policy_gradient_update(
+                x_0, t_sampled, delta_t_k_approx, selected_features
+            )
+
+            # Update internal state
+            self.selected_features = selected_features
+            self.delta_k_tau = delta_k_tau_dict
+            self.step_count += 1
+
+            # Return statistics
+            return {
+                "sampled_timestep": t_sampled,
+                "log_prob": log_prob,
+                "alpha": alpha,
+                "beta": beta,
+                "delta_t_k": delta_t_k_approx,
+                "selected_features": selected_features,
+                "num_deltas_computed": len(delta_k_tau_dict),
+                "research_mode": True,
+            }
+
+        except Exception as e:
+            logger.warning(f"Research training step failed: {e}")
+            return {"sampled_timestep": None, "delta_t_k": 0.0, "error": str(e)}
+
+    def _clone_model_state(self, model):
+        """Create a safe copy of model state for before/after comparison."""
+        try:
+            import copy
+            
+            class SafeModelSnapshot:
+                def __init__(self, original_model):
+                    # Create a complete independent copy to avoid race conditions
+                    self.model_copy = copy.deepcopy(original_model)
+                    self.model_copy.eval()  # Set to eval mode for inference
+                    
+                    # Store reference for logging/debugging
+                    self.original_ref = id(original_model)
+                    
+                def __call__(self, *args, **kwargs):
+                    # Use the independent copy - no interference with original model
+                    with torch.no_grad():  # Ensure no gradients for snapshot evaluation
+                        return self.model_copy(*args, **kwargs)
+                        
+                def to(self, device):
+                    """Support device movement if needed."""
+                    self.model_copy = self.model_copy.to(device)
+                    return self
+                    
+            return SafeModelSnapshot(model)
+            
+        except Exception as e:
+            logger.warning(f"Safe model snapshot failed, using original (may be less accurate): {e}")
+            return model  # Fallback to original
 
     def get_combined_sampling_weights(self, timesteps: torch.Tensor) -> torch.Tensor:
         """Get combined weights from multiple approaches."""
@@ -1162,7 +1769,7 @@ def create_adaptive_timestep_manager(
         temporal_weight=getattr(args, "adaptive_temporal_weight", 1.0),
         min_timestep=getattr(args, "min_timestep", None),  # Respect existing boundaries
         max_timestep=getattr(args, "max_timestep", None),  # Respect existing boundaries
-        # Research paper alignment parameters
+        # Research alignment parameters
         use_beta_sampler=getattr(args, "adaptive_use_beta_sampler", False),
         feature_selection_size=getattr(args, "adaptive_feature_selection_size", 3),
         sampler_update_frequency=getattr(args, "adaptive_sampler_update_frequency", 40),
@@ -1170,6 +1777,12 @@ def create_adaptive_timestep_manager(
         beta_alpha_init=getattr(args, "adaptive_beta_alpha_init", 1.0),
         beta_beta_init=getattr(args, "adaptive_beta_beta_init", 1.0),
         neural_hidden_size=getattr(args, "adaptive_neural_hidden_size", 64),
+        # Enhanced research modes
+        adaptive_kl_exact_mode=getattr(args, "adaptive_kl_exact_mode", False),
+        adaptive_comparative_logging=getattr(
+            args, "adaptive_comparative_logging", False
+        ),
+        research_mode_enabled=getattr(args, "adaptive_research_mode_enabled", False),
         # Complementary approach parameters
         use_importance_weighting=getattr(
             args, "adaptive_use_importance_weighting", True

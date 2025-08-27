@@ -735,7 +735,7 @@ def create_args_from_config(
     args.adaptive_detail_weight = config.get("adaptive_detail_weight", 1.0)
     args.adaptive_temporal_weight = config.get("adaptive_temporal_weight", 1.0)
 
-    # Research paper alignment parameters
+    # Research alignment parameters
     args.adaptive_use_beta_sampler = config.get("adaptive_use_beta_sampler", False)
     args.adaptive_feature_selection_size = config.get(
         "adaptive_feature_selection_size", 3
@@ -747,6 +747,15 @@ def create_args_from_config(
     args.adaptive_beta_alpha_init = config.get("adaptive_beta_alpha_init", 1.0)
     args.adaptive_beta_beta_init = config.get("adaptive_beta_beta_init", 1.0)
     args.adaptive_neural_hidden_size = config.get("adaptive_neural_hidden_size", 64)
+
+    # Enhanced research modes
+    args.adaptive_kl_exact_mode = config.get("adaptive_kl_exact_mode", False)
+    args.adaptive_comparative_logging = config.get(
+        "adaptive_comparative_logging", False
+    )
+    args.adaptive_research_mode_enabled = config.get(
+        "adaptive_research_mode_enabled", False
+    )
 
     # Complementary approach configuration
     args.adaptive_use_importance_weighting = config.get(

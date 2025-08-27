@@ -215,7 +215,7 @@ lr_scheduler_power = 1.0
 
 # Use a custom scheduler class (overrides lr_scheduler above). Either a torch scheduler name (e.g. "OneCycleLR")
 # or a fully-qualified import path (e.g. "torch.optim.lr_scheduler.StepLR"), kwargs come from lr_scheduler_args.
-lr_scheduler_type = "" 
+lr_scheduler_type = ""
 
 # Extra kwargs for the chosen scheduler as a list of key=value strings (parsed via Python literal_eval)
 # examples: lr_scheduler_args = 'T_max=100', lr_scheduler_args = 'step_rules=[(100,0.1),(300,0.01)]'
@@ -329,7 +329,7 @@ discrete_flow_shift = 3.0
 sigmoid_scale = 1.0
 
 # Bias for enhanced_sigmoid timestep sampling (only used when timestep_sampling = "enhanced_sigmoid")
-sigmoid_bias = 0.0 
+sigmoid_bias = 0.0
 
 # Center of bell_shaped distribution in [0.0, 1.0]; 0.95 ~ timestep 950
 # Only used when timestep_sampling = "bell_shaped"
@@ -368,21 +368,21 @@ logit_std = 1.0
 mode_scale = 1.29
 
 # set minimum time step for training (0~999, default is 0)
-min_timestep = 0 
+min_timestep = 0
 
 # Set maximum time step for training (1~1000, default is 1000)
-max_timestep = 1000 
+max_timestep = 1000
 
 # Enable pre-computed timestep distribution (default: false)
 # Uses a fixed, quantized distribution of t (reproducible) and takes precedence over num_timestep_buckets.
 # Supported for most timestep_sampling methods; unsupported methods fall back to on-the-fly sampling.
 # Distribution is sliced to [min_timestep, max_timestep] before sampling. Dataset-provided batch['timesteps']
 # are ignored when enabled.
-use_precomputed_timesteps = true 
+use_precomputed_timesteps = true
 
 # Number of buckets for the precomputed distribution (default: 10000)
 # Larger values = finer quantization of the target distribution. Key: 'precomputed_timestep_buckets'.
-precomputed_timestep_buckets = 10000 
+precomputed_timestep_buckets = 10000
 
 # Optional: override the base area used by flux/qwen/qinglong precompute (auto-inferred from height/width/latents if unset)
 # Helps make precomputed mid-shift match runtime behavior when image sizes are known ahead of time.
@@ -394,7 +394,7 @@ precomputed_timestep_buckets = 10000
 # Applies after the sampling method (uniform/sigmoid/shift/flux_shift/logsnr/etc) or mapped presampled values.
 # When dataset provides per-batch uniform t (see num_timestep_buckets), those are used first for mapping.
 # With precomputed timesteps enabled, the global distribution is sliced to min/max first; constraints still apply.
-preserve_distribution_shape = false 
+preserve_distribution_shape = false
 
 # Number of timestep buckets for training (default: None)
 # Dataset-side per-epoch uniform stratification of u in [0,1] to improve coverage on small datasets.
@@ -410,7 +410,7 @@ skip_extra_timestep_constraint = true
 timestep_constraint_epsilon = 1e-5
 
 # Round training timesteps to the nearest integer schedule step
-round_training_timesteps = true 
+round_training_timesteps = true
 
 # Fast rejection sampling
 fast_rejection_sampling = false
@@ -435,39 +435,39 @@ enable_adaptive_timestep_sampling = false
 
 # Core parameters
 # How much to focus on important timesteps (1.0-5.0)
-adaptive_focus_strength = 2.0         
+adaptive_focus_strength = 2.0
 
 # Steps before analysis begins (100-2000)
-adaptive_warmup_steps = 500            
+adaptive_warmup_steps = 500
 
 # Recent loss samples to analyze (100-5000)
-adaptive_analysis_window = 1000        
+adaptive_analysis_window = 1000
 
 # Standard deviation multiplier for detection (0.5-3.0)
-adaptive_importance_threshold = 1.5    
+adaptive_importance_threshold = 1.5
 
 # Steps between analysis updates (10-500)
-adaptive_update_frequency = 100        
+adaptive_update_frequency = 100
 
 # Timestep constraints
 # Minimum important timesteps (10-500)
-adaptive_min_timesteps = 50            
+adaptive_min_timesteps = 50
 
 # Maximum important timesteps (50-1000)
-adaptive_max_timesteps = 200           
+adaptive_max_timesteps = 200
 
 # Video-specific features
 # Enable video-specific categories
-adaptive_video_specific = true         
+adaptive_video_specific = true
 
 # Motion consistency weight (0.1-3.0)
-adaptive_motion_weight = 1.0           
+adaptive_motion_weight = 1.0
 
 # Detail preservation weight (0.1-3.0)
-adaptive_detail_weight = 1.0           
+adaptive_detail_weight = 1.0
 
 # Temporal coherence weight (0.1-3.0)
-adaptive_temporal_weight = 1.0         
+adaptive_temporal_weight = 1.0
 
 # Enable Beta distribution sampling methodology (default: false)
 # Uses paper's exact approach: neural network parameterized Beta distribution
@@ -477,7 +477,7 @@ adaptive_use_beta_sampler = false
 adaptive_feature_selection_size = 3
 
 # Sampler update frequency f_S (10-100)
-adaptive_sampler_update_frequency = 40
+adaptive_sampler_update_frequency = 100
 
 # Enable separate neural network for timestep sampling (default: false)
 adaptive_use_neural_sampler = false
@@ -524,6 +524,19 @@ adaptive_entropy_coefficient = 0.01
 
 # KL reward update frequency (5-100)
 adaptive_kl_update_frequency = 20
+
+# Pure KL divergence-based feature selection for exact research replication (default: false)
+# When enabled, automatically configures use_kl_reward_learning=true, use_beta_sampler=true, use_importance_weighting=false
+adaptive_kl_exact_mode = false
+
+# Enable comparative logging of KL vs importance approaches for research analysis (default: false)
+# Logs performance comparison between different feature selection methods
+adaptive_comparative_logging = false
+
+# Enable full research mode (Algorithm 1 & 2) for exact research replication (default: false)
+# When enabled, activates complete research methodology including policy gradient updates
+# Requires diffusion object with q_posterior_mean_var and p_mean_var methods
+adaptive_research_mode_enabled = false
 
 # =============================================================================
 # ⚠️ DISPERSIVE LOSS SETTINGS
@@ -745,7 +758,10 @@ control_video_save_dir = "tmp/control_videos"
 enable_reward_lora = false
 
 # List of prompts to use for reward training
-reward_prompts = ["a red spaceship flying in the sky", "a dog running in a park"]
+reward_prompts = [
+  "a red spaceship flying in the sky",
+  "a dog running in a park",
+]
 
 # Batch size for reward training
 reward_train_batch_size = 1
@@ -787,7 +803,7 @@ reward_backprop_strategy = "tail"
 reward_backprop_num_steps = 5
 
 # List of steps to backprop for reward training
-reward_backprop_step_list = [45,46,47,48,49]
+reward_backprop_step_list = [45, 46, 47, 48, 49]
 
 # Random start step for reward training
 reward_backprop_random_start_step = 0
@@ -888,7 +904,7 @@ use_unique_noise_per_batch = true
 enable_perceptual_snr = false
 
 # Max samples per validation step for perceptual SNR
-perceptual_snr_max_items = 4        
+perceptual_snr_max_items = 4
 
 # Temporal SSIM (adjacent-frame) validation
 enable_temporal_ssim = false
@@ -903,13 +919,13 @@ temporal_ssim_frame_stride = 1
 enable_lpips = false
 
 # Per-step cap for LPIPS validation
-lpips_max_items = 2            
+lpips_max_items = 2
 
 # Network for LPIPS validation (vgg|alex|squeeze)
-lpips_network = "vgg"          
+lpips_network = "vgg"
 
 # Subsample frames for speed
-lpips_frame_stride = 8         
+lpips_frame_stride = 8
 
 # Temporal LPIPS (adjacent-frame) validation
 enable_temporal_lpips = false
@@ -924,7 +940,7 @@ temporal_lpips_frame_stride = 2
 enable_flow_warped_ssim = false
 
 # Model for flow-warped SSIM validation (torchvision_raft_small|torchvision_raft_large)
-flow_warped_ssim_model = "torchvision_raft_small"  
+flow_warped_ssim_model = "torchvision_raft_small"
 
 # Per-step cap for flow-warped SSIM validation
 flow_warped_ssim_max_items = 2
@@ -951,7 +967,7 @@ fvd_frame_stride = 2
 enable_vmaf = false
 
 # Path to VMAF model (optional, empty = ffmpeg default model)
-vmaf_model_path = ""          
+vmaf_model_path = ""
 
 # Per-step cap for VMAF validation
 vmaf_max_items = 1
@@ -1135,10 +1151,10 @@ alternate_perf_postfix = true
 enable_attention_metrics = false
 
 # Interval to collect attention metrics (in steps)
-attention_metrics_interval = 100      
+attention_metrics_interval = 100
 
 # Maximum number of layers to collect attention metrics from, per step, collect from at most this many cross-attn layers
-attention_metrics_max_layers = 2      
+attention_metrics_max_layers = 2
 
 # Maximum number of queries to collect attention metrics from (subsample queries per head for bounded memory)
 attention_metrics_max_queries = 32
@@ -1324,7 +1340,7 @@ self_correction_clip_len = 32
 self_correction_batch_ratio = 0.2
 
 # Number of frames for generation
-self_correction_sample_steps = 16 
+self_correction_sample_steps = 16
 
 # Output width in pixels
 self_correction_width = 256
