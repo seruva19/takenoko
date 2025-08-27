@@ -631,6 +631,9 @@ class ValidationCore:
                                 enabled=False,
                             ):
                                 pred_latents = pred  # Already converted to float32
+                                # Ensure latents match VAE's dtype to avoid type mismatch
+                                vae_dtype = vae.dtype
+                                pred_latents = pred_latents.to(dtype=vae_dtype)
                                 decoded = vae.decode(
                                     pred_latents / getattr(vae, "scaling_factor", 1.0)
                                 )
@@ -639,9 +642,11 @@ class ValidationCore:
                                     if isinstance(decoded, list)
                                     else decoded
                                 )
+                            # Ensure both pred_frames and ref_frames are in float32 to avoid dtype mismatches
+                            pred_frames = pred_frames.to(torch.float32)
                             # Reference frames from batch
                             ref_frames = torch.stack(batch["pixels"], dim=0).to(
-                                device=pred_frames.device, dtype=pred_frames.dtype
+                                device=pred_frames.device, dtype=torch.float32
                             )
                             # Limit items for cost
                             b = min(
@@ -745,6 +750,9 @@ class ValidationCore:
                                 device_type=str(accelerator.device).split(":")[0],
                                 enabled=False,
                             ):
+                                # Ensure latents match VAE's dtype to avoid type mismatch
+                                vae_dtype = vae.dtype
+                                pred_latents = pred_latents.to(dtype=vae_dtype)
                                 decoded = vae.decode(
                                     pred_latents / getattr(vae, "scaling_factor", 1.0)
                                 )
@@ -753,8 +761,10 @@ class ValidationCore:
                                     if isinstance(decoded, list)
                                     else decoded
                                 )
+                            # Ensure both pred_frames and ref_frames are in float32 to avoid dtype mismatches
+                            pred_frames = pred_frames.to(torch.float32)
                             ref_frames = torch.stack(batch["pixels"], dim=0).to(
-                                device=pred_frames.device, dtype=pred_frames.dtype
+                                device=pred_frames.device, dtype=torch.float32
                             )
 
                             max_items = int(getattr(args, "lpips_max_items", 2))
@@ -859,6 +869,9 @@ class ValidationCore:
                                     device_type=str(accelerator.device).split(":")[0],
                                     enabled=False,
                                 ):
+                                    # Ensure latents match VAE's dtype to avoid type mismatch
+                                    vae_dtype = vae.dtype
+                                    pred_latents = pred_latents.to(dtype=vae_dtype)
                                     decoded = vae.decode(
                                         pred_latents
                                         / getattr(vae, "scaling_factor", 1.0)
@@ -868,8 +881,10 @@ class ValidationCore:
                                         if isinstance(decoded, list)
                                         else decoded
                                     )
+                            # Ensure both pred_frames and ref_frames are in float32 to avoid dtype mismatches
+                            pred_frames = pred_frames.to(torch.float32)
                             ref_frames = torch.stack(batch["pixels"], dim=0).to(
-                                device=pred_frames.device, dtype=pred_frames.dtype
+                                device=pred_frames.device, dtype=torch.float32
                             )
 
                             max_items = int(getattr(args, "temporal_ssim_max_items", 2))
@@ -948,6 +963,9 @@ class ValidationCore:
                                     device_type=str(accelerator.device).split(":")[0],
                                     enabled=False,
                                 ):
+                                    # Ensure latents match VAE's dtype to avoid type mismatch
+                                    vae_dtype = vae.dtype
+                                    pred_latents = pred_latents.to(dtype=vae_dtype)
                                     decoded = vae.decode(
                                         pred_latents
                                         / getattr(vae, "scaling_factor", 1.0)
@@ -957,6 +975,8 @@ class ValidationCore:
                                         if isinstance(decoded, list)
                                         else decoded
                                     )
+                            # Ensure pred_frames is in float32 to avoid dtype mismatches
+                            pred_frames = pred_frames.to(torch.float32)
 
                             max_items = int(
                                 getattr(args, "temporal_lpips_max_items", 2)
@@ -1057,6 +1077,9 @@ class ValidationCore:
                                     device_type=str(accelerator.device).split(":")[0],
                                     enabled=False,
                                 ):
+                                    # Ensure latents match VAE's dtype to avoid type mismatch
+                                    vae_dtype = vae.dtype
+                                    pred_latents = pred_latents.to(dtype=vae_dtype)
                                     decoded = vae.decode(
                                         pred_latents
                                         / getattr(vae, "scaling_factor", 1.0)
@@ -1066,6 +1089,8 @@ class ValidationCore:
                                         if isinstance(decoded, list)
                                         else decoded
                                     )
+                            # Ensure pred_frames is in float32 to avoid dtype mismatches
+                            pred_frames = pred_frames.to(torch.float32)
                             # Use only the prediction frames; warp t->t+1 and compare to t+1
                             max_items = int(
                                 getattr(args, "flow_warped_ssim_max_items", 2)
@@ -1180,6 +1205,9 @@ class ValidationCore:
                                     device_type=str(accelerator.device).split(":")[0],
                                     enabled=False,
                                 ):
+                                    # Ensure latents match VAE's dtype to avoid type mismatch
+                                    vae_dtype = vae.dtype
+                                    pred_latents = pred_latents.to(dtype=vae_dtype)
                                     decoded = vae.decode(
                                         pred_latents
                                         / getattr(vae, "scaling_factor", 1.0)
@@ -1189,8 +1217,10 @@ class ValidationCore:
                                         if isinstance(decoded, list)
                                         else decoded
                                     )
+                            # Ensure both pred_frames and ref_frames are in float32 to avoid dtype mismatches
+                            pred_frames = pred_frames.to(torch.float32)
                             ref_frames = torch.stack(batch["pixels"], dim=0).to(
-                                device=pred_frames.device, dtype=pred_frames.dtype
+                                device=pred_frames.device, dtype=torch.float32
                             )
 
                             max_items = int(getattr(args, "fvd_max_items", 2))
@@ -1309,6 +1339,9 @@ class ValidationCore:
                                     device_type=str(accelerator.device).split(":")[0],
                                     enabled=False,
                                 ):
+                                    # Ensure latents match VAE's dtype to avoid type mismatch
+                                    vae_dtype = vae.dtype
+                                    pred_latents = pred_latents.to(dtype=vae_dtype)
                                     decoded = vae.decode(
                                         pred_latents
                                         / getattr(vae, "scaling_factor", 1.0)
@@ -1318,8 +1351,10 @@ class ValidationCore:
                                         if isinstance(decoded, list)
                                         else decoded
                                     )
+                            # Ensure both pred_frames and ref_frames are in float32 to avoid dtype mismatches
+                            pred_frames = pred_frames.to(torch.float32)
                             ref_frames = torch.stack(batch["pixels"], dim=0).to(
-                                device=pred_frames.device, dtype=pred_frames.dtype
+                                device=pred_frames.device, dtype=torch.float32
                             )
 
                             max_items = int(getattr(args, "vmaf_max_items", 1))
