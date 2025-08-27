@@ -569,6 +569,9 @@ class ValidationCore:
                     # Model returns a list of output tensors; stack them for consistent processing
                     pred = torch.stack(pred, dim=0)
 
+                    # Convert predictions to float32 to avoid dtype mismatches in loss calculations and metrics
+                    pred = pred.to(torch.float32)
+
                     # Calculate both velocity and direct noise prediction losses
 
                     # 1. Velocity prediction (existing approach)
@@ -627,7 +630,7 @@ class ValidationCore:
                                 device_type=str(accelerator.device).split(":")[0],
                                 enabled=False,
                             ):
-                                pred_latents = pred.to(torch.float32)
+                                pred_latents = pred  # Already converted to float32
                                 decoded = vae.decode(
                                     pred_latents / getattr(vae, "scaling_factor", 1.0)
                                 )
@@ -731,13 +734,13 @@ class ValidationCore:
                                     net=net_name,
                                     pretrained=True,
                                     version="0.1",  # Use latest version like reference implementation
-                                ).to(accelerator.device)
+                                ).to(accelerator.device, dtype=torch.float32)
                                 self._lpips_net.eval()
                                 logger.info(
                                     f"Initialized LPIPS with {net_name} network"
                                 )
 
-                            pred_latents = pred.detach().to(torch.float32)
+                            pred_latents = pred.detach()  # Already converted to float32
                             with torch.autocast(
                                 device_type=str(accelerator.device).split(":")[0],
                                 enabled=False,
@@ -849,7 +852,9 @@ class ValidationCore:
                         try:
                             # Reuse decoded frames if available; else decode now
                             if "pred_frames" not in locals():
-                                pred_latents = pred.detach().to(torch.float32)
+                                pred_latents = (
+                                    pred.detach()
+                                )  # Already converted to float32
                                 with torch.autocast(
                                     device_type=str(accelerator.device).split(":")[0],
                                     enabled=False,
@@ -932,11 +937,13 @@ class ValidationCore:
 
                                 self._lpips_net = lpips.LPIPS(
                                     net=net_name, pretrained=True, version="0.1"
-                                ).to(accelerator.device)
+                                ).to(accelerator.device, dtype=torch.float32)
                                 self._lpips_net.eval()
 
                             if "pred_frames" not in locals():
-                                pred_latents = pred.detach().to(torch.float32)
+                                pred_latents = (
+                                    pred.detach()
+                                )  # Already converted to float32
                                 with torch.autocast(
                                     device_type=str(accelerator.device).split(":")[0],
                                     enabled=False,
@@ -1038,12 +1045,14 @@ class ValidationCore:
                                 self._raft_model = (
                                     torchvision.models.optical_flow.raft_small(
                                         weights=weights
-                                    ).to(accelerator.device)
+                                    ).to(accelerator.device, dtype=torch.float32)
                                 )
                                 self._raft_model.eval()
 
                             if "pred_frames" not in locals():
-                                pred_latents = pred.detach().to(torch.float32)
+                                pred_latents = (
+                                    pred.detach()
+                                )  # Already converted to float32
                                 with torch.autocast(
                                     device_type=str(accelerator.device).split(":")[0],
                                     enabled=False,
@@ -1156,7 +1165,7 @@ class ValidationCore:
                                 # Simple choice: r3d_18 pretrained on Kinetics; acts as a video feature extractor
                                 self._fvd_backbone = torchvision.models.video.r3d_18(
                                     weights=torchvision.models.video.R3D_18_Weights.DEFAULT
-                                ).to(accelerator.device)
+                                ).to(accelerator.device, dtype=torch.float32)
                                 self._fvd_backbone.eval()
                                 # Strip classifier to get penultimate features
                                 if hasattr(self._fvd_backbone, "fc"):
@@ -1164,7 +1173,9 @@ class ValidationCore:
 
                             # Ensure decoded frames
                             if "pred_frames" not in locals():
-                                pred_latents = pred.detach().to(torch.float32)
+                                pred_latents = (
+                                    pred.detach()
+                                )  # Already converted to float32
                                 with torch.autocast(
                                     device_type=str(accelerator.device).split(":")[0],
                                     enabled=False,
@@ -1291,7 +1302,9 @@ class ValidationCore:
                             import tempfile, os, subprocess
 
                             if "pred_frames" not in locals():
-                                pred_latents = pred.detach().to(torch.float32)
+                                pred_latents = (
+                                    pred.detach()
+                                )  # Already converted to float32
                                 with torch.autocast(
                                     device_type=str(accelerator.device).split(":")[0],
                                     enabled=False,
