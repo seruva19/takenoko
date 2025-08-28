@@ -37,7 +37,7 @@ from wan.modules.vae import WanVAE
 from utils.tread import TREADRouter
 
 # Import all our refactored components
-from core.config import TrainerConfig
+from core.trainer_config import TrainerConfig
 from core.optimizer_manager import OptimizerManager
 from core.model_manager import ModelManager
 from core.sampling_manager import SamplingManager
@@ -123,7 +123,7 @@ class WanNetworkTrainer:
         self.reward_training_core = RewardTrainingCore(self.config)
 
         # Initialize adaptive timestep sampling if available
-        if hasattr(args, 'enable_adaptive_timestep_sampling'):
+        if hasattr(args, "enable_adaptive_timestep_sampling"):
             try:
                 self.training_core.initialize_adaptive_timestep_sampling(args)
             except Exception as e:
