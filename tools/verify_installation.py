@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+
 """
 Test script to verify Takenoko installation
 """

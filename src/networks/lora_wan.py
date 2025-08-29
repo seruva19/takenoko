@@ -1,5 +1,3 @@
-## Based on: https://github.com/kohya-ss/musubi-tuner/blob/main/src/musubi_tuner/networks/lora.py (Apache)
-
 # LoRA network module: currently conv2d is not fully supported
 # reference:
 # https://github.com/microsoft/LoRA/blob/main/loralib/layers.py

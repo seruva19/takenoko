@@ -1,5 +1,3 @@
-## Based on: https://github.com/ostris/ai-toolkit/blob/main/toolkit/optimizers/prodigy_8bit.py (MIT)
-
 import math
 import torch
 import torch.distributed as dist

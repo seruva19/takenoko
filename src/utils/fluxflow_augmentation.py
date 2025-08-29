@@ -1,5 +1,3 @@
-## Based on: https://arxiv.org/abs/2503.15417
-
 import torch
 import random
 import logging

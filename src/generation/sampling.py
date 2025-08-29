@@ -1,5 +1,3 @@
-## Based on: https://github.com/kohya-ss/musubi-tuner/blob/main/src/musubi_tuner/hv_generate_video.py (Apache)
-
 import os
 from typing import Union
 

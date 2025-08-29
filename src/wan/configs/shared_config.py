@@ -1,5 +1,3 @@
-## Based on: https://github.com/kohya-ss/musubi-tuner/blob/main/src/musubi_tuner/wan/configs/shared_config.py (Apache)
-
 # Copyright 2024-2025 The Alibaba Wan Team Authors. All rights reserved.
 import torch
 from easydict import EasyDict

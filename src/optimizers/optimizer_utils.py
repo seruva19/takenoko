@@ -1,5 +1,3 @@
-## Based on: https://github.com/tdrussell/diffusion-pipe/blob/main/optimizers/optimizer_utils.py (MIT)
-
 # Copied from AI Toolkit.
 
 # MIT License

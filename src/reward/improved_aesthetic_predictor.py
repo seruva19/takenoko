@@ -1,5 +1,3 @@
-## Based on https://github.com/aigc-apps/VideoX-Fun/blob/main/videox_fun/reward/improved_aesthetic_predictor.py (Apache)
-
 import os
 
 import torch

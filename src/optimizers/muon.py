@@ -1,5 +1,3 @@
-## Based on: https://github.com/KellerJordan/Muon/blob/master/muon.py (MIT)
-
 import torch
 import torch.distributed as dist
 

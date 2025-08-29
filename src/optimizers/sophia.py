@@ -1,5 +1,3 @@
-## Based on: https://github.com/Liuhong99/Sophia/blob/main/sophia.py (MIT)
-
 import math
 import torch
 from torch import Tensor

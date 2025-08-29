@@ -1,7 +1,3 @@
-## Based on: https://github.com/kohya-ss/musubi-tuner/blob/main/src/musubi_tuner/hv_train_network.py (Apache)
-## Based on: https://github.com/kohya-ss/musubi-tuner/blob/main/src/musubi_tuner/wan_train_network.py (Apache)
-## Based on: https://github.com/spacepxl/WanTraining/blob/main/train_wan_lora.py (Apache)
-
 """Control signal processing for control LoRA training.
 
 This module handles all control LoRA signal processing, preprocessing, and video saving.

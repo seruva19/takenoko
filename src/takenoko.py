@@ -1,5 +1,3 @@
-## Based on: https://github.com/kohya-ss/musubi-tuner/blob/main/src/musubi_tuner/wan_train_network.py (Apache)
-
 import argparse
 import logging
 import torch

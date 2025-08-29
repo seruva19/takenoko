@@ -1,6 +1,3 @@
-## Based on: https://github.com/kohya-ss/musubi-tuner/blob/main/src/musubi_tuner/wan/modules/attention.py (Apache)
-## based on: https://github.com/gen-ai-team/Wan2.1-NABLA (Apache)
-
 # Copyright 2024-2025 The Alibaba Wan Team Authors. All rights reserved.
 from typing import Optional, List
 import torch

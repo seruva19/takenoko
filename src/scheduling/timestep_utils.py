@@ -1,5 +1,3 @@
-## Based on: https://github.com/kohya-ss/musubi-tuner/blob/main/src/musubi_tuner/hv_train_network.py (Apache)
-
 """Timestep utilities for diffusion model training.
 
 This module consolidates all timestep-related functionality including:

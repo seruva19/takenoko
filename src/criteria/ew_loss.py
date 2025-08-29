@@ -1,5 +1,3 @@
-# Based on: https://github.com/Anzhc/Timestep-Attention-and-other-shenanigans/blob/main/Code/EW_loss.py (AGPL-3.0)
-
 import torch
 import torch.nn.functional as F
 

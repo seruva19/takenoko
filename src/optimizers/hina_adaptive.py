@@ -1,5 +1,3 @@
-## Based on: https://github.com/hinablue/sd-scripts/blob/sd3-hina/library/hina_adaptive.py (Apache)
-
 import torch
 import torch.nn as nn
 from typing import Any, Dict, List, Tuple, Optional

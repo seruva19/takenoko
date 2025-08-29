@@ -1,5 +1,3 @@
-## Based on: https://github.com/bghira/SimpleTuner/blob/main/helpers/training/optimizers/soap/__init__.py (AGPLv3)
-
 import torch
 import torch.nn as nn
 import torch.optim as optim

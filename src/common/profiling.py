@@ -1,11 +1,10 @@
-## Based on https://github.com/Sarania/blissful-tuner/blob/main/src/blissful_tuner/profiling.py (Apache 2.0)
-
 """
 Profiling stuff written by AI to help track whats using up our VRAM
 Created on Tue Aug 19 18:11:14 2025
 
 @author: blyss
 """
+
 import inspect
 import json
 from collections import defaultdict

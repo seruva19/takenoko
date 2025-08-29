@@ -1,5 +1,3 @@
-## Based on: https://github.com/kohya-ss/musubi-tuner/blob/main/src/musubi_tuner/utils/lora_utils.py (Apache)
-
 import os
 import re
 from typing import Dict, List, Optional, Union

@@ -1,5 +1,3 @@
-## Based on: https://arxiv.org/abs/2410.03160
-
 import argparse
 import torch
 from typing import Tuple, Any

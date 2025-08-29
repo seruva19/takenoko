@@ -1,5 +1,3 @@
-## Based on: https://github.com/kohya-ss/musubi-tuner/blob/main/src/musubi_tuner/cache_text_encoder_outputs.py (Apache)
-
 import argparse
 import os
 from typing import Optional, Union

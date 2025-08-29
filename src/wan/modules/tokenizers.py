@@ -1,5 +1,3 @@
-## Based on: https://github.com/kohya-ss/musubi-tuner/blob/main/src/musubi_tuner/wan/modules/tokenizers.py (Apache)
-
 # Copyright 2024-2025 The Alibaba Wan Team Authors. All rights reserved.
 import html
 import string

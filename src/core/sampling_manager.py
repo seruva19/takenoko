@@ -1,6 +1,3 @@
-## Based on: https://github.com/kohya-ss/musubi-tuner/blob/main/src/musubi_tuner/hv_train_network.py (Apache)
-## Based on: https://github.com/kohya-ss/musubi-tuner/blob/main/src/musubi_tuner/wan_train_network.py (Apache)
-
 """Sampling and inference management for WAN network trainer.
 
 This module handles all image/video sampling, inference, and related functionality.

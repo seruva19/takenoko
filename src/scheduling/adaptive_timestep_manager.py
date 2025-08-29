@@ -1,5 +1,3 @@
-## Based on https://arxiv.org/abs/2411.09998 and https://github.com/ku-dmlab/Adaptive-Timestep-Sampler (MIT)
-
 """Adaptive Timestep Sampling implementation for diffusion model training.
 
 This module implements adaptive timestep sampling, a technique that identifies and focuses training
@@ -1541,30 +1539,32 @@ class AdaptiveTimestepManager:
         """Create a safe copy of model state for before/after comparison."""
         try:
             import copy
-            
+
             class SafeModelSnapshot:
                 def __init__(self, original_model):
                     # Create a complete independent copy to avoid race conditions
                     self.model_copy = copy.deepcopy(original_model)
                     self.model_copy.eval()  # Set to eval mode for inference
-                    
+
                     # Store reference for logging/debugging
                     self.original_ref = id(original_model)
-                    
+
                 def __call__(self, *args, **kwargs):
                     # Use the independent copy - no interference with original model
                     with torch.no_grad():  # Ensure no gradients for snapshot evaluation
                         return self.model_copy(*args, **kwargs)
-                        
+
                 def to(self, device):
                     """Support device movement if needed."""
                     self.model_copy = self.model_copy.to(device)
                     return self
-                    
+
             return SafeModelSnapshot(model)
-            
+
         except Exception as e:
-            logger.warning(f"Safe model snapshot failed, using original (may be less accurate): {e}")
+            logger.warning(
+                f"Safe model snapshot failed, using original (may be less accurate): {e}"
+            )
             return model  # Fallback to original
 
     def get_combined_sampling_weights(self, timesteps: torch.Tensor) -> torch.Tensor:

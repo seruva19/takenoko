@@ -1,5 +1,3 @@
-## Based on: https://github.com/kohya-ss/musubi-tuner/blob/main/src/musubi_tuner/wan/configs/wan_t2v_14B.py (Apache)
-
 # Copyright 2024-2025 The Alibaba Wan Team Authors. All rights reserved.
 from easydict import EasyDict
 

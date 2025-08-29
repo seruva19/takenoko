@@ -1,5 +1,3 @@
-## Based on https://github.com/Ada123-a/diffusion-pipe-TREAD (MIT)
-
 import torch
 from dataclasses import dataclass
 from typing import Optional, Any, cast

@@ -1,5 +1,3 @@
-## Based on https://github.com/TheDenk/wan2.1-dilated-controlnet/blob/main/train/train_controlnet.py (Apache)
-
 """Modular ControlNet for WAN, integrated with Takenoko's network system.
 
 This implementation provides a lightweight ControlNet that is compatible with

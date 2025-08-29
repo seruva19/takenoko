@@ -1,5 +1,3 @@
-## Based on https://github.com/aigc-apps/VideoX-Fun/blob/main/scripts/wan2.1_fun/train_reward_lora.py (Apache)
-
 """Reward LoRA network for WAN.
 
 This module intentionally reuses the standard LoRA implementation for WAN

@@ -1,5 +1,3 @@
-## Based on https://github.com/Sarania/blissful-tuner/blob/main/src/blissful_tuner/advanced_rope.py (Apache 2.0)
-
 """
 Created on Wed Apr 16 19:25:53 2025
 Advanced rope functions for Blissful Tuner extension
@@ -7,6 +5,7 @@ License: Apache 2.0
 
 @author: blyss
 """
+
 import torch
 import torch.nn as nn
 from einops import rearrange

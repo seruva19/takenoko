@@ -1,5 +1,3 @@
-## Based on: https://github.com/tdrussell/diffusion-pipe/blob/main/optimizers/gradient_release.py (MIT)
-
 import torch
 
 

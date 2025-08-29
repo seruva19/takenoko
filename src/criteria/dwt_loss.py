@@ -1,5 +1,3 @@
-## Based on: https://github.com/spacepxl/WanTraining/blob/main/utils/dwt_loss.py (Apache)
-
 import torch
 from pytorch_wavelets import DWTForward  # type: ignore
 

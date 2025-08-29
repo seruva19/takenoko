@@ -1,6 +1,5 @@
-## Based on https://github.com/aigc-apps/VideoX-Fun/blob/main/videox_fun/video_caption/utils/siglip_v2_5.py (Apache)
+# https://github.com/discus0434/aesthetic-predictor-v2-5/blob/3125a9e/src/aesthetic_predictor_v2_5/siglip_v2_5.py.
 
-# Borrowed from https://github.com/discus0434/aesthetic-predictor-v2-5/blob/3125a9e/src/aesthetic_predictor_v2_5/siglip_v2_5.py.
 import os
 from collections import OrderedDict
 from os import PathLike

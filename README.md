@@ -6,44 +6,59 @@
 <i>An opinionated, perpetual WIP project aimed at hacking WanVideo 2.1(2)-T2V-(A)14B LoRA training.</i>
 \
 \
-Initially based on the [musubi-tuner](https://github.com/kohya-ss/musubi-tuner) codebase, it is intended as a playground for experimenting with new ideas and testing various training features, including those that might ultimately turn out to be useless. The config file structure may change at any time, and some non-functioning options might still be present.
+It is intended as a playground for experimenting with new ideas and testing various training features, including some that might ultimately turn out to be useless. The configuration file structure may change at any time, and some non-functioning options may still be present. <b>It only supports Wan2.1-T2V-14B and Wan2.2-T2V-A14B LoRA training.</b>
 
-<h3>📜 History</h3>
+<h3>☄️ Disclaimer</h3>
 
-I originally planned to write a [WanVideo](https://huggingface.co/Wan-AI) trainer from scratch, but quickly realized I (for now) lack the knowledge to finish it <i>in a reasonable timeframe</i>. So I decided to start from [musubi-tuner](https://github.com/kohya-ss/musubi-tuner) instead, since  it is simple, easy to modify, and fun to work with. That way, I could focus more on experimentation and learning.
+This project would not have been possible without [musubi-tuner](https://github.com/kohya-ss/musubi-tuner). Although extensively refactored and reworked, the original project provided the foundation on which Takenoko was built. By reusing an existing and proven codebase, I was able to focus more on experimentation and learning instead of reinventing the wheel. Thanks to [kohya-ss](https://github.com/kohya-ss/) for the awesome work. 
 
-I stripped out everything unrelated to Wan2.1-T2V-14B training and some other functions I don't need, refactored the code to my liking, added quality-of-life features I wanted (such as automatic TensorBoard logging, validation dataset support, MSE loss calculation, auto-resume training, experimental optimizers, more extensive logging, a single config file, a unified dialog-based training routine) and a lot of other experimental stuff. Some features I've added may be questionable in usefulness, and I haven't even tested them all yet.
+<h3>☄️ Docs</h3>
 
-<h3>📜 Installation (Windows)</h3>
+Since this project is mostly aimed at personal use and is in a state of constant improvement (without guaranteeing backwards compatibility), it probably won't have comprehensive documentation in the near future (unless it somehow becomes popular, which I hope it does not). I've tried to provide detailed comments in the config template, but they can't cover everything. As a workaround, I recommend using [repomix](https://repomix.com/) to compress the entire repository into a single XML AI-readable file (will take around 400K tokens), then feeding it into the free Gemini 2.5 Pro with 1M context window (in [Google AI Studio](https://aistudio.google.com/)) and asking questions about various aspects of the project.
+
+<h3>☄️ Quick Start (Windows)</h3>
 
 1. Clone the repository.
 2. Run `install.bat`.
+3. Create configuration file (you can copy sample config from `configs/examples` folder).
+4. Place it into the `configs` directory.
+5. Launch `run_trainer.bat` and follow the instructions.
 
-<h3>📜 Quick Start</h3>
+<h3>☄️ License</h3>
 
-1. Create configuration file (you can copy sample config from `configs/examples` folder).
-2. Place it into the `configs` directory.
-3. Launch `run_trainer.bat` and follow the instructions.
+Takenoko borrows code from various sources, which use different types of licenses, mostly Apache 2.0, MIT, and AGPLv3. Since AGPLv3 is a strong copyleft license, including any AGPLv3 code likely means the entire project must be released under AGPLv3. This understanding is based on publicly available licensing information.
 
-<h3>📜 Docs</h3>
+<h3>☄️ Acknowledgments</h3>
 
-This is a personal project and probably won't have in the nearest future comprehensive docs (unless it somehow becomes popular). I've tried to provide detailed comments in the config template, but it can't cover eveything. As a workaround, I recommend using [repomix](https://github.com/yamadashy/repomix) to compress the whole repository into a single XML AI-readable file (will take around 400K tokens), then feeding it into the free Gemini 2.5 Pro with 1M context window (in [Google AI Studio](https://aistudio.google.com/)) and asking questions about various aspects of the project.
+Takenoko draws inspiration from and incorporates code, ideas, and techniques from various open-source projects and publications. I thank the authors and maintainers for their contributions. Below is a list of all sources and papers (in no particular order). I have tried to reference all sources, but if I happen to miss any (or if more specific credits are warranted), please let me know.
+\
+Keep in mind that work on some features is not yet complete due to time and hardware constraints. If a feature is not working or is not implemented exactly as in the original work, all responsibility lies with my implementation, not with the authors of the original code or paper.
 
-<h3>📜 Q&A</h3>
-
-**❓ Does it only support Wan2.1-T2V-14B/Wan2.2-T2V-A14B LoRA training?**  
-✔️ YES. 
-
-**❓ Why not just fork and contribute to [musubi-tuner](https://github.com/kohya-ss/musubi-tuner)?**  
-✔️ There are several reasons. First, [musubi-tuner](https://github.com/kohya-ss/musubi-tuner) supports multiple models I don't use (HunyuanVideo, Wan2.2-I2V-A14B, Wan2.2-5B, Wan2.1-1.3B, Wan2.1-I2V-14B, FunControl, Framepack), which makes modifying the code harder. Second, I want to understand video model training in depth, and the best way is to dissect and rebuild an existing project "from the inside". Third, I often want to test ideas or implement things from papers that might break the main codebase, and PRs like that aren't likely to be merged quickly, so switching branches constantly would be annoying. Lastly, I wanted to use the cool logo you see above.
-
-**❓ Where else does this project steal code from?**  
-✔️ I draw <i>inspiration</i> and continue to learn from other projects, such as [AI Toolkit](https://github.com/ostris/ai-toolkit), [Diffusion Pipe](https://github.com/tdrussell/diffusion-pipe), [Simple Tuner](https://github.com/bghira/SimpleTuner), and multiple [arxiv](https://arxiv.org/) papers I can barely understand. I try to reference all sources at the top of code files - if I missed any, let me know.
-
-<h3>📜 License</h3>
-
-This project incorporates code from multiple open-source projects (mostly [musubi-tuner](https://github.com/kohya-ss/musubi-tuner)), which use Apache 2.0, MIT and AGPLv3 licenses. Since AGPLv3 is a strong copyleft license, including any AGPLv3 code likely means the entire project must be released under AGPLv3. This is my understanding based on public licensing information.
-
-<h3>📜 Acknowledgments</h3>
-
-This project would not be possible without [musubi-tuner](https://github.com/kohya-ss/musubi-tuner) project by [kohya-ss](https://github.com/kohya-ss/). Although extensively refactored and adapted, the original work provided the foundation on which Takenoko was built. Thanks to [kohya-ss](https://github.com/kohya-ss/) for the awesome work.  
+| Source | Type | What was borrowed | Author(s) | License | Comment |
+|--------|------|---------|---------|---------|---------|
+| [musubi-tuner](https://github.com/kohya-ss/musubi-tuner) | repo | - Original codebase | [kohya-ss](https://github.com/kohya-ss) | Apache 2.0 | <sub>Takenoko started on top of musubi-tuner, but the codebase was changed to the point that no upstream merge is possible</sub> |
+| [blissful-tuner](https://github.com/Sarania/blissful-tuner) | repo | - Several optimization techniques | [Sarania](https://github.com/Sarania) | Apache 2.0 | |
+| [diffusion-pipe](https://github.com/tdrussell/diffusion-pipe) | repo | - Pre-computed timestep distribution algorithm<br>- AdamW8bitKahan optimizer<br> | [tdrussell](https://github.com/tdrussell) | MIT | |
+| [WanTraining](https://github.com/spacepxl/WanTraining) | repo | - Control LoRA training<br>- DWT loss | [spacepxl](https://github.com/spacepxl) | Apache 2.0 | |
+| [ai-toolkit](https://github.com/ostris/ai-toolkit) | repo | - Differential output preservation<br>- Adafactor optimizer<br>- Prodigy 8-bit optimizer<br>- Automagic optimizer<br>- EMA | [ostris](https://github.com/ostris) | MIT | <sub>Automagic optimizer implementation with modifications by [tdrussell](https://github.com/tdrussell)</sub> |
+| [musubi-tuner (pr)](https://github.com/kohya-ss/musubi-tuner/pull/63) | repo | - Initial implementation of validation datasets | [NSFW-API](https://github.com/NSFW-API) | Apache 2.0 | |
+| [Timestep-Attention-and-other-shenanigans](https://github.com/Anzhc/Timestep-Attention-and-other-shenanigans) | repo | - Clustered MSE Loss<br>- EW loss | [Anzhc](https://github.com/Anzhc) | AGPL-3.0 | |
+| [Diffuse and Disperse: Image Generation with Representation Regularization](https://arxiv.org/abs/2506.09027v1) | paper | - Dispersive loss | Runqian Wang, Kaiming He | CC BY 4.0 | |
+| [sd-scripts](https://github.com/kohya-ss/sd-scripts) | repo | - Regularization datasets | [kohya-ss](https://github.com/kohya-ss) | Apache 2.0 | |
+| [wan2.1-dilated-controlnet](https://github.com/TheDenk/wan2.1-dilated-controlnet) | repo | - ControlNET training | [TheDenk](https://github.com/TheDenk) | Apache 2.0 | |
+| [T-LoRA](https://github.com/ControlGenAI/T-LoRA) | repo | - T-LoRA training | [ControlGenAI](https://github.com/ControlGenAI) | MIT | |
+| [sd-scripts (fork)](https://github.com/hinablue/sd-scripts) | repo | - Fourier loss<br>- HinaAdaptive optimizer | [hinablue](https://github.com/hinablue) | Apache 2.0 | |
+| [Muon](https://github.com/KellerJordan/Muon) | repo | - Muon optimizer | [KellerJordan](https://github.com/KellerJordan) | MIT | |
+| [Sana](https://github.com/NVlabs/Sana) | repo | - CAME 8-bit optimizer | [NVlabs](https://github.com/NVlabs) | Apache 2.0 | |
+| [SimpleTuner](https://github.com/bghira/SimpleTuner) | repo | - Routed TREAD<br>- SOAP optimizer | [bghira](https://github.com/bghira) | AGPL-3.0 | |
+| [diffusion-pipe (pr)](https://github.com/Ada123-a/diffusion-pipe-TREAD) | repo | - Frame-based TREAD | [Ada123-a](https://github.com/Ada123-a) | MIT |  |
+| [Representation Alignment for Generation: Training Diffusion Transformers Is Easier Than You Think](https://arxiv.org/abs/2410.06940) | paper | - Representation alignment method | Sihyun Yu, Sangkyung Kwak, Huiwon Jang, Jongheon Jeong, Jonathan Huang, Jinwoo Shin, Saining Xie | CC BY 4.0 | |
+| [Sophia](https://github.com/Liuhong99/Sophia) | repo | - Sophia optimizer | [Liuhong99](https://github.com/Liuhong99) | MIT | |
+| [Adaptive Non-Uniform Timestep Sampling for Diffusion Model Training](https://github.com/ku-dmlab/Adaptive-Timestep-Sampler) | repo | - Adaptive timestep sampling | [KU-DMLab](https://github.com/ku-dmlab) | MIT | <sub>see also [paper](https://arxiv.org/abs/2411.09998)</sub> |
+| [Temporal Regularization Makes Your Video Generator Stronger](https://arxiv.org/abs/2503.15417) | paper | - Temporal regularization via perturbation | Harold Haodong Chen, Haojian Huang, Xianfeng Wu, Yexin Liu, Yajing Bai, Wen-Jie Shu, Harry Yang, Ser-Nam Lim | arXiv 1.0 | |
+| [AR-Diffusion: Asynchronous Video Generation with Auto-Regressive Diffusion](https://arxiv.org/abs/2503.07418) | paper | - Frame-oriented Probability Propagation (FoPP) scheduler | Mingzhen Sun, Weining Wang, Gen Li, Jiawei Liu, Jiahui Sun, Wanquan Feng, Shanshan Lao, SiYu Zhou, Qian He, Jing Liu | arXiv 1.0 | |
+| [Redefining Temporal Modeling in Video Diffusion: The Vectorized Timestep Approach](https://arxiv.org/abs/2410.03160) | paper | - Vectorized timestep | Yaofang Liu, Yumeng Ren, Xiaodong Cun, Aitor Artola, Yang Liu, Tieyong Zeng, Raymond H. Chan, Jean-michel Morel | arXiv 1.0 | |
+| [Self Forcing: Bridging the Train-Test Gap in Autoregressive Video Diffusion](https://arxiv.org/abs/2506.08009) | paper | - Post-training autoregressive self-rollout method | Xun Huang, Zhengqi Li, Guande He, Mingyuan Zhou, Eli Shechtman | CC BY-NC-SA 4.0 | |
+| [Wan2.1-NABLA](https://github.com/gen-ai-team/Wan2.1-NABLA) | repo | - Dynamic sparse attention | [gen-ai-team](https://github.com/gen-ai-team) | Apache 2.0 | |
+| [VideoX-Fun](https://github.com/aigc-apps/VideoX-Fun) | repo | - Reward LoRA training | [aigc-apps](https://github.com/aigc-apps) | Apache 2.0 | |
+| [Fira](https://github.com/xichen-fy/Fira) | repo | - Fira optimizer | [xichen-fy](https://github.com/xichen-fy) | Apache 2.0 | |

@@ -1,5 +1,3 @@
-## Based on: https://github.com/ostris/ai-toolkit/blob/main/toolkit/optimizers/adafactor.py (MIT)
-
 import math
 from typing import List
 import torch

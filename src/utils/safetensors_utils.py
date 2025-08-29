@@ -1,5 +1,3 @@
-## Based on: https://github.com/kohya-ss/musubi-tuner/blob/main/src/musubi_tuner/utils/safetensors_utils.py (Apache)
-
 import os
 import re
 import torch

@@ -1,5 +1,3 @@
-## Based on https://github.com/Sarania/blissful-tuner (Apache 2.0)
-
 import torch
 import torch.nn as nn
 from typing import Optional

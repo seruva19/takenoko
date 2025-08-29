@@ -1,5 +1,3 @@
-## Based on: https://github.com/kohya-ss/musubi-tuner/blob/main/src/musubi_tuner/dataset/image_video_dataset.py (Apache)
-
 import logging
 from common.logger import get_logger
 from common.dependencies import setup_pillow_extensions

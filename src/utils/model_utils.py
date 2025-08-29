@@ -1,5 +1,3 @@
-## Based on: https://github.com/kohya-ss/musubi-tuner/blob/main/src/musubi_tuner/utils/model_utils.py (Apache)
-
 import hashlib
 from io import BytesIO
 from typing import Optional

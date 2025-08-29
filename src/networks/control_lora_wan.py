@@ -1,8 +1,5 @@
-## Based on: https://github.com/kohya-ss/musubi-tuner/blob/main/src/musubi_tuner/networks/lora.py (Apache)
-## Based on: https://github.com/spacepxl/WanTraining/blob/main/train_wan_lora.py (Apache)
-
-# Control LoRA network module for training with control signals
-# This extends the standard LoRA functionality to support control signal training
+"""Control LoRA network module for training with control signals
+This extends the standard LoRA functionality to support control signal training"""
 
 import ast
 from typing import Dict, List, Optional, Type, Union

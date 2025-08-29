@@ -1,6 +1,3 @@
-## Based on: https://github.com/kohya-ss/musubi-tuner/blob/main/src/musubi_tuner/wan/modules/model.py (Apache)
-## Based on: https://github.com/gen-ai-team/Wan2.1-NABLA/blob/main/wan/modules/model.py (Apache)
-
 # Copyright 2024-2025 The Alibaba Wan Team Authors. All rights reserved.
 import math
 from typing import Dict, List, Optional, Union

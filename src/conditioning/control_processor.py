@@ -1,5 +1,3 @@
-## Based on: https://github.com/spacepxl/WanTraining/blob/main/train_wan_lora.py (Apache)
-
 """
 Control signal processor for LoRA training.
 Handles different types of control signals like tile, canny, depth, etc.

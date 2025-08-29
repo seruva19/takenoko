@@ -1,5 +1,3 @@
-## Based on: https://github.com/kohya-ss/musubi-tuner/blob/main/src/musubi_tuner/dataset/image_video_dataset.py (Apache)
-
 from concurrent.futures import ThreadPoolExecutor
 import glob
 import os

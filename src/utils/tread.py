@@ -1,5 +1,3 @@
-## Based on https://github.com/bghira/SimpleTuner/blob/main/helpers/training/tread.py (AGPLv3)
-
 import torch
 from dataclasses import dataclass
 from typing import Optional, Any, cast
@@ -7,7 +5,7 @@ from typing import Optional, Any, cast
 
 @dataclass
 class MaskInfo:
-    """Book‑keeping for one TREAD routing window."""
+    """Book-keeping for one TREAD routing window."""
 
     mask: torch.Tensor  # bool tensor, True where token was dropped
     ids_keep: torch.Tensor  # long tensor (B, num_keep)

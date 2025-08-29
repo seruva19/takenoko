@@ -1,5 +1,3 @@
-## Based on https://github.com/aigc-apps/VideoX-Fun/blob/main/videox_fun/reward/MPS/trainer/models/clip_model.py (Apache)
-
 from dataclasses import dataclass
 from transformers import CLIPModel as HFCLIPModel
 from transformers import AutoTokenizer

@@ -1,5 +1,3 @@
-## Based on: https://github.com/kohya-ss/musubi-tuner/blob/main/src/musubi_tuner/dataset/config_utils.py (Apache)
-
 import argparse
 from dataclasses import (
     asdict,

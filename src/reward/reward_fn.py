@@ -1,5 +1,3 @@
-## Based on https://github.com/aigc-apps/VideoX-Fun/blob/main/videox_fun/reward/reward_fn.py (Apache)
-
 import os
 from abc import ABC, abstractmethod
 

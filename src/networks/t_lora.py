@@ -1,5 +1,3 @@
-## Based on https://github.com/ControlGenAI/T-LoRA (MIT)
-
 import math
 from typing import Any, Dict, List, Optional, cast
 

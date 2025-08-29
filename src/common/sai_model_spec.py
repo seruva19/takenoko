@@ -1,6 +1,5 @@
-## Based on: https://github.com/kohya-ss/musubi-tuner/blob/main/src/musubi_tuner/utils/sai_model_spec.py (Apache)
+# https://github.com/Stability-AI/ModelSpec
 
-# based on https://github.com/Stability-AI/ModelSpec
 import datetime
 import hashlib
 from io import BytesIO
@@ -12,7 +11,6 @@ import logging
 from common.logger import get_logger
 
 logger = get_logger(__name__, level=logging.INFO)
-
 
 r"""
 # Metadata Example

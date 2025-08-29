@@ -1,5 +1,3 @@
-## Based on: https://github.com/ostris/ai-toolkit/blob/main/toolkit/ema.py (MIT)
-
 from __future__ import division
 from __future__ import unicode_literals
 

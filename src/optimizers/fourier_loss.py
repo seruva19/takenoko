@@ -1,5 +1,3 @@
-## Based on: https://github.com/hinablue/sd-scripts/blob/sd3-hina/library/fourier_loss.py (Apache)
-
 """
 Fourier loss function module
 

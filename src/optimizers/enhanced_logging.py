@@ -1,6 +1,3 @@
-## Based on: https://github.com/ostris/ai-toolkit/blob/main/toolkit/optimizers/prodigy_8bit.py (MIT)
-## Based on: https://github.com/tdrussell/diffusion-pipe/blob/main/optimizers/automagic.py (MIT)
-
 """Enhanced optimizer logging functionality.
 
 This module provides enhanced logging capabilities for specific optimizers that have

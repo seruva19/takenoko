@@ -1,6 +1,3 @@
-## Based on: https://github.com/kohya-ss/musubi-tuner/blob/main/src/musubi_tuner/hv_train_network.py (Apache)
-## Based on: https://github.com/kohya-ss/musubi-tuner/blob/main/src/musubi_tuner/wan_train_network.py (Apache)
-
 """Refactored WAN network trainer orchestrator.
 
 This is the main orchestrator class that coordinates all the refactored training components.

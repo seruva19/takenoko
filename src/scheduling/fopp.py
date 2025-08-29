@@ -1,11 +1,6 @@
-## Based on: https://arxiv.org/abs/2503.07418
-
 """
 FoPP (Frame-oriented Probability Propagation) scheduler and asynchronous noise application for AR-Diffusion training.
-
 Implements the algorithm from "AR-Diffusion: Asynchronous Video Generation with Auto-Regressive Diffusion".
-
-Author: [Your Name]
 """
 
 import numpy as np

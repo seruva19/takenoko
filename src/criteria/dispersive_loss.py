@@ -1,5 +1,3 @@
-## Based on https://arxiv.org/abs/2506.09027v1
-
 import torch
 
 

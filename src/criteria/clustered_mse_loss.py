@@ -1,5 +1,3 @@
-# Based on: https://github.com/Anzhc/Timestep-Attention-and-other-shenanigans/blob/main/Code/Clustered_MSE_loss.py (AGPL-3.0)
-
 import torch
 from sklearn.cluster import KMeans
 

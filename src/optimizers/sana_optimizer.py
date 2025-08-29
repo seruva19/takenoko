@@ -1,5 +1,3 @@
-## Based on: https://github.com/NVlabs/Sana/blob/main/diffusion/utils/optimizer.py (Apache)
-
 # Copyright 2024 NVIDIA CORPORATION & AFFILIATES
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

@@ -1,5 +1,3 @@
-## Based on: https://github.com/kohya-ss/musubi-tuner/blob/main/src/musubi_tuner/utils/train_utils.py (Apache)
-
 import argparse
 
 import os

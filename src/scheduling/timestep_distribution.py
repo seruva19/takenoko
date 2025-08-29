@@ -1,5 +1,3 @@
-## Based on: https://github.com/tdrussell/diffusion-pipe/commit/53f4fe7569eedce4ae3a877bbfcff7e784de1d53 (MIT)
-
 """Timestep distribution utilities for diffusion model training.
 
 This module provides pre-computed timestep distribution functionality for more consistent

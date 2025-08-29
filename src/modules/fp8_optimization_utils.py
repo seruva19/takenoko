@@ -1,5 +1,3 @@
-## Based on: https://github.com/kohya-ss/musubi-tuner/blob/main/src/musubi_tuner/modules/fp8_optimization_utils.py (Apache)
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F

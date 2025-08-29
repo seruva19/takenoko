@@ -1,5 +1,3 @@
-## Based on: https://github.com/kohya-ss/musubi-tuner/blob/main/src/musubi_tuner/dataset/image_video_dataset.py (Apache)
-
 import os
 from typing import Optional, Callable
 from typing import TYPE_CHECKING

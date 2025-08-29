@@ -1,5 +1,3 @@
-## Based on: https://github.com/tdrussell/diffusion-pipe/blob/main/optimizers/adamw_8bit.py (MIT)
-
 import torch
 import bitsandbytes
 import bitsandbytes.functional as F

@@ -4,7 +4,7 @@ import argparse
 import os
 from typing import Any, List, Optional
 
-import av  # type: ignore
+import av
 
 from dataset import config_utils
 from dataset.config_utils import BlueprintGenerator, ConfigSanitizer

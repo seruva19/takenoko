@@ -1,7 +1,5 @@
-## Based on: https://github.com/tdrussell/diffusion-pipe/blob/main/optimizers/automagic.py (MIT)
-
 # Copied from AI Toolkit.
-# I added Kahan summation for bfloat16 parameters.
+# I (tdrussell) added Kahan summation for bfloat16 parameters.
 
 # MIT License
 

@@ -1,5 +1,3 @@
-## Based on: https://github.com/kohya-ss/musubi-tuner/blob/main/src/musubi_tuner/modules/custom_offloading_utils.py (Apache)
-
 from concurrent.futures import ThreadPoolExecutor
 import gc
 import time

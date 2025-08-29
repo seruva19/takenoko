@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+
 """
 Extract original training configuration from safetensors metadata.
 

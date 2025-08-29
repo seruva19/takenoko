@@ -1,5 +1,3 @@
-## Based on https://github.com/aigc-apps/VideoX-Fun/blob/main/videox_fun/reward/MPS/trainer/models/cross_modeling.py (Apache)
-
 import torch
 from torch import einsum, nn
 import torch.nn.functional as F
