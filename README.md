@@ -26,11 +26,11 @@ Since this project is mostly aimed at personal use and is in a state of constant
 
 <h3>☄️ License</h3>
 
-Takenoko borrows code from various sources, which use different types of licenses, mostly Apache 2.0, MIT, and AGPLv3. Since AGPLv3 is a strong copyleft license, including any AGPLv3 code likely means the entire project must be released under AGPLv3. This understanding is based on publicly available licensing information.
+This project borrows code from various sources, which use different types of licenses, mostly Apache 2.0, MIT, and AGPLv3. Since AGPLv3 is a strong copyleft license, including any AGPLv3 code likely means the entire project must be released under AGPLv3. This understanding is based on publicly available licensing information.
 
 <h3>☄️ Acknowledgments</h3>
 
-Takenoko draws inspiration from and incorporates code, ideas, and techniques from various open-source projects and publications. I thank the authors and maintainers for their contributions. Below is a list of all sources and papers (in no particular order). I have tried to reference all sources, but if I happen to miss any (or if more specific credits are warranted), please let me know.
+Takenoko draws inspiration from and incorporates code, ideas, and techniques from various open-source projects and publications. I thank the authors and maintainers for their contributions. Below is a list of all sources and papers (in no particular order). I have tried to reference all sources, but if I happen to miss any (or if more specific credits are warranted), please let me know.  
 \
 Keep in mind that work on some features is not yet complete due to time and hardware constraints. If a feature is not working or is not implemented exactly as in the original work, all responsibility lies with my implementation, not with the authors of the original code or paper.
 

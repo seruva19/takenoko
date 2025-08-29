@@ -52,6 +52,9 @@ from core.validation_core import ValidationCore
 from criteria.dispersive_loss import dispersive_loss_info_nce
 from criteria.training_loss import TrainingLossComputer, LossComponents
 
+# Junction system
+from junctions.training_events import trigger_event
+
 # Adaptive timestep sampling
 try:
     from scheduling.adaptive_timestep_manager import (
@@ -833,6 +836,18 @@ class TrainingCore:
 
             accelerator.unwrap_model(network).on_epoch_start(transformer)
 
+            # Trigger epoch_start junction event
+            trigger_event(
+                "epoch_start",
+                args=args,
+                accelerator=accelerator,
+                epoch=epoch + 1,
+                transformer=transformer,
+                network=network,
+                global_step=global_step,
+                metadata=metadata
+            )
+
             # Calculate step offset when resuming in the middle of an epoch
             step_offset = 0
             if global_step > 0 and epoch == epoch_to_start:
@@ -869,6 +884,19 @@ class TrainingCore:
 
                 with accelerator.accumulate(training_model):
                     accelerator.unwrap_model(network).on_step_start()
+
+                    # Trigger step_start junction event
+                    trigger_event(
+                        "step_start",
+                        args=args,
+                        accelerator=accelerator,
+                        epoch=epoch + 1,
+                        step=step,
+                        global_step=global_step,
+                        batch=batch,
+                        latents=latents,
+                        network=network
+                    )
 
                     latents = self.scale_shift_latents(latents)
 
@@ -1017,6 +1045,21 @@ class TrainingCore:
                     if dual_model_manager is not None:
                         active_transformer = dual_model_manager.active_model
 
+                    # Trigger before_forward junction event
+                    trigger_event(
+                        "before_forward",
+                        args=args,
+                        accelerator=accelerator,
+                        latents=latents,
+                        batch=batch,
+                        noise=noise,
+                        noisy_model_input=noisy_model_input,
+                        timesteps=timesteps,
+                        network_dtype=network_dtype,
+                        transformer=active_transformer,
+                        weighting=weighting
+                    )
+
                     model_result = self.call_dit(
                         args,
                         accelerator,
@@ -1042,6 +1085,23 @@ class TrainingCore:
                         continue
 
                     model_pred, target, intermediate_z = model_result
+
+                    # Trigger after_forward junction event
+                    trigger_event(
+                        "after_forward",
+                        args=args,
+                        accelerator=accelerator,
+                        model_pred=model_pred,
+                        target=target,
+                        intermediate_z=intermediate_z,
+                        latents=latents,
+                        batch=batch,
+                        noise=noise,
+                        noisy_model_input=noisy_model_input,
+                        timesteps=timesteps,
+                        network_dtype=network_dtype,
+                        weighting=weighting
+                    )
 
                     # Loss will be computed later by centralized loss computer
 
@@ -1089,6 +1149,20 @@ class TrainingCore:
                         raft=getattr(self, "raft", None),
                         warp_fn=getattr(self, "warp", None),
                         adaptive_manager=self.adaptive_manager,
+                    )
+
+                    # Trigger after_loss_computation junction event
+                    trigger_event(
+                        "after_loss_computation",
+                        args=args,
+                        accelerator=accelerator,
+                        loss_components=loss_components,
+                        model_pred=model_pred,
+                        target=target,
+                        timesteps=timesteps,
+                        batch=batch,
+                        noise=noise,
+                        adaptive_manager=self.adaptive_manager
                     )
 
                     # Adaptive timestep sampling with gated research mode
@@ -1167,12 +1241,34 @@ class TrainingCore:
                             logger.debug(f"Error in adaptive timestep processing: {e}")
                             # Continue training without adaptive sampling
 
+                    # Trigger before_backward junction event
+                    trigger_event(
+                        "before_backward",
+                        args=args,
+                        accelerator=accelerator,
+                        loss_components=loss_components,
+                        model_pred=model_pred,
+                        target=target,
+                        network=network,
+                        global_step=global_step
+                    )
+
                     # Start backward pass timing
                     start_backward_pass_timing()
                     accelerator.backward(loss_components.total_loss)
 
                     # End backward pass timing
                     end_backward_pass_timing()
+
+                    # Trigger after_backward junction event
+                    trigger_event(
+                        "after_backward",
+                        args=args,
+                        accelerator=accelerator,
+                        loss_components=loss_components,
+                        network=network,
+                        global_step=global_step
+                    )
 
                     if accelerator.is_main_process:
                         # Check if ANY trainable parameter has a gradient
@@ -1200,6 +1296,15 @@ class TrainingCore:
                             logger.debug(f"⚠️ Failed to compute gradient norm: {e}")
 
                 if accelerator.sync_gradients:
+                    # Trigger before_gradient_clipping junction event
+                    trigger_event(
+                        "before_gradient_clipping",
+                        args=args,
+                        accelerator=accelerator,
+                        network=network,
+                        gradient_norm=gradient_norm,
+                        global_step=global_step
+                    )
                     # sync DDP grad manually
                     state = accelerate.PartialState()
                     if state.distributed_type != accelerate.DistributedType.NO:
@@ -1258,6 +1363,17 @@ class TrainingCore:
                     # End optimizer step timing
                     end_optimizer_step_timing()
 
+                    # Trigger after_optimizer_step junction event
+                    trigger_event(
+                        "after_optimizer_step",
+                        args=args,
+                        accelerator=accelerator,
+                        optimizer=optimizer,
+                        lr_scheduler=lr_scheduler,
+                        network=network,
+                        global_step=global_step
+                    )
+
                     # Update GGPO weight norms after parameter update
                     try:
                         if hasattr(network, "update_norms"):
@@ -1283,6 +1399,17 @@ class TrainingCore:
 
                     lr_scheduler.step()
                     optimizer.zero_grad(set_to_none=True)
+
+                    # Trigger after_sync_gradients junction event
+                    trigger_event(
+                        "after_sync_gradients",
+                        args=args,
+                        accelerator=accelerator,
+                        network=network,
+                        optimizer=optimizer,
+                        lr_scheduler=lr_scheduler,
+                        global_step=global_step
+                    )
 
                 if args.scale_weight_norms:
                     keys_scaled, mean_norm, maximum_norm = accelerator.unwrap_model(
@@ -1380,6 +1507,18 @@ class TrainingCore:
                                 epoch_for_naming = epoch + 1
                             # Otherwise, leave epoch_for_naming as None to use step-based naming
 
+                            # Trigger sampling_start junction event
+                            trigger_event(
+                                "sampling_start",
+                                args=args,
+                                accelerator=accelerator,
+                                epoch=epoch_for_naming,
+                                global_step=global_step,
+                                vae=vae,
+                                transformer=transformer,
+                                sample_parameters=sample_parameters
+                            )
+
                             sampling_manager.sample_images(
                                 accelerator,
                                 args,
@@ -1390,6 +1529,16 @@ class TrainingCore:
                                 sample_parameters,
                                 dit_dtype,
                             )
+
+                            # Trigger sampling_end junction event
+                            trigger_event(
+                                "sampling_end",
+                                args=args,
+                                accelerator=accelerator,
+                                epoch=epoch_for_naming,
+                                global_step=global_step
+                            )
+
                             # Track that sampling occurred at this step
                             last_sampled_step = global_step
 
@@ -1459,6 +1608,17 @@ class TrainingCore:
                                             e,
                                         )
 
+                            # Trigger validation_start junction event
+                            trigger_event(
+                                "validation_start",
+                                args=args,
+                                accelerator=accelerator,
+                                transformer=transformer,
+                                val_dataloader=val_dataloader,
+                                vae=val_vae_to_use,
+                                global_step=global_step
+                            )
+
                             val_loss = self.validation_core.validate(
                                 accelerator,
                                 transformer,
@@ -1471,6 +1631,15 @@ class TrainingCore:
                             )
                             self.validation_core.log_validation_results(
                                 accelerator, val_loss, global_step
+                            )
+
+                            # Trigger validation_end junction event
+                            trigger_event(
+                                "validation_end",
+                                args=args,
+                                accelerator=accelerator,
+                                val_loss=val_loss,
+                                global_step=global_step
                             )
 
                             # Unload temporary VAE if it was loaded for validation
@@ -1855,6 +2024,20 @@ class TrainingCore:
                     except Exception:
                         pass
 
+                # Trigger step_end junction event
+                trigger_event(
+                    "step_end",
+                    args=args,
+                    accelerator=accelerator,
+                    epoch=epoch + 1,
+                    step=step,
+                    global_step=global_step,
+                    current_loss=current_loss,
+                    avr_loss=avr_loss,
+                    network=network,
+                    batch_size=bsz
+                )
+
                 # End step timing
                 end_step_timing()
 
@@ -1925,6 +2108,18 @@ class TrainingCore:
                 and last_sampled_step != global_step
                 and sampling_manager
             ):
+                # Trigger sampling_start junction event
+                trigger_event(
+                    "sampling_start",
+                    args=args,
+                    accelerator=accelerator,
+                    epoch=epoch + 1,
+                    global_step=global_step,
+                    vae=vae,
+                    transformer=transformer,
+                    sample_parameters=sample_parameters
+                )
+
                 sampling_manager.sample_images(
                     accelerator,
                     args,
@@ -1934,6 +2129,15 @@ class TrainingCore:
                     transformer,
                     sample_parameters,
                     dit_dtype,
+                )
+
+                # Trigger sampling_end junction event
+                trigger_event(
+                    "sampling_end",
+                    args=args,
+                    accelerator=accelerator,
+                    epoch=epoch + 1,
+                    global_step=global_step
                 )
             if optimizer_train_fn:
                 optimizer_train_fn()
@@ -1953,6 +2157,17 @@ class TrainingCore:
                     global_step,
                 )
 
+                # Trigger validation_start junction event
+                trigger_event(
+                    "validation_start",
+                    args=args,
+                    accelerator=accelerator,
+                    transformer=transformer,
+                    val_dataloader=val_dataloader,
+                    vae=vae,
+                    global_step=global_step
+                )
+
                 val_loss = self.validation_core.validate(
                     accelerator,
                     transformer,
@@ -1966,6 +2181,15 @@ class TrainingCore:
                 self.validation_core.log_validation_results(
                     accelerator, val_loss, global_step, epoch + 1
                 )
+
+                # Trigger validation_end junction event
+                trigger_event(
+                    "validation_end",
+                    args=args,
+                    accelerator=accelerator,
+                    val_loss=val_loss,
+                    global_step=global_step
+                )
             elif val_dataloader is None:
                 accelerator.print(
                     f"\n[Epoch {epoch+1}] No validation dataset configured"
@@ -1976,6 +2200,17 @@ class TrainingCore:
                 accelerator.print(
                     f"\n[Epoch {epoch+1}] Validation already performed at step {global_step}"
                 )
+
+            # Trigger epoch_end junction event
+            trigger_event(
+                "epoch_end",
+                args=args,
+                accelerator=accelerator,
+                epoch=epoch + 1,
+                global_step=global_step,
+                network=network,
+                loss_recorder=loss_recorder
+            )
 
             # end of epoch
 
