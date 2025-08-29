@@ -951,7 +951,9 @@ flow_warped_ssim_frame_stride = 2
 # FVD (Fréchet Video Distance)
 enable_fvd = false
 
-# Model for FVD validation (torchvision_r3d_18|torchvision_i3d_r50|torchvision_i3d_r101)
+# Model for FVD validation (torchvision_r3d_18|reference_i3d)
+# - torchvision_r3d_18: Fast approximation using R3D-18 (current default)
+# - reference_i3d: Canonical implementation using I3D from TensorFlow Hub (more accurate but slower)
 fvd_model = "torchvision_r3d_18"
 
 # Per-step cap for FVD validation

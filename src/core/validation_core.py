@@ -1177,24 +1177,28 @@ class ValidationCore:
                                     "Flow-warped SSIM requested but validation batches lack 'pixels'; set load_val_pixels=true.",
                                 )
 
-                    # FVD (Fréchet Video Distance) using a lightweight video backbone
+                    # FVD (Fréchet Video Distance) using configurable backbone
                     if (
                         bool(getattr(args, "enable_fvd", False))
                         and vae is not None
                         and "pixels" in batch
                     ):
                         try:
-                            import torchvision
+                            from utils.fvd_metrics import create_fvd_metric
 
-                            if not hasattr(self, "_fvd_backbone"):
-                                # Simple choice: r3d_18 pretrained on Kinetics; acts as a video feature extractor
-                                self._fvd_backbone = torchvision.models.video.r3d_18(
-                                    weights=torchvision.models.video.R3D_18_Weights.DEFAULT
-                                ).to(accelerator.device, dtype=torch.float32)
-                                self._fvd_backbone.eval()
-                                # Strip classifier to get penultimate features
-                                if hasattr(self._fvd_backbone, "fc"):
-                                    self._fvd_backbone.fc = torch.nn.Identity()
+                            fvd_model_type = str(
+                                getattr(args, "fvd_model", "torchvision_r3d_18")
+                            )
+
+                            if (
+                                not hasattr(self, "_fvd_metric")
+                                or getattr(self, "_fvd_model_type", None)
+                                != fvd_model_type
+                            ):
+                                self._fvd_metric = create_fvd_metric(
+                                    fvd_model_type, accelerator.device, torch.float32
+                                )
+                                self._fvd_model_type = fvd_model_type
 
                             # Ensure decoded frames
                             if "pred_frames" not in locals():
@@ -1234,76 +1238,34 @@ class ValidationCore:
                                 rf = ref_frames[:b]
 
                                 # Build temporal clips (take first window with stride for speed)
-                                def to_backbone(x: torch.Tensor) -> torch.Tensor:
-                                    # torchvision video models expect [B,C,T,H,W] in [0,1], float32
-                                    return x.to(torch.float32)
+                                pf_clip = pf[:, :, 0 : 0 + clip_len : stride]
+                                rf_clip = rf[:, :, 0 : 0 + clip_len : stride]
 
-                                # Slice a single clip per item for a cheap estimate
-                                pf_clip = to_backbone(
-                                    pf[:, :, 0 : 0 + clip_len : stride]
-                                )
-                                rf_clip = to_backbone(
-                                    rf[:, :, 0 : 0 + clip_len : stride]
-                                )
+                                # Compute FVD using the selected metric
+                                fvd_val = self._fvd_metric.compute_fvd(rf_clip, pf_clip)
 
-                                with torch.no_grad():
-                                    pf_feat = self._fvd_backbone(pf_clip)
-                                    rf_feat = self._fvd_backbone(rf_clip)
-
-                                # Compute Fréchet distance between feature sets
-                                # Here we do a simple per-batch approximation: mean & cov across batch
-                                def mean_and_cov(
-                                    x: torch.Tensor,
-                                ) -> tuple[torch.Tensor, torch.Tensor]:
-                                    x2 = x.flatten(1)
-                                    mu = x2.mean(dim=0)
-                                    xc = x2 - mu
-                                    # Unbiased covariance can be expensive; use (1/N) for stability
-                                    cov = (xc.T @ xc) / max(x2.size(0), 1)
-                                    return mu, cov
-
-                                mu_p, cov_p = mean_and_cov(pf_feat)
-                                mu_r, cov_r = mean_and_cov(rf_feat)
-
-                                # FID-style distance: ||mu1 - mu2||^2 + Tr(C1 + C2 - 2*(C1*C2)^{1/2})
-                                diff = mu_p - mu_r
-                                diff_term = diff.dot(diff)
-                                # For numerical stability, skip the matrix sqrt and use trace(C1 + C2) - 2*trace_sqrt approx
-                                # We approximate trace_sqrt via eigen decomposition on CPU if small (fallback otherwise)
-                                try:
-                                    # Move small cov to CPU for eig if needed
-                                    C1 = cov_p.detach().cpu()
-                                    C2 = cov_r.detach().cpu()
-                                    import numpy as _np
-
-                                    w1, v1 = _np.linalg.eigh(C1.numpy())
-                                    w2, v2 = _np.linalg.eigh(C2.numpy())
-                                    # crude approx: trace_sqrt(C1*C2) ~ sum(sqrt(w1))*sum(sqrt(w2)) / dim
-                                    trace_sqrt_approx = float(
-                                        _np.sqrt(_np.maximum(w1, 0.0)).sum()
-                                        * _np.sqrt(_np.maximum(w2, 0.0)).sum()
-                                        / max(len(w1), 1)
-                                    )
-                                    cov_term = float(
-                                        C1.trace().item()
-                                        + C2.trace().item()
-                                        - 2.0 * trace_sqrt_approx
-                                    )
-                                except Exception:
-                                    cov_term = float(
-                                        cov_p.trace().item() + cov_r.trace().item()
-                                    )
-
-                                fvd_val = (diff_term + cov_term).to(accelerator.device)
                                 if "batch_fvd_vals" not in locals():
                                     batch_fvd_vals = []
-                                batch_fvd_vals.append(fvd_val.unsqueeze(0))
+                                batch_fvd_vals.append(
+                                    torch.tensor(
+                                        fvd_val, device=accelerator.device
+                                    ).unsqueeze(0)
+                                )
                         except ImportError as e:
                             if accelerator.is_main_process:
-                                self._warn_once(
-                                    "_warned_missing_torchvision",
-                                    f"FVD enabled but torchvision is not available ({e}). Install a matching torchvision build. Skipping.",
+                                fvd_model_type = str(
+                                    getattr(args, "fvd_model", "torchvision_r3d_18")
                                 )
+                                if fvd_model_type == "reference_i3d":
+                                    self._warn_once(
+                                        "_warned_missing_tensorflow",
+                                        f"Reference FVD enabled but TensorFlow/TF Hub is not available ({e}). Install tensorflow and tensorflow-hub. Skipping.",
+                                    )
+                                else:
+                                    self._warn_once(
+                                        "_warned_missing_torchvision",
+                                        f"FVD enabled but torchvision is not available ({e}). Install a matching torchvision build. Skipping.",
+                                    )
                             pass
                         except Exception as e:
                             if accelerator.is_main_process:
