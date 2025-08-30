@@ -1,19 +1,13 @@
-"""Core training logic for WAN network trainer.
-
+"""Core training logic for Takenoko.
 This module handles the main training loop, model calling, loss computation, and validation.
-Extracted from wan_network_trainer.py to improve code organization and maintainability.
 """
 
 import argparse
-import math
-import numpy as np
-import time
-from multiprocessing import Value
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple
 import torch
 from tqdm import tqdm
 import accelerate
-from accelerate import Accelerator, PartialState
+from accelerate import Accelerator
 import torch.nn.functional as F
 
 import logging
@@ -27,60 +21,65 @@ import scheduling.fvdm as fvdm
 from modules.scheduling_flow_match_discrete import FlowMatchDiscreteScheduler
 from utils.train_utils import (
     compute_loss_weighting_for_sd3,
-    get_sigmas,
-    clean_memory_on_device,
     should_sample_images,
     LossRecorder,
 )
 from scheduling.timestep_distribution import (
     TimestepDistribution,
-    should_use_precomputed_timesteps,
 )
 from scheduling.timestep_logging import (
     log_initial_timestep_distribution,
-    log_live_timestep_distribution,
-    log_loss_scatterplot,
     log_show_timesteps_figure_unconditional,
 )
 from scheduling.timestep_utils import (
     get_noisy_model_input_and_timesteps,
     initialize_timestep_distribution,
-    time_shift,
-    get_lin_function,
 )
 from core.validation_core import ValidationCore
-from criteria.dispersive_loss import dispersive_loss_info_nce
-from criteria.training_loss import TrainingLossComputer, LossComponents
+from criteria.training_loss import TrainingLossComputer
 
-# Junction system
 from junctions.training_events import trigger_event
 
-# Adaptive timestep sampling
-try:
-    from scheduling.adaptive_timestep_manager import (
-        AdaptiveTimestepManager,
-        create_adaptive_timestep_manager,
-    )
-except ImportError as e:
-    logger.warning(f"Could not import AdaptiveTimestepManager: {e}")
-    AdaptiveTimestepManager = None
-    create_adaptive_timestep_manager = None
-
-
-from scheduling.fopp import (
-    FoPPScheduler,
-    get_alpha_bar_schedule,
-    apply_asynchronous_noise,
+from core.handlers.logging_config import (
+    configure_advanced_logging as _configure_advanced_logging,
 )
-
-# Enhanced optimizer logging
-from optimizers.enhanced_logging import (
-    get_enhanced_metrics,
-    get_histogram_data,
-    is_supported,
+from core.handlers.adaptive_config import (
+    initialize_adaptive_timestep_sampling as _initialize_adaptive_timestep_sampling,
 )
+from core.handlers.misc import (
+    scale_shift_latents as _scale_shift_latents,
+    record_training_step as _record_training_step,
+    initialize_throughput_tracker as _initialize_throughput_tracker,
+)
+from core.handlers.ema_utils import (
+    validate_ema_beta,
+    configure_ema_from_args as _configure_ema_from_args,
+    update_ema_loss as _update_ema_loss,
+    update_iter_time_ema as _update_iter_time_ema,
+)
+from core.handlers.metrics_utils import (
+    generate_parameter_stats as _generate_parameter_stats,
+    should_generate_parameter_stats,
+    compute_per_source_loss as _compute_per_source_loss,
+    compute_gradient_norm as _compute_gradient_norm,
+)
+from core.handlers.progress_bar_handler import process_enhanced_progress_bar
+from core.handlers.logging_handler import collect_and_log_training_metrics
+from core.handlers.sampling_handler import (
+    handle_training_sampling_with_accelerator,
+    handle_epoch_end_sampling_with_accelerator,
+)
+from core.handlers.validation_handler import (
+    handle_step_validation,
+    handle_epoch_end_validation,
+)
+from core.handlers.saving_handler import (
+    handle_step_saving,
+    handle_epoch_end_saving,
+)
+from core.handlers.adaptive_handler import handle_adaptive_timestep_sampling
+from core.handlers.self_correction_handler import handle_self_correction_update
 
-# Performance logging
 from common.performance_logger import (
     start_step_timing,
     start_forward_pass_timing,
@@ -90,13 +89,6 @@ from common.performance_logger import (
     start_optimizer_step_timing,
     end_optimizer_step_timing,
     end_step_timing,
-    get_timing_metrics,
-    get_model_statistics,
-    get_hardware_metrics,
-    log_performance_summary,
-    configure_verbosity,
-    get_last_train_iter_ms,
-    get_last_total_step_ms,
 )
 
 
@@ -153,159 +145,53 @@ class TrainingCore:
 
     def set_ema_beta(self, beta: float) -> None:
         """Set the EMA smoothing factor. Higher values (closer to 1.0) = more smoothing."""
-        if not 0.0 < beta < 1.0:
-            raise ValueError("EMA beta must be between 0.0 and 1.0")
+        validate_ema_beta(beta)
         self.ema_beta = beta
         logger.info(f"EMA beta set to {beta}")
 
     def configure_ema_from_args(self, args: argparse.Namespace) -> None:
         """Configure EMA hyperparameters from args if provided."""
-        try:
-            if hasattr(args, "ema_loss_beta"):
-                self.set_ema_beta(float(args.ema_loss_beta))
-            if hasattr(args, "ema_loss_bias_warmup_steps"):
-                self.ema_bias_warmup_steps = int(args.ema_loss_bias_warmup_steps)
-        except Exception:
-            pass
+        ema_beta, ema_bias_warmup_steps = _configure_ema_from_args(args)
+        if ema_beta is not None:
+            self.set_ema_beta(ema_beta)
+        if ema_bias_warmup_steps is not None:
+            self.ema_bias_warmup_steps = ema_bias_warmup_steps
 
     def configure_advanced_logging(self, args: argparse.Namespace) -> None:
         """Configure advanced logging settings including parameter stats, per-source losses, and gradient norms.
 
         Sets default values for various logging options if not already set in args.
         """
-        # Performance logging verbosity
-        if not hasattr(args, "performance_verbosity"):
-            args.performance_verbosity = "standard"  # Default verbosity level
-
-        # Configure performance logger verbosity
-        configure_verbosity(args.performance_verbosity)
-        logger.info(
-            f"Performance logging verbosity set to: {args.performance_verbosity}"
-        )
-
-        # Enhanced progress bar defaults
-        if not hasattr(args, "enhanced_progress_bar"):
-            args.enhanced_progress_bar = True
-        # Always show timing on every step by default (no alternation)
-        if not hasattr(args, "alternate_perf_postfix"):
-            args.alternate_perf_postfix = False
-
-        # Parameter statistics logging
-        if not hasattr(args, "log_param_stats"):
-            args.log_param_stats = False  # Disabled by default
-        if not hasattr(args, "param_stats_every_n_steps"):
-            args.param_stats_every_n_steps = 100  # Log every 100 steps
-        if not hasattr(args, "max_param_stats_logged"):
-            args.max_param_stats_logged = 20  # Log top 20 parameters by norm
-
-        # Per-source loss logging
-        if not hasattr(args, "log_per_source_loss"):
-            args.log_per_source_loss = False  # Disabled by default
-
-        # Gradient norm logging
-        if not hasattr(args, "log_gradient_norm"):
-            args.log_gradient_norm = False  # Disabled by default
-
-        # Extra train metrics (periodic)
-        if not hasattr(args, "log_extra_train_metrics"):
-            args.log_extra_train_metrics = True  # Enabled by default
-        if not hasattr(args, "train_metrics_interval"):
-            args.train_metrics_interval = 50  # Log every 50 steps by default
-
-        # Report enabled features
-        enabled_features = []
-
-        if args.log_param_stats:
-            enabled_features.append("Parameter Statistics")
-            logger.info(f"Parameter statistics logging enabled:")
-            logger.info(f"  - Logging every {args.param_stats_every_n_steps} steps")
-            logger.info(
-                f"  - Tracking top {args.max_param_stats_logged} parameters by norm"
-            )
-            logger.info(
-                f"  - Will create TensorBoard metrics: param_norm/*, grad_norm/*, param_stats/*"
-            )
-
-        if args.log_per_source_loss:
-            enabled_features.append("Per-Source Loss")
-            logger.info("Per-source loss logging enabled:")
-            logger.info("  - Will attempt to detect video vs image sources")
-            logger.info("  - Will create TensorBoard metrics: loss/video, loss/image")
-
-        if args.log_gradient_norm:
-            enabled_features.append("Gradient Norm")
-            logger.info("Gradient norm logging enabled:")
-            logger.info("  - Will create TensorBoard metric: grad_norm")
-
-        if enabled_features:
-            logger.info(
-                f"Advanced logging features enabled: {', '.join(enabled_features)}"
-            )
-        else:
-            logger.info(
-                "No advanced logging features enabled (use configure_advanced_logging to enable)"
-            )
+        _configure_advanced_logging(args)
 
     def initialize_adaptive_timestep_sampling(self, args: argparse.Namespace) -> None:
         """Initialize adaptive timestep sampling if enabled."""
-        try:
-            if create_adaptive_timestep_manager is None:
-                if getattr(args, "enable_adaptive_timestep_sampling", False):
-                    logger.warning(
-                        "Adaptive timestep sampling requested but AdaptiveTimestepManager not available"
-                    )
-                return
+        self.adaptive_manager = _initialize_adaptive_timestep_sampling(args)
 
-            self.adaptive_manager = create_adaptive_timestep_manager(args)
-
-            if self.adaptive_manager and self.adaptive_manager.enabled:
-                logger.info("🎯 Adaptive Timestep Sampling initialized successfully")
-                logger.info(
-                    f"   Boundary range: [{self.adaptive_manager.min_timestep}, {self.adaptive_manager.max_timestep}]"
-                )
-                logger.info(
-                    f"   Focus strength: {self.adaptive_manager.focus_strength}"
-                )
-                logger.info(f"   Warmup steps: {self.adaptive_manager.warmup_steps}")
-                logger.info(
-                    f"   Video-specific categories: {self.adaptive_manager.video_specific_categories}"
-                )
-
-                # Connect adaptive manager to timestep distribution
-                if (
-                    hasattr(self, "timestep_distribution")
-                    and self.timestep_distribution
-                ):
-                    if hasattr(self.timestep_distribution, "set_adaptive_manager"):
-                        self.timestep_distribution.set_adaptive_manager(
-                            self.adaptive_manager
-                        )
-            else:
-                logger.debug("Adaptive Timestep Sampling is disabled")
-
-        except Exception as e:
-            logger.error(f"Failed to initialize Adaptive Timestep Sampling: {e}")
-            logger.warning("Continuing with standard timestep sampling")
-            self.adaptive_manager = None
+        # Connect adaptive manager to timestep distribution
+        if (
+            self.adaptive_manager
+            and hasattr(self, "timestep_distribution")
+            and self.timestep_distribution
+        ):
+            if hasattr(self.timestep_distribution, "set_adaptive_manager"):
+                self.timestep_distribution.set_adaptive_manager(self.adaptive_manager)
 
     def update_ema_loss(self, current_loss: float) -> float:
         """Update EMA loss; warm-start and defer bias correction for early steps."""
-        self.ema_step_count += 1
+        corrected_ema, new_ema_loss, new_step_count = _update_ema_loss(
+            current_loss,
+            self.ema_loss,
+            self.ema_step_count,
+            self.ema_beta,
+            self.ema_bias_warmup_steps,
+        )
 
-        if self.ema_loss is None:
-            # Warm-start from current loss to avoid huge initial spike
-            self.ema_loss = float(current_loss)
-        else:
-            self.ema_loss = self.ema_beta * self.ema_loss + (1 - self.ema_beta) * float(
-                current_loss
-            )
+        # Update instance state
+        self.ema_loss = new_ema_loss
+        self.ema_step_count = new_step_count
 
-        # Defer bias correction for a short warmup window to improve readability
-        if self.ema_step_count <= max(0, int(self.ema_bias_warmup_steps)):
-            return float(self.ema_loss)
-
-        corrected_ema = self.ema_loss / (1 - self.ema_beta**self.ema_step_count)
-        return float(corrected_ema)
+        return corrected_ema
 
     def _update_iter_time_ema(self, last_iter_seconds: float) -> float:
         """Update EMA of iteration time in seconds.
@@ -316,16 +202,11 @@ class TrainingCore:
         Returns:
             The updated EMA value in seconds.
         """
-        if last_iter_seconds <= 0:
-            return float(self._iter_time_ema_sec) if self._iter_time_ema_sec else 0.0
-        if self._iter_time_ema_sec is None:
-            self._iter_time_ema_sec = float(last_iter_seconds)
-        else:
-            b = self._iter_time_ema_beta
-            self._iter_time_ema_sec = b * float(self._iter_time_ema_sec) + (
-                1 - b
-            ) * float(last_iter_seconds)
-        return float(self._iter_time_ema_sec)
+        new_ema = _update_iter_time_ema(
+            last_iter_seconds, self._iter_time_ema_sec, self._iter_time_ema_beta
+        )
+        self._iter_time_ema_sec = new_ema
+        return new_ema
 
     # Metric helpers moved to trainer.metrics
     # kept methods as thin wrappers for backward compatibility
@@ -336,117 +217,19 @@ class TrainingCore:
         log_every_n_steps: int = 100,
         max_params_to_log: int = 20,
     ) -> Dict[str, float]:
-        from core.metrics import generate_parameter_stats as _gps
-
-        # gate by local last_param_log_step to keep same behavior
-        if global_step - self.last_param_log_step < log_every_n_steps:
-            return {}
-        self.last_param_log_step = global_step
-        return _gps(model, global_step, log_every_n_steps, max_params_to_log)
-
-    def compute_per_source_loss(
-        self,
-        model_pred: torch.Tensor,
-        target: torch.Tensor,
-        batch: Dict[str, Any],
-        weighting: Optional[torch.Tensor] = None,
-        sample_weights: Optional[torch.Tensor] = None,
-    ) -> Dict[str, float]:
-        from core.metrics import compute_per_source_loss as _cpsl
-
-        return _cpsl(model_pred, target, batch, weighting, sample_weights)
-
-    def compute_gradient_norm(
-        self, model: Any, max_norm: Optional[float] = None, norm_type: float = 2.0
-    ) -> float:
-        from core.metrics import compute_gradient_norm as _cgn
-
-        return _cgn(model, max_norm, norm_type)
-
-    def generate_step_logs(
-        self,
-        args: argparse.Namespace,
-        current_loss: float,
-        avr_loss: float,
-        lr_scheduler: Any,
-        lr_descriptions: List[str],
-        optimizer: Optional[torch.optim.Optimizer] = None,
-        keys_scaled: Optional[int] = None,
-        mean_norm: Optional[float] = None,
-        maximum_norm: Optional[float] = None,
-        ema_loss: Optional[float] = None,
-        model: Optional[Any] = None,
-        global_step: Optional[int] = None,
-        per_source_losses: Optional[Dict[str, float]] = None,
-        gradient_norm: Optional[float] = None,
-    ) -> Dict[str, Any]:
-        from core.metrics import generate_step_logs as _gsl
-
-        # Include max-norm details if available
-        logs = _gsl(
-            args,
-            current_loss,
-            avr_loss,
-            lr_scheduler,
-            lr_descriptions,
-            optimizer,
-            keys_scaled,
-            mean_norm,
-            maximum_norm,
-            ema_loss,
-            model,
-            global_step,
-            per_source_losses,
-            gradient_norm,
-        )
-        return logs
-
-    def record_training_step(self, batch_size: int) -> None:
-        """Record a training step for throughput tracking."""
-        from core.metrics import record_training_step as _rts
-
-        _rts(batch_size)
-
-    def initialize_throughput_tracker(self, args: Any) -> None:
-        """Initialize throughput tracker with configuration."""
-        from core.metrics import initialize_throughput_tracker as _init_tracker
-
-        window_size = getattr(args, "throughput_window_size", 100)
-        _init_tracker(window_size)
-
-    def generate_safe_progress_metrics(
-        self,
-        args: argparse.Namespace,
-        current_loss: float,
-        avr_loss: float,
-        lr_scheduler: Any,
-        epoch: int,
-        global_step: int,
-        keys_scaled: Optional[int] = None,
-        mean_norm: Optional[float] = None,
-        maximum_norm: Optional[float] = None,
-        current_step_in_epoch: Optional[int] = None,
-        total_steps_in_epoch: Optional[int] = None,
-    ) -> Dict[str, Any]:
-        from core.metrics import generate_safe_progress_metrics as _gspm
-
-        return _gspm(
-            args,
-            current_loss,
-            avr_loss,
-            lr_scheduler,
-            epoch,
-            global_step,
-            keys_scaled,
-            mean_norm,
-            maximum_norm,
-            current_step_in_epoch,
-            total_steps_in_epoch,
-        )
-
-    def scale_shift_latents(self, latents: torch.Tensor) -> torch.Tensor:
-        """Scale and shift latents if needed."""
-        return latents
+        # Check if we should generate stats and update state if so
+        if should_generate_parameter_stats(
+            global_step, self.last_param_log_step, log_every_n_steps
+        ):
+            self.last_param_log_step = global_step
+            return _generate_parameter_stats(
+                model,
+                global_step,
+                self.last_param_log_step,
+                log_every_n_steps,
+                max_params_to_log,
+            )
+        return {}
 
     def call_dit(
         self,
@@ -501,10 +284,6 @@ class TrainingCore:
                         f"frame_dim={frame_dim}, num_frames={latents.shape[frame_dim] if latents.ndim > frame_dim else 'N/A'}, "
                         f"reason={'not enough dimensions' if latents.ndim <= frame_dim else 'only 1 frame'}"
                     )
-
-        # I2V training and Control training
-        image_latents = None
-        clip_fea = None
 
         context = [
             t.to(device=accelerator.device, dtype=network_dtype) for t in batch["t5"]
@@ -699,9 +478,9 @@ class TrainingCore:
                 model_input,
                 t=timesteps,
                 context=context,
-                clip_fea=clip_fea,
+                clip_fea=None,
                 seq_len=seq_len,
-                y=image_latents,
+                y=None,
                 force_keep_mask=force_keep_mask,
                 controlnet_states=control_states,
                 controlnet_weight=getattr(args, "controlnet_weight", 1.0),
@@ -825,7 +604,7 @@ class TrainingCore:
             last_validated_step = -1
 
         # Initialize throughput tracker with configuration
-        self.initialize_throughput_tracker(args)
+        _initialize_throughput_tracker(args)
 
         for epoch in range(epoch_to_start, num_train_epochs):
             accelerator.print(f"\nepoch {epoch+1}/{num_train_epochs}")
@@ -845,7 +624,7 @@ class TrainingCore:
                 transformer=transformer,
                 network=network,
                 global_step=global_step,
-                metadata=metadata
+                metadata=metadata,
             )
 
             # Calculate step offset when resuming in the middle of an epoch
@@ -895,10 +674,10 @@ class TrainingCore:
                         global_step=global_step,
                         batch=batch,
                         latents=latents,
-                        network=network
+                        network=network,
                     )
 
-                    latents = self.scale_shift_latents(latents)
+                    latents = _scale_shift_latents(latents)
 
                     # Sample noise that we'll add to the latents
                     noise = torch.randn_like(latents)
@@ -1057,7 +836,7 @@ class TrainingCore:
                         timesteps=timesteps,
                         network_dtype=network_dtype,
                         transformer=active_transformer,
-                        weighting=weighting
+                        weighting=weighting,
                     )
 
                     model_result = self.call_dit(
@@ -1100,7 +879,7 @@ class TrainingCore:
                         noisy_model_input=noisy_model_input,
                         timesteps=timesteps,
                         network_dtype=network_dtype,
-                        weighting=weighting
+                        weighting=weighting,
                     )
 
                     # Loss will be computed later by centralized loss computer
@@ -1116,7 +895,7 @@ class TrainingCore:
                                 sample_weights_local = sample_weights_local.to(
                                     device=accelerator.device, dtype=network_dtype
                                 )
-                            per_source_losses = self.compute_per_source_loss(
+                            per_source_losses = _compute_per_source_loss(
                                 model_pred.to(network_dtype),
                                 target,
                                 batch,
@@ -1162,84 +941,20 @@ class TrainingCore:
                         timesteps=timesteps,
                         batch=batch,
                         noise=noise,
-                        adaptive_manager=self.adaptive_manager
+                        adaptive_manager=self.adaptive_manager,
                     )
 
-                    # Adaptive timestep sampling with gated research mode
-                    if self.adaptive_manager and self.adaptive_manager.enabled:
-                        try:
-                            # Check if research mode is enabled
-                            if (
-                                hasattr(self.adaptive_manager, "research_mode_enabled")
-                                and self.adaptive_manager.research_mode_enabled
-                            ):
-                                # Use full research algorithm (Algorithm 1 & 2)
-                                research_result = self.adaptive_manager.research_training_step(
-                                    model=training_model,  # The diffusion model
-                                    x_0=latents,  # Clean latents
-                                    diffusion=noise_scheduler,  # The noise scheduler
-                                    all_timesteps=list(
-                                        range(0, 1000, 10)
-                                    ),  # Sample every 10 timesteps for efficiency
-                                )
-
-                                if research_result and research_result.get(
-                                    "research_mode"
-                                ):
-                                    # Log research statistics
-                                    if accelerator.is_main_process:
-                                        logger.info(
-                                            f"🔬 Research step: t={research_result.get('sampled_timestep')}, "
-                                            f"Δ_t_k={research_result.get('delta_t_k', 0):.6f}"
-                                        )
-
-                                        if research_result.get("selected_features"):
-                                            logger.debug(
-                                                f"   Selected features: {research_result.get('selected_features')[:5]}..."
-                                            )
-
-                            else:
-                                # Use simplified approach (current implementation)
-                                with torch.no_grad():
-                                    # Compute individual losses per timestep
-                                    per_timestep_losses = F.mse_loss(
-                                        model_pred.detach().float(),
-                                        target.detach().float(),
-                                        reduction="none",
-                                    )
-
-                                    # Reduce spatial and channel dimensions, keep batch
-                                    if (
-                                        per_timestep_losses.ndim == 5
-                                    ):  # Video: [B, C, F, H, W]
-                                        per_timestep_losses = per_timestep_losses.mean(
-                                            dim=[1, 2, 3, 4]
-                                        )
-                                    elif (
-                                        per_timestep_losses.ndim == 4
-                                    ):  # Image: [B, C, H, W]
-                                        per_timestep_losses = per_timestep_losses.mean(
-                                            dim=[1, 2, 3]
-                                        )
-                                    else:
-                                        per_timestep_losses = per_timestep_losses.mean(
-                                            dim=list(range(1, per_timestep_losses.ndim))
-                                        )
-
-                                    # Convert timesteps to 0-1 range for recording
-                                    timesteps_normalized = timesteps.float() / 1000.0
-
-                                    # Record losses for analysis
-                                    self.adaptive_manager.record_timestep_loss(
-                                        timesteps_normalized, per_timestep_losses
-                                    )
-
-                                    # Update important timesteps if needed
-                                    self.adaptive_manager.update_important_timesteps()
-
-                        except Exception as e:
-                            logger.debug(f"Error in adaptive timestep processing: {e}")
-                            # Continue training without adaptive sampling
+                    # Handle adaptive timestep sampling
+                    handle_adaptive_timestep_sampling(
+                        self.adaptive_manager,
+                        accelerator,
+                        training_model,
+                        latents,
+                        noise_scheduler,
+                        model_pred,
+                        target,
+                        timesteps,
+                    )
 
                     # Trigger before_backward junction event
                     trigger_event(
@@ -1250,7 +965,7 @@ class TrainingCore:
                         model_pred=model_pred,
                         target=target,
                         network=network,
-                        global_step=global_step
+                        global_step=global_step,
                     )
 
                     # Start backward pass timing
@@ -1267,7 +982,7 @@ class TrainingCore:
                         accelerator=accelerator,
                         loss_components=loss_components,
                         network=network,
-                        global_step=global_step
+                        global_step=global_step,
                     )
 
                     if accelerator.is_main_process:
@@ -1291,7 +1006,7 @@ class TrainingCore:
                         and args.log_gradient_norm
                     ):
                         try:
-                            gradient_norm = self.compute_gradient_norm(network)
+                            gradient_norm = _compute_gradient_norm(network)
                         except Exception as e:
                             logger.debug(f"⚠️ Failed to compute gradient norm: {e}")
 
@@ -1303,7 +1018,7 @@ class TrainingCore:
                         accelerator=accelerator,
                         network=network,
                         gradient_norm=gradient_norm,
-                        global_step=global_step
+                        global_step=global_step,
                     )
                     # sync DDP grad manually
                     state = accelerate.PartialState()
@@ -1371,7 +1086,7 @@ class TrainingCore:
                         optimizer=optimizer,
                         lr_scheduler=lr_scheduler,
                         network=network,
-                        global_step=global_step
+                        global_step=global_step,
                     )
 
                     # Update GGPO weight norms after parameter update
@@ -1408,7 +1123,7 @@ class TrainingCore:
                         network=network,
                         optimizer=optimizer,
                         lr_scheduler=lr_scheduler,
-                        global_step=global_step
+                        global_step=global_step,
                     )
 
                 if args.scale_weight_norms:
@@ -1423,61 +1138,21 @@ class TrainingCore:
                     }
                 else:
                     keys_scaled, mean_norm, maximum_norm = None, None, None
+                    max_mean_logs = {}
 
                 # Checks if the accelerator has performed an optimization step behind the scenes
                 if accelerator.sync_gradients:
                     progress_bar.update(1)
                     global_step += 1
 
-                    # Lightweight periodic self-correction cache refresh (fully gated)
-                    try:
-                        if (
-                            bool(getattr(args, "self_correction_enabled", False))
-                            and global_step
-                            > int(getattr(args, "self_correction_warmup_steps", 1000))
-                            and int(
-                                getattr(args, "self_correction_update_frequency", 1000)
-                            )
-                            > 0
-                            and global_step
-                            % int(
-                                getattr(args, "self_correction_update_frequency", 1000)
-                            )
-                            == 0
-                        ):
-                            # Access manager via trainer if present
-                            mgr = getattr(
-                                accelerator.state, "_self_correction_manager", None
-                            )
-                            # Fallback: some callers may attach it to the transformer
-                            if mgr is None:
-                                try:
-                                    mgr = getattr(
-                                        transformer, "_self_correction_manager", None
-                                    )
-                                except Exception:
-                                    mgr = None
-                            if mgr is not None:
-                                # Switch to eval for generation
-                                try:
-                                    training_was = training_model.training
-                                    training_model.eval()
-                                except Exception:
-                                    training_was = None
-                                accelerator.wait_for_everyone()
-                                if accelerator.is_main_process:
-                                    mgr.update_cache(accelerator.unwrap_model(transformer))  # type: ignore
-                                accelerator.wait_for_everyone()
-                                # Restore mode
-                                try:
-                                    if training_was is True:
-                                        training_model.train()
-                                except Exception:
-                                    pass
-                    except Exception as _sc_err:
-                        # Non-fatal path: continue training
-                        if accelerator.is_main_process:
-                            logger.debug(f"Self-correction update skipped: {_sc_err}")
+                    # Handle self-correction cache refresh
+                    handle_self_correction_update(
+                        args,
+                        global_step,
+                        accelerator,
+                        transformer,
+                        training_model,
+                    )
 
                     # to avoid calling optimizer_eval_fn() too frequently, we call it only when we need to sample images, validate, or save the model
                     should_sampling = should_sample_images(
@@ -1494,202 +1169,55 @@ class TrainingCore:
                     if should_sampling or should_saving or should_validating:
                         if optimizer_eval_fn:
                             optimizer_eval_fn()
-                        if should_sampling and sampling_manager:
-                            # Use epoch-based naming only if sampling was triggered by epoch, not steps
-                            # This prevents filename conflicts when resuming training in the same epoch
-                            epoch_for_naming = None
-                            if (
-                                args.sample_every_n_epochs is not None
-                                and args.sample_every_n_epochs > 0
-                                and (epoch + 1) % args.sample_every_n_epochs == 0
-                            ):
-                                # This sampling was triggered by epoch boundary
-                                epoch_for_naming = epoch + 1
-                            # Otherwise, leave epoch_for_naming as None to use step-based naming
+                        # Handle training sampling
+                        last_sampled_step = handle_training_sampling_with_accelerator(
+                            should_sampling,
+                            sampling_manager,
+                            args,
+                            accelerator,
+                            epoch,
+                            global_step,
+                            vae,
+                            transformer,
+                            sample_parameters,
+                            dit_dtype,
+                            last_sampled_step,
+                        )
 
-                            # Trigger sampling_start junction event
-                            trigger_event(
-                                "sampling_start",
-                                args=args,
-                                accelerator=accelerator,
-                                epoch=epoch_for_naming,
-                                global_step=global_step,
-                                vae=vae,
-                                transformer=transformer,
-                                sample_parameters=sample_parameters
-                            )
+                        # Handle step validation
+                        (
+                            last_validated_step,
+                            self._warned_no_val_pixels_for_perceptual,
+                        ) = handle_step_validation(
+                            should_validating,
+                            self.validation_core,
+                            val_dataloader,
+                            val_epoch_step_sync,
+                            current_epoch,
+                            epoch,
+                            global_step,
+                            args,
+                            accelerator,
+                            transformer,
+                            noise_scheduler,
+                            control_signal_processor,
+                            vae,
+                            sampling_manager,
+                            self._warned_no_val_pixels_for_perceptual,
+                            last_validated_step,
+                        )
 
-                            sampling_manager.sample_images(
-                                accelerator,
-                                args,
-                                epoch_for_naming,  # Use None for step-based sampling
-                                global_step,
-                                vae,
-                                transformer,
-                                sample_parameters,
-                                dit_dtype,
-                            )
-
-                            # Trigger sampling_end junction event
-                            trigger_event(
-                                "sampling_end",
-                                args=args,
-                                accelerator=accelerator,
-                                epoch=epoch_for_naming,
-                                global_step=global_step
-                            )
-
-                            # Track that sampling occurred at this step
-                            last_sampled_step = global_step
-
-                        if should_validating:
-                            # Sync validation datasets before validation runs
-                            self.validation_core.sync_validation_epoch(
-                                val_dataloader,
-                                val_epoch_step_sync,
-                                current_epoch.value if current_epoch else epoch + 1,
-                                global_step,
-                            )
-
-                            # Determine if validation metrics require a VAE and lazily load if needed
-                            metrics_enabled = any(
-                                [
-                                    bool(getattr(args, "enable_perceptual_snr", False)),
-                                    bool(getattr(args, "enable_temporal_ssim", False)),
-                                    bool(getattr(args, "enable_temporal_lpips", False)),
-                                    bool(
-                                        getattr(args, "enable_flow_warped_ssim", False)
-                                    ),
-                                    bool(getattr(args, "enable_fvd", False)),
-                                    bool(getattr(args, "enable_vmaf", False)),
-                                ]
-                            )
-                            # Only consider loading a VAE if validation batches include pixels
-                            requires_vae_for_val = (
-                                bool(getattr(args, "load_val_pixels", False))
-                                and metrics_enabled
-                            )
-
-                            # If metrics are enabled but pixels are not loaded, warn once and skip VAE loading
-                            if (
-                                metrics_enabled
-                                and not getattr(args, "load_val_pixels", False)
-                                and accelerator.is_main_process
-                                and not self._warned_no_val_pixels_for_perceptual
-                            ):
-                                logger.warning(
-                                    "Perceptual/temporal validation metrics are enabled but load_val_pixels=false; skipping these metrics and not loading a VAE. Set load_val_pixels=true to enable them."
-                                )
-                                self._warned_no_val_pixels_for_perceptual = True
-                            temp_val_vae = None
-                            val_vae_to_use = vae
-                            if val_vae_to_use is None and requires_vae_for_val:
-                                try:
-                                    if sampling_manager is not None:
-                                        if accelerator.is_main_process:
-                                            logger.info(
-                                                "🔄 Loading VAE temporarily for validation metrics..."
-                                            )
-                                        temp_val_vae = sampling_manager._load_vae_lazy()  # type: ignore[attr-defined]
-                                        val_vae_to_use = temp_val_vae
-                                    else:
-                                        if accelerator.is_main_process:
-                                            logger.warning(
-                                                "Validation metrics requiring a VAE are enabled but no SamplingManager is available to lazy-load one. Metrics may be skipped."
-                                            )
-                                except Exception as e:
-                                    if accelerator.is_main_process:
-                                        logger.warning(
-                                            (
-                                                "Failed to load VAE for validation metrics: %s. "
-                                                "Ensure a valid 'vae' checkpoint path is set in the config, network access is available to download it, "
-                                                "and that its dtype (vae_dtype) is compatible with the current device."
-                                            ),
-                                            e,
-                                        )
-
-                            # Trigger validation_start junction event
-                            trigger_event(
-                                "validation_start",
-                                args=args,
-                                accelerator=accelerator,
-                                transformer=transformer,
-                                val_dataloader=val_dataloader,
-                                vae=val_vae_to_use,
-                                global_step=global_step
-                            )
-
-                            val_loss = self.validation_core.validate(
-                                accelerator,
-                                transformer,
-                                val_dataloader,
-                                noise_scheduler,
-                                args,
-                                control_signal_processor,
-                                val_vae_to_use,
-                                global_step,
-                            )
-                            self.validation_core.log_validation_results(
-                                accelerator, val_loss, global_step
-                            )
-
-                            # Trigger validation_end junction event
-                            trigger_event(
-                                "validation_end",
-                                args=args,
-                                accelerator=accelerator,
-                                val_loss=val_loss,
-                                global_step=global_step
-                            )
-
-                            # Unload temporary VAE if it was loaded for validation
-                            if (
-                                temp_val_vae is not None
-                                and sampling_manager is not None
-                            ):
-                                try:
-                                    sampling_manager._unload_vae(temp_val_vae)  # type: ignore[attr-defined]
-                                    if accelerator.is_main_process:
-                                        logger.info(
-                                            "🧹 Unloaded temporary VAE after validation"
-                                        )
-                                except Exception as e:
-                                    if accelerator.is_main_process:
-                                        logger.debug(
-                                            f"Failed to unload temporary VAE after validation: {e}"
-                                        )
-
-                            # Track that validation occurred at this step
-                            last_validated_step = global_step
-
-                        if should_saving:
-                            accelerator.wait_for_everyone()
-                            if accelerator.is_main_process and save_model:
-                                from utils import train_utils
-
-                                ckpt_name = train_utils.get_step_ckpt_name(
-                                    args.output_name, global_step
-                                )
-                                save_model(
-                                    ckpt_name,
-                                    accelerator.unwrap_model(network),
-                                    global_step,
-                                    epoch + 1,
-                                )
-
-                                if args.save_state:
-                                    train_utils.save_and_remove_state_stepwise(
-                                        args, accelerator, global_step
-                                    )
-
-                                remove_step_no = train_utils.get_remove_step_no(
-                                    args, global_step
-                                )
-                                if remove_step_no is not None and remove_model:
-                                    remove_ckpt_name = train_utils.get_step_ckpt_name(
-                                        args.output_name, remove_step_no
-                                    )
-                                    remove_model(remove_ckpt_name)
+                        # Handle step saving
+                        handle_step_saving(
+                            should_saving,
+                            accelerator,
+                            save_model,
+                            remove_model,
+                            args,
+                            network,
+                            global_step,
+                            epoch,
+                        )
                         if optimizer_train_fn:
                             optimizer_train_fn()
 
@@ -1698,331 +1226,60 @@ class TrainingCore:
                 avr_loss: float = loss_recorder.moving_average
 
                 # Record training step for throughput tracking
-                self.record_training_step(bsz)
+                _record_training_step(bsz)
 
                 # Update EMA loss for TensorBoard logging
                 ema_loss_value = self.update_ema_loss(current_loss)
 
                 # Generate enhanced progress bar metrics safely if enabled
-                if getattr(args, "enhanced_progress_bar", True):
-                    try:
-                        # Calculate epoch progress information
-                        current_step_in_epoch = step + 1  # step is 0-indexed
-                        total_steps_in_epoch = len(train_dataloader)
-
-                        enhanced_logs = self.generate_safe_progress_metrics(
-                            args,
-                            current_loss,
-                            avr_loss,
-                            lr_scheduler,
-                            epoch,
-                            global_step,
-                            keys_scaled,
-                            mean_norm,
-                            maximum_norm,
-                            current_step_in_epoch,
-                            total_steps_in_epoch,
-                        )
-
-                        # Alternate between last iteration ms and peak VRAM/util
-                        try:
-                            # Prefer actual train iteration time (fwd+bwd+opt),
-                            # fallback to total step ms if iter time not available
-                            iter_ms = get_last_train_iter_ms()
-                            if iter_ms > 0:
-                                # Convert to seconds and update EMA
-                                last_iter_s = iter_ms / 1000.0
-                                avg_iter_s = self._update_iter_time_ema(last_iter_s)
-                                # Expose with 1 decimal in postfix for readability
-                                enhanced_logs["iter_s"] = f"{last_iter_s:.1f}"
-                                enhanced_logs["avg_iter_s"] = f"{avg_iter_s:.1f}"
-                                try:
-                                    # Show label as "avg.s (last.s)" with one decimal
-                                    progress_bar.set_description(
-                                        f"{avg_iter_s:.1f}s ({last_iter_s:.1f}s)"
-                                    )
-                                except Exception:
-                                    pass
-                            else:
-                                total_ms = get_last_total_step_ms()
-                                if total_ms > 0:
-                                    last_step_s = total_ms / 1000.0
-                                    avg_iter_s = self._update_iter_time_ema(last_step_s)
-                                    enhanced_logs["step_s"] = f"{last_step_s:.1f}"
-                                    enhanced_logs["avg_iter_s"] = f"{avg_iter_s:.1f}"
-                                    try:
-                                        progress_bar.set_description(
-                                            f"{avg_iter_s:.1f}s ({last_step_s:.1f}s)"
-                                        )
-                                    except Exception:
-                                        pass
-
-                            if getattr(args, "alternate_perf_postfix", True):
-                                # Alternate between timing and hardware each step
-                                self._perf_display_toggle = (
-                                    not self._perf_display_toggle
-                                )
-                                if not self._perf_display_toggle:
-                                    hardware_metrics = get_hardware_metrics()
-                                    enhanced_logs.update(hardware_metrics)
-                            else:
-                                # Show both timing and hardware every step
-                                hardware_metrics = get_hardware_metrics()
-                                enhanced_logs.update(hardware_metrics)
-                        except Exception:
-                            pass
-
-                        progress_bar.set_postfix(enhanced_logs)
-                    except Exception:
-                        # Fallback to original simple display if enhanced metrics fail
-                        logs = {"avr_loss": avr_loss}
-                        progress_bar.set_postfix(logs)
-                        if args.scale_weight_norms:
-                            progress_bar.set_postfix({**max_mean_logs, **logs})
-                else:
-                    # Use original simple progress bar
-                    logs = {"avr_loss": avr_loss}
-                    progress_bar.set_postfix(logs)
-                    if args.scale_weight_norms:
-                        progress_bar.set_postfix({**max_mean_logs, **logs})
-
-                # Only the main process should handle logging and saving
-                if accelerator.is_main_process and len(accelerator.trackers) > 0:
-                    logs = self.generate_step_logs(
+                enhanced_logs, self._perf_display_toggle, self._iter_time_ema_sec = (
+                    process_enhanced_progress_bar(
                         args,
                         current_loss,
                         avr_loss,
                         lr_scheduler,
-                        lr_descriptions,
-                        optimizer,
+                        epoch,
+                        global_step,
                         keys_scaled,
                         mean_norm,
                         maximum_norm,
-                        ema_loss_value,
-                        network,  # Pass the model for parameter stats
-                        global_step,  # Pass global_step for parameter stats
-                        per_source_losses,  # Pass per-source losses
-                        gradient_norm,  # Pass gradient norm
+                        self._perf_display_toggle,
+                        self._iter_time_ema_sec,
+                        self._iter_time_ema_beta,
+                        progress_bar,
+                        max_mean_logs,
+                        step + 1,  # step is 0-indexed, but we want 1-indexed for display
+                        len(train_dataloader),
                     )
+                )
 
-                    # Add performance metrics
-                    if accelerator.sync_gradients:
-                        # Get timing metrics
-                        timing_metrics = get_timing_metrics()
-                        logs.update(timing_metrics)
-
-                        # Get model statistics
-                        model_stats = get_model_statistics(
-                            model_pred.to(network_dtype),
-                            target,
-                            accelerator.is_main_process,
-                            timesteps,
-                            global_step,
-                        )
-                        logs.update(model_stats)
-
-                        # Log performance summary
-                        log_performance_summary(global_step, timing_metrics)
-
-                    # Attach GGPO metrics if available
-                    try:
-                        if hasattr(network, "grad_norms") and hasattr(
-                            network, "combined_weight_norms"
-                        ):
-                            gn = accelerator.unwrap_model(network).grad_norms()
-                            wn = accelerator.unwrap_model(
-                                network
-                            ).combined_weight_norms()
-                            if gn is not None:
-                                logs["norm/avg_grad_norm"] = float(gn.item())
-                            if wn is not None:
-                                logs["norm/avg_combined_norm"] = float(wn.item())
-                    except Exception:
-                        pass
-
-                    # Attach component losses if available
-                    base_loss_val = getattr(loss_components, "base_loss", None)
-                    if base_loss_val is not None:
-                        logs["loss/mse"] = float(base_loss_val.item())
-                    if loss_components.dispersive_loss is not None:
-                        logs["loss/dispersive"] = float(
-                            loss_components.dispersive_loss.item()
-                        )
-                    if loss_components.dop_loss is not None:
-                        logs["loss/dop"] = float(loss_components.dop_loss.item())
-                    if loss_components.optical_flow_loss is not None:
-                        logs["loss/optical_flow"] = float(
-                            loss_components.optical_flow_loss.item()
-                        )
-                    if loss_components.repa_loss is not None:
-                        logs["loss/repa"] = float(loss_components.repa_loss.item())
-
-                    # Optionally compute extra training metrics periodically
-                    try:
-                        if (
-                            getattr(args, "log_extra_train_metrics", True)
-                            and (args.train_metrics_interval or 0) > 0
-                            and (global_step % int(args.train_metrics_interval) == 0)
-                        ):
-                            extra_metrics = (
-                                self.loss_computer.compute_extra_train_metrics(
-                                    model_pred=model_pred,
-                                    target=target,
-                                    noise=noise,
-                                    timesteps=timesteps,
-                                    noise_scheduler=noise_scheduler,
-                                    accelerator=accelerator,
-                                )
-                            )
-                            if extra_metrics:
-                                logs.update(extra_metrics)
-                    except Exception:
-                        pass
-
-                    # Log scalar attention metrics and optional heatmap via helper
-                    try:
-                        from common.attention_logging import (
-                            attach_attention_metrics_and_maybe_heatmap as _attn_log_helper,
-                        )
-
-                        _attn_log_helper(accelerator, args, logs, global_step)
-                    except Exception:
-                        pass
-
-                    try:
-                        from utils.tensorboard_utils import (
-                            apply_direction_hints_to_logs as _adh,
-                        )
-
-                        logs = _adh(args, logs)
-                    except Exception:
-                        pass
-
-                    # Log adaptive timestep sampling statistics
-                    if self.adaptive_manager and self.adaptive_manager.enabled:
-                        try:
-                            adaptive_stats = self.adaptive_manager.get_stats()
-
-                            # Core metrics
-                            logs.update(
-                                {
-                                    "adaptive_timestep/total_important": adaptive_stats.get(
-                                        "total_important", 0
-                                    ),
-                                    "adaptive_timestep/avg_importance": adaptive_stats.get(
-                                        "avg_importance", 0
-                                    ),
-                                    "adaptive_timestep/timestep_coverage": adaptive_stats.get(
-                                        "timestep_coverage", 0
-                                    ),
-                                    "adaptive_timestep/importance_updates": adaptive_stats.get(
-                                        "importance_updates", 0
-                                    ),
-                                }
-                            )
-
-                            # Video-specific metrics
-                            if (
-                                hasattr(
-                                    self.adaptive_manager, "video_specific_categories"
-                                )
-                                and self.adaptive_manager.video_specific_categories
-                            ):
-                                logs.update(
-                                    {
-                                        "adaptive_timestep/motion_timesteps": adaptive_stats.get(
-                                            "motion_timesteps", 0
-                                        ),
-                                        "adaptive_timestep/detail_timesteps": adaptive_stats.get(
-                                            "detail_timesteps", 0
-                                        ),
-                                        "adaptive_timestep/temporal_timesteps": adaptive_stats.get(
-                                            "temporal_timesteps", 0
-                                        ),
-                                    }
-                                )
-
-                            # Boundary information
-                            logs.update(
-                                {
-                                    "adaptive_timestep/min_boundary": getattr(
-                                        self.adaptive_manager, "min_timestep", 0
-                                    ),
-                                    "adaptive_timestep/max_boundary": getattr(
-                                        self.adaptive_manager, "max_timestep", 1000
-                                    ),
-                                    "adaptive_timestep/boundary_range": getattr(
-                                        self.adaptive_manager, "max_timestep", 1000
-                                    )
-                                    - getattr(self.adaptive_manager, "min_timestep", 0),
-                                }
-                            )
-
-                            # Warmup progress
-                            warmup_remaining = adaptive_stats.get("warmup_remaining", 0)
-                            warmup_steps = getattr(
-                                self.adaptive_manager, "warmup_steps", 500
-                            )
-                            if warmup_remaining > 0:
-                                warmup_progress = (
-                                    max(0.0, 1.0 - (warmup_remaining / warmup_steps))
-                                    if warmup_steps > 0
-                                    else 1.0
-                                )
-                                logs["adaptive_timestep/warmup_progress"] = (
-                                    warmup_progress
-                                )
-                            else:
-                                logs["adaptive_timestep/warmup_progress"] = 1.0
-
-                        except Exception as e:
-                            logger.debug(
-                                f"Error logging adaptive timestep metrics: {e}"
-                            )
-
-                    accelerator.log(logs, step=global_step)
-
-                    # Enhanced optimizer-specific histogram logging
-                    if optimizer is not None and is_supported(optimizer):
-                        try:
-                            histogram_data = get_histogram_data(optimizer)
-                            if histogram_data:
-                                metric_name, tensor_data = histogram_data
-                                # Make sure tensor_data is not empty
-                                if tensor_data.numel() > 0:
-                                    # Log histogram directly to TensorBoard writer
-                                    # TensorBoard expects histograms to be logged via add_histogram
-                                    for tracker in accelerator.trackers:
-                                        if tracker.name == "tensorboard":
-                                            tracker.writer.add_histogram(
-                                                metric_name, tensor_data, global_step
-                                            )
-                                            break
-                        except Exception as e:
-                            logger.debug(
-                                f"Failed to log enhanced optimizer histogram: {e}"
-                            )
-
-                    # Periodic live histogram of used timesteps (1..1000)
-                    try:
-                        log_live_timestep_distribution(
-                            accelerator, args, timesteps, global_step
-                        )
-                    except Exception:
-                        pass
-
-                    # Periodic loss-vs-timestep scatter figure
-                    try:
-                        log_loss_scatterplot(
-                            accelerator,
-                            args,
-                            timesteps,
-                            model_pred,
-                            target,
-                            global_step,
-                        )
-                    except Exception:
-                        pass
+                # Collect and log all training metrics
+                collect_and_log_training_metrics(
+                    args,
+                    accelerator,
+                    current_loss,
+                    avr_loss,
+                    lr_scheduler,
+                    lr_descriptions,
+                    optimizer,
+                    keys_scaled,
+                    mean_norm,
+                    maximum_norm,
+                    ema_loss_value,
+                    network,
+                    global_step,
+                    per_source_losses,
+                    gradient_norm,
+                    model_pred,
+                    target,
+                    network_dtype,
+                    timesteps,
+                    loss_components,
+                    noise,
+                    noise_scheduler,
+                    self.adaptive_manager,
+                    self.loss_computer,
+                )
 
                 # Trigger step_end junction event
                 trigger_event(
@@ -2035,7 +1292,7 @@ class TrainingCore:
                     current_loss=current_loss,
                     avr_loss=avr_loss,
                     network=network,
-                    batch_size=bsz
+                    batch_size=bsz,
                 )
 
                 # End step timing
@@ -2061,145 +1318,62 @@ class TrainingCore:
 
             accelerator.wait_for_everyone()
 
-            # save model at the end of epoch if needed
+            # Handle epoch-end saving
             if optimizer_eval_fn:
                 optimizer_eval_fn()
-            if args.save_every_n_epochs is not None:
-                saving = (epoch + 1) % args.save_every_n_epochs == 0 and (
-                    epoch + 1
-                ) < num_train_epochs
-                if is_main_process and saving and save_model:
-                    from utils import train_utils
-
-                    ckpt_name = train_utils.get_epoch_ckpt_name(
-                        args.output_name, epoch + 1
-                    )
-                    save_model(
-                        ckpt_name,
-                        accelerator.unwrap_model(network),
-                        global_step,
-                        epoch + 1,
-                    )
-
-                    remove_epoch_no = train_utils.get_remove_epoch_no(args, epoch + 1)
-                    if remove_epoch_no is not None and remove_model:
-                        remove_ckpt_name = train_utils.get_epoch_ckpt_name(
-                            args.output_name, remove_epoch_no
-                        )
-                        remove_model(remove_ckpt_name)
-
-                    if args.save_state:
-                        from utils import train_utils
-
-                        train_utils.save_and_remove_state_on_epoch_end(
-                            args, accelerator, epoch + 1
-                        )
+            handle_epoch_end_saving(
+                args,
+                epoch,
+                num_train_epochs,
+                is_main_process,
+                save_model,
+                remove_model,
+                accelerator,
+                network,
+                global_step,
+            )
 
             # Only sample at end of epoch if epoch-based sampling is enabled AND it's not already sampled during the last step
-            # This prevents double sampling when the last step of an epoch also triggers sampling
+            # Handle epoch-end sampling
             should_sample_at_epoch_end = (
                 args.sample_every_n_epochs is not None
                 and args.sample_every_n_epochs > 0
                 and (epoch + 1) % args.sample_every_n_epochs == 0
             )
-            # Only sample if epoch-based sampling is enabled AND we haven't already sampled at this step
-            if (
-                should_sample_at_epoch_end
-                and last_sampled_step != global_step
-                and sampling_manager
-            ):
-                # Trigger sampling_start junction event
-                trigger_event(
-                    "sampling_start",
-                    args=args,
-                    accelerator=accelerator,
-                    epoch=epoch + 1,
-                    global_step=global_step,
-                    vae=vae,
-                    transformer=transformer,
-                    sample_parameters=sample_parameters
-                )
-
-                sampling_manager.sample_images(
-                    accelerator,
-                    args,
-                    epoch + 1,
-                    global_step,
-                    vae,
-                    transformer,
-                    sample_parameters,
-                    dit_dtype,
-                )
-
-                # Trigger sampling_end junction event
-                trigger_event(
-                    "sampling_end",
-                    args=args,
-                    accelerator=accelerator,
-                    epoch=epoch + 1,
-                    global_step=global_step
-                )
+            handle_epoch_end_sampling_with_accelerator(
+                should_sample_at_epoch_end,
+                last_sampled_step,
+                global_step,
+                sampling_manager,
+                args,
+                accelerator,
+                epoch,
+                vae,
+                transformer,
+                sample_parameters,
+                dit_dtype,
+            )
             if optimizer_train_fn:
                 optimizer_train_fn()
 
-            # Do validation only if validation dataloader exists, validation hasn't already run at this step, and epoch-end validation is enabled
+            # Handle epoch-end validation
             should_validate_on_epoch_end = getattr(args, "validate_on_epoch_end", False)
-            if (
-                val_dataloader is not None
-                and last_validated_step != global_step
-                and should_validate_on_epoch_end
-            ):
-                # Sync validation datasets before validation runs
-                self.validation_core.sync_validation_epoch(
-                    val_dataloader,
-                    val_epoch_step_sync,
-                    current_epoch.value if current_epoch else epoch + 1,
-                    global_step,
-                )
-
-                # Trigger validation_start junction event
-                trigger_event(
-                    "validation_start",
-                    args=args,
-                    accelerator=accelerator,
-                    transformer=transformer,
-                    val_dataloader=val_dataloader,
-                    vae=vae,
-                    global_step=global_step
-                )
-
-                val_loss = self.validation_core.validate(
-                    accelerator,
-                    transformer,
-                    val_dataloader,
-                    noise_scheduler,
-                    args,
-                    control_signal_processor,
-                    vae,
-                    global_step,
-                )
-                self.validation_core.log_validation_results(
-                    accelerator, val_loss, global_step, epoch + 1
-                )
-
-                # Trigger validation_end junction event
-                trigger_event(
-                    "validation_end",
-                    args=args,
-                    accelerator=accelerator,
-                    val_loss=val_loss,
-                    global_step=global_step
-                )
-            elif val_dataloader is None:
-                accelerator.print(
-                    f"\n[Epoch {epoch+1}] No validation dataset configured"
-                )
-            elif not should_validate_on_epoch_end:
-                accelerator.print(f"\n[Epoch {epoch+1}] Epoch-end validation disabled")
-            else:
-                accelerator.print(
-                    f"\n[Epoch {epoch+1}] Validation already performed at step {global_step}"
-                )
+            handle_epoch_end_validation(
+                should_validate_on_epoch_end,
+                val_dataloader,
+                last_validated_step,
+                global_step,
+                self.validation_core,
+                val_epoch_step_sync,
+                current_epoch,
+                epoch,
+                args,
+                accelerator,
+                transformer,
+                noise_scheduler,
+                control_signal_processor,
+                vae,
+            )
 
             # Trigger epoch_end junction event
             trigger_event(
@@ -2209,7 +1383,7 @@ class TrainingCore:
                 epoch=epoch + 1,
                 global_step=global_step,
                 network=network,
-                loss_recorder=loss_recorder
+                loss_recorder=loss_recorder,
             )
 
             # end of epoch

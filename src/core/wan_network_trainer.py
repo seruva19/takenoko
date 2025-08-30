@@ -119,6 +119,10 @@ class WanNetworkTrainer:
         self.vae_training_core = VaeTrainingCore(self.config)
         self.reward_training_core = RewardTrainingCore(self.config)
 
+        # Configure advanced logging settings (progress bar, parameter stats, etc.)
+        # This ensures TOML config values are actually used instead of hardcoded defaults
+        self.training_core.configure_advanced_logging(args)
+
         # Initialize adaptive timestep sampling if available
         if hasattr(args, "enable_adaptive_timestep_sampling"):
             try:

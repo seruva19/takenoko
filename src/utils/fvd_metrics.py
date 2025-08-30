@@ -167,8 +167,9 @@ class ReferenceFVDMetric(FVDMetric):
         """Load I3D backbone from TensorFlow Hub."""
         if self._backbone is None:
             try:
-                import tensorflow as tf
-                import tensorflow_hub as hub
+                # pip install tensorflow tensorflow-hub tensorflow-gan scipy
+                import tensorflow as tf  # type: ignore
+                import tensorflow_hub as hub  # type: ignore
 
                 # Load I3D model from TF Hub
                 module_spec = "https://tfhub.dev/deepmind/i3d-kinetics-400/1"
@@ -238,8 +239,8 @@ class ReferenceFVDMetric(FVDMetric):
     ) -> float:
         """Compute exact Fréchet distance using TensorFlow GAN implementation."""
         try:
-            import tensorflow as tf
-            import tensorflow_gan as tfgan
+            import tensorflow as tf  # type: ignore
+            import tensorflow_gan as tfgan  # type: ignore
 
             # Convert to TF tensors
             real_tf = tf.convert_to_tensor(real_features.detach().cpu().numpy())
