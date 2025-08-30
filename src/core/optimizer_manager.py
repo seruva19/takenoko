@@ -581,6 +581,7 @@ class OptimizerManager:
                 "hybrid_adaptive": "optimizers.custom_schedulers.adaptive_schedulers.HybridAdaptiveScheduler",
                 "adaptive_per_cycle_cosine": "optimizers.custom_schedulers.adaptive_schedulers.AdaptivePerCycleWarmupCosineScheduler",
                 "cycle_adaptive_per_cycle": "optimizers.custom_schedulers.adaptive_schedulers.CycleAdaptivePerCycleScheduler",
+                "rex": "optimizers.custom_schedulers.rex_scheduler.RexLR",
             }
 
             if lr_scheduler_type in alias_map:
@@ -591,6 +592,24 @@ class OptimizerManager:
                 )
                 lr_scheduler_module = importlib.import_module(module_path)
                 lr_scheduler_class = getattr(lr_scheduler_module, class_name)
+
+                # Special handling for REX scheduler to auto-populate parameters
+                if lr_scheduler_type == "rex":
+                    # Set default parameters if not provided
+                    if "max_lr" not in lr_scheduler_kwargs:
+                        lr_scheduler_kwargs["max_lr"] = args.learning_rate
+                    if "num_steps" not in lr_scheduler_kwargs:
+                        lr_scheduler_kwargs["num_steps"] = num_training_steps
+                    if "num_warmup_steps" not in lr_scheduler_kwargs:
+                        lr_scheduler_kwargs["num_warmup_steps"] = num_warmup_steps
+                    if (
+                        "min_lr_ratio" not in lr_scheduler_kwargs
+                        and "min_lr" not in lr_scheduler_kwargs
+                    ):
+                        lr_scheduler_kwargs["min_lr_ratio"] = (
+                            min_lr_ratio if min_lr_ratio is not None else 0.01
+                        )
+
                 return lr_scheduler_class(optimizer, **lr_scheduler_kwargs)
 
             logger.info(

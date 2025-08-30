@@ -63,3 +63,4 @@ Keep in mind that work on some features is not yet complete due to time and hard
 | [VideoX-Fun](https://github.com/aigc-apps/VideoX-Fun) | repo | - Reward LoRA training | [aigc-apps](https://github.com/aigc-apps) | Apache 2.0 | |
 | [Fira](https://github.com/xichen-fy/Fira) | repo | - Fira optimizer | [xichen-fy](https://github.com/xichen-fy) | Apache 2.0 | |
 | [google-research](https://github.com/google-research/google-research) | repo | - Frechet Video Distance (FVD) implementation | [google-research](https://github.com/google-research) | Apache 2.0 | |
+| [musubi-tuner (pr)](https://github.com/kohya-ss/musubi-tuner/pull/513) | repo | - Reflected Exponential Learning Rate scheduler | [xzuyn](https://github.com/xzuyn) | Apache 2.0 | |
