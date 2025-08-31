@@ -156,6 +156,9 @@ rope_on_the_fly = false
 # RoPE variant for positional embeddings: "default" (standard) or "comfy" (Comfy-style; enables advanced ND RoPE)
 rope_func = "default"
 
+# Use float32 precision for RoPE calculations instead of float64 (memory optimization, minimal accuracy loss)
+rope_use_float32 = true
+
 # =============================================================================
 # OPTIMIZER SETTINGS
 # =============================================================================

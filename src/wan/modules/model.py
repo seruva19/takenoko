@@ -61,11 +61,11 @@ except Exception:
     flex = flex_attention
 
 
-def sinusoidal_embedding_1d(dim, position):
+def sinusoidal_embedding_1d(dim, position, use_float32=False):
     # preprocess
     assert dim % 2 == 0
     half = dim // 2
-    position = position.type(torch.float64)
+    position = position.type(torch.float32 if use_float32 else torch.float64)
 
     # calculation
     sinusoid = torch.outer(
@@ -76,12 +76,13 @@ def sinusoidal_embedding_1d(dim, position):
 
 
 # @amp.autocast(enabled=False)
-# no autocast is needed for rope_apply, because it is already in float64
-def rope_params(max_seq_len, dim, theta=10000):
+# no autocast is needed for rope_apply, because it is already in float64/float32
+def rope_params(max_seq_len, dim, theta=10000, use_float32=False):
     assert dim % 2 == 0
+    dtype = torch.float32 if use_float32 else torch.float64
     freqs = torch.outer(
         torch.arange(max_seq_len),
-        1.0 / torch.pow(theta, torch.arange(0, dim, 2).to(torch.float64).div(dim)),
+        1.0 / torch.pow(theta, torch.arange(0, dim, 2).to(dtype).div(dim)),
     )
     freqs = torch.polar(torch.ones_like(freqs), freqs)
     return freqs
@@ -957,11 +958,13 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
         # buffers (don't use register_buffer otherwise dtype will be changed in to())
         assert (dim % num_heads) == 0 and (dim // num_heads) % 2 == 0
         d = dim // num_heads
+        # Get rope precision setting from model attributes
+        rope_float32 = getattr(self, "rope_use_float32", False)
         self.freqs = torch.cat(
             [
-                rope_params(1024, d - 4 * (d // 6)),
-                rope_params(1024, 2 * (d // 6)),
-                rope_params(1024, 2 * (d // 6)),
+                rope_params(1024, d - 4 * (d // 6), use_float32=rope_float32),
+                rope_params(1024, 2 * (d // 6), use_float32=rope_float32),
+                rope_params(1024, 2 * (d // 6), use_float32=rope_float32),
             ],
             dim=1,
         )
@@ -1245,8 +1248,9 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
                 t_tokens_flat = t_frames_flat.repeat_interleave(repeats_frames)
 
                 # Compute time embeddings for all tokens at once
+                rope_float32 = getattr(self, "rope_use_float32", False)
                 e_tokens_flat = self.time_embedding(
-                    sinusoidal_embedding_1d(self.freq_dim, t_tokens_flat).float()
+                    sinusoidal_embedding_1d(self.freq_dim, t_tokens_flat, use_float32=rope_float32).float()
                 )  # [sum(L), dim]
                 e0_tokens_flat = self.time_projection(e_tokens_flat).unflatten(
                     1, (6, self.dim)
@@ -1268,8 +1272,9 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
                 e[batch_idx_flat, token_pos_flat, :] = e_tokens_flat
                 e0[batch_idx_flat, token_pos_flat, :, :] = e0_tokens_flat
             elif self.effective_model_version == "2.1" or self._simple_modulation:
+                rope_float32 = getattr(self, "rope_use_float32", False)
                 e = self.time_embedding(
-                    sinusoidal_embedding_1d(self.freq_dim, t).float()
+                    sinusoidal_embedding_1d(self.freq_dim, t, use_float32=rope_float32).float()
                 ).to(self.e_dtype)
                 e0 = (
                     self.time_projection(e).unflatten(1, (6, self.dim)).to(self.e_dtype)
@@ -1281,8 +1286,9 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
                         t_scalar = t[:, 0]
                     else:
                         t_scalar = t
+                    rope_float32 = getattr(self, "rope_use_float32", False)
                     e = self.time_embedding(
-                        sinusoidal_embedding_1d(self.freq_dim, t_scalar).float()
+                        sinusoidal_embedding_1d(self.freq_dim, t_scalar, use_float32=rope_float32).float()
                     ).to(
                         self.e_dtype
                     )  # [B, dim]
@@ -1300,8 +1306,9 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
 
                     bt = t.size(0)
                     t = t.flatten()
+                    rope_float32 = getattr(self, "rope_use_float32", False)
                     e = self.time_embedding(
-                        sinusoidal_embedding_1d(self.freq_dim, t)
+                        sinusoidal_embedding_1d(self.freq_dim, t, use_float32=rope_float32)
                         .unflatten(0, (bt, seq_len))
                         .float()
                     ).to(self.e_dtype)
@@ -1728,6 +1735,7 @@ def load_wan_model(
     rope_func: str = "default",
     compile_args: Optional[list] = None,
     fp8_format: str = "e4m3",
+    rope_use_float32: bool = False,
 ) -> WanModel:
     """
     Load a WAN model from the specified checkpoint.
@@ -1788,6 +1796,7 @@ def load_wan_model(
         # Set advanced RoPE knob on model
         try:
             setattr(model, "rope_func", rope_func)
+            setattr(model, "rope_use_float32", rope_use_float32)
             if compile_args is not None:
                 setattr(model, "compile_args", compile_args)
         except Exception:

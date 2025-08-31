@@ -166,6 +166,8 @@ def create_args_from_config(
     )
     # RoPE variant (advanced)
     args.rope_func = str(config.get("rope_func", "default"))
+    # RoPE precision optimization (float32 vs float64)
+    args.rope_use_float32 = bool(config.get("rope_use_float32", True))
 
     # Optional: force lower precision attention compute (fp16) for additional VRAM savings
     args.lower_precision_attention = bool(

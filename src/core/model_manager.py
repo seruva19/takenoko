@@ -155,6 +155,7 @@ class ModelManager:
                 getattr(args, "optimized_torch_compile", False)
             ),
             rope_func=str(getattr(args, "rope_func", "default")),
+            rope_use_float32=bool(getattr(args, "rope_use_float32", False)),
             lean_attention_fp32_default=bool(
                 getattr(args, "lean_attention_fp32_default", False)
             ),
@@ -250,6 +251,7 @@ class ModelManager:
                 getattr(args, "exclude_ffn_from_scaled_mm", False)
             ),
             scale_input_tensor=getattr(args, "scale_input_tensor", None),
+            rope_use_float32=bool(getattr(args, "rope_use_float32", False)),
         )
 
         # Enable block swap for the temporary high-noise model only when not offloading it
