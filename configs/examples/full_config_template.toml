@@ -225,7 +225,7 @@ lr_scheduler_args = ''
 # NETWORK SETTINGS
 # =============================================================================
 
-# Network module to train: "networks.lora_wan", "networks.control_lora_wan", "networks.reward_lora", "networks.vae_wan", "lycoris.kohya", "networks.t_lora"
+# Network module to train: "networks.lora_wan", "networks.control_lora_wan", "networks.reward_lora", "networks.vae_wan", "lycoris.kohya", "networks.t_lora", "networks.moc_lora"
 # The module defines trainable adapters and is imported dynamically by the trainer.
 network_module = "networks.lora_wan"
 
@@ -290,6 +290,29 @@ network_alpha = 32
 #   "ortho_from_layer=true",
 #   "ortho_reg_lambda_p=1e-3",
 #   "ortho_reg_lambda_q=1e-3",
+# ]
+
+# MoC-LoRA (Mixture of Contexts for Long Video Generation)
+# Activated when network_module = "networks.moc_lora".
+# Parameters:
+# - moc_chunk_size: chunk size for MoC attention (int ≥ 1024)
+# - moc_top_k: top-k for MoC attention (int ≥ 1)
+# - moc_progressive_sparsify: enable progressive sparsification for MoC attention (bool)
+# - moc_enable_causality: enable causality for MoC attention (bool)
+# - moc_context_dropout: dropout for MoC attention (float in [0.0, 1.0])
+# - moc_implementation: implementation mode ("original" for 100% original accuracy, "optimized" for speed)
+# - moc_max_layers: limit MoC to first N layers for memory control (int, optional)
+# - moc_max_modules: limit MoC to first N modules per layer for memory control (int, optional)
+# Example MoC-LoRA configuration:
+# network_args = [
+#   "moc_chunk_size=1280",
+#   "moc_top_k=5",
+#   "moc_progressive_sparsify=false",
+#   "moc_enable_causality=true",
+#   "moc_context_dropout=0.0",
+#   "moc_implementation=optimized",
+#   "moc_max_layers=2",
+#   "moc_max_modules=4"
 # ]
 
 # arbitrary comment string stored in metadata
