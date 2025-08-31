@@ -167,7 +167,7 @@ def create_args_from_config(
     # RoPE variant (advanced)
     args.rope_func = str(config.get("rope_func", "default"))
     # RoPE precision optimization (float32 vs float64)
-    args.rope_use_float32 = bool(config.get("rope_use_float32", True))
+    args.rope_use_float32 = bool(config.get("rope_use_float32", False))
 
     # Optional: force lower precision attention compute (fp16) for additional VRAM savings
     args.lower_precision_attention = bool(
@@ -794,6 +794,13 @@ def create_args_from_config(
     )  # "l2_sq" or "cosine"
     # Optional: pool spatial tokens per frame before dispersion ("none" or "frame_mean")
     args.dispersive_loss_pooling = config.get("dispersive_loss_pooling", "none")
+
+    # Loss function settings
+    args.loss_type = config.get("loss_type", "mse")
+    args.pseudo_huber_c = config.get("pseudo_huber_c", 0.5)
+    args.pseudo_huber_schedule_type = config.get("pseudo_huber_schedule_type", "linear")
+    args.pseudo_huber_c_min = config.get("pseudo_huber_c_min", 0.1)
+    args.pseudo_huber_c_max = config.get("pseudo_huber_c_max", 1.0)
 
     # Optical Flow Loss (RAFT-based) settings
     args.enable_optical_flow_loss = config.get("enable_optical_flow_loss", False)

@@ -990,6 +990,12 @@ class WanNetworkTrainer:
 
         if is_vae_training:
             logger.info("🎨 Starting VAE training mode")
+
+            # Log loss type information
+            from criteria.pseudo_huber_loss import log_loss_type_info
+
+            log_loss_type_info(args)
+
             # Run VAE training loop
             global_step, network = self.vae_training_core.run_vae_training_loop(  # type: ignore
                 args=args,
@@ -1018,6 +1024,12 @@ class WanNetworkTrainer:
             )
         elif enable_reward_training:
             logger.info("🏆 Starting Reward LoRA training mode")
+
+            # Log loss type information
+            from criteria.pseudo_huber_loss import log_loss_type_info
+
+            log_loss_type_info(args)
+
             # Ensure VAE is available for decoding
             if vae is None:
                 # Attempt lazy load (reusing SamplingManager path)
@@ -1045,6 +1057,11 @@ class WanNetworkTrainer:
             )
         else:
             logger.info("🤖 Starting DiT training mode")
+
+            # Log loss type information
+            from criteria.pseudo_huber_loss import log_loss_type_info
+
+            log_loss_type_info(args)
 
             # ========== REPA Helper Setup ==========
             repa_helper = None

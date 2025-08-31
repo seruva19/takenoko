@@ -157,7 +157,7 @@ rope_on_the_fly = false
 rope_func = "default"
 
 # Use float32 precision for RoPE calculations instead of float64 (memory optimization, minimal accuracy loss)
-rope_use_float32 = true
+rope_use_float32 = false
 
 # =============================================================================
 # OPTIMIZER SETTINGS
@@ -452,6 +452,55 @@ fast_rejection_sampling = false
 # show_timesteps = 'console' 
 
 # =============================================================================
+# LOSS SETTINGS
+# =============================================================================
+
+# Base loss function type: "mse", "l1", "huber", "pseudo_huber", "pseudo_huber_scheduled"
+# - "mse": Standard Mean Squared Error loss (default)
+# - "l1": L1 (Mean Absolute Error) loss
+# - "huber": Standard Huber loss with fixed delta
+# - "pseudo_huber": Pseudo-Huber loss with fixed c parameter
+# - "pseudo_huber_scheduled": Pseudo-Huber loss with adaptive c parameter scheduling
+loss_type = "mse"
+
+# Pseudo-Huber c parameter (controls transition between L2 and L1 behavior)
+# Smaller values (0.1-0.5) = more L1-like (robust to outliers)
+# Larger values (1.0-2.0) = more L2-like (smooth gradients)
+pseudo_huber_c = 0.5
+
+# Scheduling type for adaptive c parameter (when loss_type = "pseudo_huber_scheduled")
+# Options: "linear", "cosine", "exponential"
+pseudo_huber_schedule_type = "linear"
+
+# Minimum c value for scheduling (start of training)
+pseudo_huber_c_min = 0.1
+
+# Maximum c value for scheduling (end of training)
+pseudo_huber_c_max = 1.0
+
+# =============================================================================
+# ⚠️ DISPERSIVE LOSS SETTINGS
+# =============================================================================
+
+# Enable dispersive loss for improved generation quality and speed.
+enable_dispersive_loss = false
+
+# The lambda (λ) hyperparameter that controls the strength of the dispersive loss. The paper found 0.05 to be a robust value.
+dispersive_loss_lambda = 0.05
+
+# Temperature parameter (> 0). Smaller values sharpen repulsion.
+dispersive_loss_tau = 0.5
+
+# None disables extraction, non-negative integer selects a block index
+dispersive_loss_target_block = 2
+
+# "l2_sq" or "cosine"
+dispersive_loss_metric = "l2_sq"
+
+# Optional: pool spatial tokens per frame before dispersion ("none" or "frame_mean")
+dispersive_loss_pooling = "none"
+
+# =============================================================================
 # ⚠️ ADAPTIVE TIMESTEP SAMPLING
 # =============================================================================
 
@@ -563,28 +612,6 @@ adaptive_comparative_logging = false
 # When enabled, activates complete research methodology including policy gradient updates
 # Requires diffusion object with q_posterior_mean_var and p_mean_var methods
 adaptive_research_mode_enabled = false
-
-# =============================================================================
-# ⚠️ DISPERSIVE LOSS SETTINGS
-# =============================================================================
-
-# Enable dispersive loss for improved generation quality and speed.
-enable_dispersive_loss = false
-
-# The lambda (λ) hyperparameter that controls the strength of the dispersive loss. The paper found 0.05 to be a robust value.
-dispersive_loss_lambda = 0.05
-
-# Temperature parameter (> 0). Smaller values sharpen repulsion.
-dispersive_loss_tau = 0.5
-
-# None disables extraction, non-negative integer selects a block index
-dispersive_loss_target_block = 2
-
-# "l2_sq" or "cosine"
-dispersive_loss_metric = "l2_sq"
-
-# Optional: pool spatial tokens per frame before dispersion ("none" or "frame_mean")
-dispersive_loss_pooling = "none"
 
 # =============================================================================
 # ⚠️ CONTRASTIVE FLOW MATCHING (ΔFM) SETTINGS

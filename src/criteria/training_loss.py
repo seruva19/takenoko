@@ -15,6 +15,7 @@ import torch.nn.functional as F
 
 from common.logger import get_logger
 from criteria.dispersive_loss import dispersive_loss_info_nce
+from criteria.pseudo_huber_loss import conditional_loss_with_pseudo_huber
 from utils.train_utils import get_sigmas
 
 
@@ -107,7 +108,6 @@ class TrainingLossComputer:
             [noisy_model_input, control_latents.to(noisy_model_input)], dim=concat_dim
         )
 
-    # ---- Public API ----
     @torch.no_grad()
     def _compute_prior_pred_for_dop(
         self,
@@ -190,14 +190,54 @@ class TrainingLossComputer:
                 device=accelerator.device, dtype=network_dtype
             )
 
-            loss_fm = F.mse_loss(model_pred.to(network_dtype), target, reduction="none")
-            loss_contrastive = F.mse_loss(
-                model_pred.to(network_dtype), negative_target, reduction="none"
+            # Use conditional loss function based on loss_type
+            current_step = getattr(args, "current_step", None)
+            total_steps = getattr(args, "total_steps", None)
+
+            loss_fm = conditional_loss_with_pseudo_huber(
+                model_pred.to(network_dtype),
+                target,
+                loss_type=args.loss_type,
+                huber_c=args.pseudo_huber_c,
+                current_step=current_step,
+                total_steps=total_steps,
+                schedule_type=args.pseudo_huber_schedule_type,
+                c_min=args.pseudo_huber_c_min,
+                c_max=args.pseudo_huber_c_max,
+                reduction="none",
             )
+            loss_contrastive = conditional_loss_with_pseudo_huber(
+                model_pred.to(network_dtype),
+                negative_target,
+                loss_type=args.loss_type,
+                huber_c=args.pseudo_huber_c,
+                current_step=current_step,
+                total_steps=total_steps,
+                schedule_type=args.pseudo_huber_schedule_type,
+                c_min=args.pseudo_huber_c_min,
+                c_max=args.pseudo_huber_c_max,
+                reduction="none",
+            )
+
             lambda_val = float(getattr(args, "contrastive_flow_lambda", 0.05))
             loss = loss_fm - lambda_val * loss_contrastive
         else:
-            loss = F.mse_loss(model_pred.to(network_dtype), target, reduction="none")
+            # Use conditional loss function based on loss_type
+            current_step = getattr(args, "current_step", None)
+            total_steps = getattr(args, "total_steps", None)
+
+            loss = conditional_loss_with_pseudo_huber(
+                model_pred.to(network_dtype),
+                target,
+                loss_type=args.loss_type,
+                huber_c=args.pseudo_huber_c,
+                current_step=current_step,
+                total_steps=total_steps,
+                schedule_type=args.pseudo_huber_schedule_type,
+                c_min=args.pseudo_huber_c_min,
+                c_max=args.pseudo_huber_c_max,
+                reduction="none",
+            )
 
         # ---- Dataset sample weights ----
         sample_weights = batch.get("weight", None)
@@ -225,29 +265,35 @@ class TrainingLossComputer:
             try:
                 # Convert timesteps to 0-1 range for importance lookup
                 timesteps_normalized = timesteps.float() / 1000.0
-                
+
                 # Get importance weights
-                importance_weights = adaptive_manager.get_adaptive_sampling_weights(timesteps_normalized)
-                
+                importance_weights = adaptive_manager.get_adaptive_sampling_weights(
+                    timesteps_normalized
+                )
+
                 if importance_weights is not None and importance_weights.numel() > 0:
                     # Ensure weights have correct shape for broadcasting
                     if importance_weights.dim() > 1:
                         importance_weights = importance_weights.view(-1)
-                    
+
                     # Reshape loss to match batch dimension if needed
                     if loss.dim() > 1:
                         # Reduce loss to per-sample while preserving batch dimension
                         loss_per_sample = loss.view(loss.size(0), -1).mean(dim=1)
                     else:
                         loss_per_sample = loss
-                    
+
                     # Apply importance weights
                     if loss_per_sample.size(0) == importance_weights.size(0):
                         loss = loss_per_sample * importance_weights
-                        logger.debug(f"Applied adaptive importance weights: mean={importance_weights.mean():.3f}")
+                        logger.debug(
+                            f"Applied adaptive importance weights: mean={importance_weights.mean():.3f}"
+                        )
                     else:
-                        logger.debug(f"Size mismatch: loss {loss_per_sample.size(0)} vs weights {importance_weights.size(0)}")
-                        
+                        logger.debug(
+                            f"Size mismatch: loss {loss_per_sample.size(0)} vs weights {importance_weights.size(0)}"
+                        )
+
             except Exception as e:
                 logger.debug(f"Error applying adaptive importance weights: {e}")
                 # Continue without adaptive weighting
