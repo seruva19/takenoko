@@ -929,16 +929,18 @@ validate_on_epoch_end = true
 # - "fixed": use the list in validation_timesteps every time (default)
 # - "random": draw validation_timesteps_count integers uniformly within [validation_timesteps_min, validation_timesteps_max]
 # - "jitter": for each base timestep in validation_timesteps, draw a timestep within ±validation_timesteps_jitter, clamped to [validation_timesteps_min, validation_timesteps_max]
+# - "training_distribution": use the same timestep sampling distribution as training (uniform, sigmoid, content, style, etc.)
 validation_timesteps_mode = "fixed"
 
 # Base list of timesteps for validation.
 # - When validation_timesteps_mode = "fixed": use exactly this list every validation
 # - When validation_timesteps_mode = "jitter": apply ±validation_timesteps_jitter around each base value
 # - When validation_timesteps_mode = "random": ignored (random draws are used instead)
+# - When validation_timesteps_mode = "training_distribution": ignored (uses training distribution instead)
 # Example: '100,300,500,700,900'
 validation_timesteps = "100,300,500,700,900"
 
-# For mode == "random": number of unique timesteps to draw per validation
+# For mode == "random" or "training_distribution": number of unique timesteps to draw per validation
 validation_timesteps_count = 4
 
 # Global min clamp for random and jitter modes. If omitted, falls back to min_timestep or 0.

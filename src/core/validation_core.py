@@ -197,6 +197,7 @@ class ValidationCore:
         vae: Optional[Any] = None,
         global_step: Optional[int] = None,
         show_progress: bool = True,
+        timestep_distribution: Optional[Any] = None,
     ) -> tuple[float, float]:
         # Determine validation timesteps according to mode
         try:
@@ -242,7 +243,51 @@ class ValidationCore:
         min_t = int(min_t)
         max_t = int(max_t)
 
-        if mode == "random":
+        if mode == "training_distribution":
+            # Use the same distribution as training
+            count = int(
+                getattr(
+                    args, "validation_timesteps_count", self.validation_timesteps_count
+                )
+            )
+            count = max(1, count)
+
+            # Import the training timestep sampling utilities
+            from scheduling.timestep_utils import _sample_standard_timesteps
+
+            # Sample timesteps using the training distribution
+            # Create dummy latents for spatial calculations if needed
+            dummy_latents = torch.zeros(1, 3, 64, 64, device=accelerator.device)
+
+            # Sample timesteps in [0, 1] range using training distribution
+            t_normalized = _sample_standard_timesteps(
+                args, count, accelerator.device, dummy_latents, timestep_distribution
+            )
+
+            # Scale to actual timestep range and convert to integers
+            t_scaled = t_normalized * (max_t - min_t) + min_t
+            samples = [int(t.item()) for t in t_scaled]
+
+            # Ensure unique timesteps (in case of duplicates)
+            unique_samples = []
+            for t in samples:
+                if t not in unique_samples:
+                    unique_samples.append(t)
+                if len(unique_samples) >= count:
+                    break
+
+            # If we don't have enough unique samples, add more
+            while len(unique_samples) < count:
+                additional_t = _sample_standard_timesteps(
+                    args, 1, accelerator.device, dummy_latents, timestep_distribution
+                )
+                additional_scaled = int((additional_t * (max_t - min_t) + min_t).item())
+                if additional_scaled not in unique_samples:
+                    unique_samples.append(additional_scaled)
+
+            self.validation_timesteps = unique_samples[:count]
+
+        elif mode == "random":
             count = int(
                 getattr(
                     args, "validation_timesteps_count", self.validation_timesteps_count

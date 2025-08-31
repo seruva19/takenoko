@@ -1205,6 +1205,7 @@ class TrainingCore:
                             sampling_manager,
                             self._warned_no_val_pixels_for_perceptual,
                             last_validated_step,
+                            self.timestep_distribution,
                         )
 
                         # Handle step saving
@@ -1248,7 +1249,8 @@ class TrainingCore:
                         self._iter_time_ema_beta,
                         progress_bar,
                         max_mean_logs,
-                        step + 1,  # step is 0-indexed, but we want 1-indexed for display
+                        step
+                        + 1,  # step is 0-indexed, but we want 1-indexed for display
                         len(train_dataloader),
                     )
                 )

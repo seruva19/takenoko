@@ -25,9 +25,10 @@ def handle_step_validation(
     sampling_manager: Optional[Any],
     warned_no_val_pixels_for_perceptual: bool,
     last_validated_step: int,
+    timestep_distribution: Optional[Any] = None,
 ) -> Tuple[int, bool]:
     """Handle validation during training step.
-    
+
     Args:
         should_validating: Whether validation should occur
         validation_core: The validation core instance
@@ -45,13 +46,13 @@ def handle_step_validation(
         sampling_manager: Sampling manager instance
         warned_no_val_pixels_for_perceptual: Warning flag state
         last_validated_step: Last step when validation occurred
-        
+
     Returns:
         Tuple of (new_last_validated_step, new_warned_flag)
     """
     if not should_validating:
         return last_validated_step, warned_no_val_pixels_for_perceptual
-    
+
     # Sync validation datasets before validation runs
     validation_core.sync_validation_epoch(
         val_dataloader,
@@ -66,17 +67,14 @@ def handle_step_validation(
             bool(getattr(args, "enable_perceptual_snr", False)),
             bool(getattr(args, "enable_temporal_ssim", False)),
             bool(getattr(args, "enable_temporal_lpips", False)),
-            bool(
-                getattr(args, "enable_flow_warped_ssim", False)
-            ),
+            bool(getattr(args, "enable_flow_warped_ssim", False)),
             bool(getattr(args, "enable_fvd", False)),
             bool(getattr(args, "enable_vmaf", False)),
         ]
     )
     # Only consider loading a VAE if validation batches include pixels
     requires_vae_for_val = (
-        bool(getattr(args, "load_val_pixels", False))
-        and metrics_enabled
+        bool(getattr(args, "load_val_pixels", False)) and metrics_enabled
     )
 
     # If metrics are enabled but pixels are not loaded, warn once and skip VAE loading
@@ -91,16 +89,14 @@ def handle_step_validation(
             "Perceptual/temporal validation metrics are enabled but load_val_pixels=false; skipping these metrics and not loading a VAE. Set load_val_pixels=true to enable them."
         )
         new_warned_flag = True
-        
+
     temp_val_vae = None
     val_vae_to_use = vae
     if val_vae_to_use is None and requires_vae_for_val:
         try:
             if sampling_manager is not None:
                 if accelerator.is_main_process:
-                    logger.info(
-                        "🔄 Loading VAE temporarily for validation metrics..."
-                    )
+                    logger.info("🔄 Loading VAE temporarily for validation metrics...")
                 temp_val_vae = sampling_manager._load_vae_lazy()  # type: ignore[attr-defined]
                 val_vae_to_use = temp_val_vae
             else:
@@ -127,7 +123,7 @@ def handle_step_validation(
         transformer=transformer,
         val_dataloader=val_dataloader,
         vae=val_vae_to_use,
-        global_step=global_step
+        global_step=global_step,
     )
 
     val_loss = validation_core.validate(
@@ -139,10 +135,9 @@ def handle_step_validation(
         control_signal_processor,
         val_vae_to_use,
         global_step,
+        timestep_distribution=timestep_distribution,
     )
-    validation_core.log_validation_results(
-        accelerator, val_loss, global_step
-    )
+    validation_core.log_validation_results(accelerator, val_loss, global_step)
 
     # Trigger validation_end junction event
     trigger_event(
@@ -150,25 +145,18 @@ def handle_step_validation(
         args=args,
         accelerator=accelerator,
         val_loss=val_loss,
-        global_step=global_step
+        global_step=global_step,
     )
 
     # Unload temporary VAE if it was loaded for validation
-    if (
-        temp_val_vae is not None
-        and sampling_manager is not None
-    ):
+    if temp_val_vae is not None and sampling_manager is not None:
         try:
             sampling_manager._unload_vae(temp_val_vae)  # type: ignore[attr-defined]
             if accelerator.is_main_process:
-                logger.info(
-                    "🧹 Unloaded temporary VAE after validation"
-                )
+                logger.info("🧹 Unloaded temporary VAE after validation")
         except Exception as e:
             if accelerator.is_main_process:
-                logger.debug(
-                    f"Failed to unload temporary VAE after validation: {e}"
-                )
+                logger.debug(f"Failed to unload temporary VAE after validation: {e}")
 
     # Track that validation occurred at this step
     return global_step, new_warned_flag
@@ -191,7 +179,7 @@ def handle_epoch_end_validation(
     vae: Optional[Any],
 ) -> None:
     """Handle validation at end of epoch.
-    
+
     Args:
         should_validate_on_epoch_end: Whether epoch-end validation should occur
         val_dataloader: Validation dataloader
@@ -214,9 +202,7 @@ def handle_epoch_end_validation(
         and should_validate_on_epoch_end
     ):
         if val_dataloader is None:
-            accelerator.print(
-                f"\n[Epoch {epoch+1}] No validation dataset configured"
-            )
+            accelerator.print(f"\n[Epoch {epoch+1}] No validation dataset configured")
         elif last_validated_step == global_step:
             accelerator.print(
                 f"\n[Epoch {epoch+1}] Validation already performed at step {global_step}"
@@ -239,7 +225,7 @@ def handle_epoch_end_validation(
         transformer=transformer,
         val_dataloader=val_dataloader,
         vae=vae,
-        global_step=global_step
+        global_step=global_step,
     )
 
     val_loss = validation_core.validate(
@@ -262,5 +248,5 @@ def handle_epoch_end_validation(
         args=args,
         accelerator=accelerator,
         val_loss=val_loss,
-        global_step=global_step
+        global_step=global_step,
     )
