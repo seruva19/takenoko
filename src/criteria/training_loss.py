@@ -64,6 +64,7 @@ class TrainingLossComputer:
 
     def __init__(self, config: Any) -> None:
         self.config = config
+        self._last_contrastive_components = None
 
     # ---- Internal helpers ----
     def _compute_seq_len(self, latents: torch.Tensor) -> int:
@@ -177,50 +178,108 @@ class TrainingLossComputer:
         The returned `total_loss` is the scalar to backpropagate.
         """
 
-        # ---- Base or Contrastive Flow Matching ----
+        # ---- Contrastive Flow Matching (Enhanced with DeltaFM improvements) ----
         if (
             hasattr(args, "enable_contrastive_flow_matching")
             and args.enable_contrastive_flow_matching
         ):
-            batch_size = latents.size(0)
-            shuffled_indices = torch.randperm(batch_size, device=accelerator.device)
-            negative_latents = latents[shuffled_indices]
-            negative_noise = noise[shuffled_indices]
-            negative_target = negative_noise - negative_latents.to(
-                device=accelerator.device, dtype=network_dtype
-            )
+            # Import enhanced utilities only when needed for backward compatibility
+            try:
+                from common.contrastive_flow_utils import (
+                    class_conditioned_negative_sampling,
+                    compute_enhanced_contrastive_loss,
+                    extract_class_labels_from_batch,
+                )
+                use_enhanced = True
+            except ImportError:
+                logger.warning("Enhanced contrastive flow utilities not available, using basic implementation")
+                use_enhanced = False
 
-            # Use conditional loss function based on loss_type
+            batch_size = latents.size(0)
             current_step = getattr(args, "current_step", None)
             total_steps = getattr(args, "total_steps", None)
-
-            loss_fm = conditional_loss_with_pseudo_huber(
-                model_pred.to(network_dtype),
-                target,
-                loss_type=args.loss_type,
-                huber_c=args.pseudo_huber_c,
-                current_step=current_step,
-                total_steps=total_steps,
-                schedule_type=args.pseudo_huber_schedule_type,
-                c_min=args.pseudo_huber_c_min,
-                c_max=args.pseudo_huber_c_max,
-                reduction="none",
-            )
-            loss_contrastive = conditional_loss_with_pseudo_huber(
-                model_pred.to(network_dtype),
-                negative_target,
-                loss_type=args.loss_type,
-                huber_c=args.pseudo_huber_c,
-                current_step=current_step,
-                total_steps=total_steps,
-                schedule_type=args.pseudo_huber_schedule_type,
-                c_min=args.pseudo_huber_c_min,
-                c_max=args.pseudo_huber_c_max,
-                reduction="none",
-            )
-
             lambda_val = float(getattr(args, "contrastive_flow_lambda", 0.05))
-            loss = loss_fm - lambda_val * loss_contrastive
+
+            if use_enhanced:
+                # Enhanced implementation with class-conditioned sampling
+                labels = extract_class_labels_from_batch(batch)
+                use_class_conditioning = (
+                    getattr(args, "contrastive_flow_class_conditioning", True) 
+                    and labels is not None
+                )
+                
+                if use_class_conditioning:
+                    try:
+                        negative_indices = class_conditioned_negative_sampling(labels, accelerator.device)
+                    except (ValueError, RuntimeError) as e:
+                        logger.warning(f"Class-conditioned sampling failed ({e}), falling back to random sampling")
+                        negative_indices = torch.randperm(batch_size, device=accelerator.device)
+                        use_class_conditioning = False  # Update for monitoring
+                else:
+                    negative_indices = torch.randperm(batch_size, device=accelerator.device)
+                
+                negative_latents = latents[negative_indices]
+                negative_noise = noise[negative_indices]
+                negative_target = negative_noise - negative_latents.to(
+                    device=accelerator.device, dtype=network_dtype
+                )
+
+                def loss_fn(pred, tgt, **kwargs):
+                    return conditional_loss_with_pseudo_huber(
+                        pred, tgt, loss_type=args.loss_type, huber_c=args.pseudo_huber_c,
+                        current_step=current_step, total_steps=total_steps,
+                        schedule_type=args.pseudo_huber_schedule_type,
+                        c_min=args.pseudo_huber_c_min, c_max=args.pseudo_huber_c_max,
+                        reduction="none", **kwargs
+                    )
+
+                contrastive_result = compute_enhanced_contrastive_loss(
+                    model_pred=model_pred.to(network_dtype),
+                    target=target,
+                    negative_target=negative_target,
+                    labels=labels,
+                    null_class_idx=getattr(args, "contrastive_flow_null_class_idx", None),
+                    dont_contrast_on_unconditional=getattr(args, "contrastive_flow_skip_unconditional", False),
+                    lambda_val=lambda_val,
+                    loss_fn=loss_fn,
+                )
+                
+                loss = contrastive_result['total_loss']
+                self._last_contrastive_components = {
+                    'flow_loss': contrastive_result['flow_loss'].mean().item(),
+                    'contrastive_loss': contrastive_result['contrastive_loss'].mean().item(),
+                    'lambda_val': lambda_val,
+                    'used_class_conditioning': use_class_conditioning,
+                }
+            else:
+                # Basic implementation (original Takenoko behavior)
+                shuffled_indices = torch.randperm(batch_size, device=accelerator.device)
+                negative_latents = latents[shuffled_indices]
+                negative_noise = noise[shuffled_indices]
+                negative_target = negative_noise - negative_latents.to(
+                    device=accelerator.device, dtype=network_dtype
+                )
+
+                loss_fm = conditional_loss_with_pseudo_huber(
+                    model_pred.to(network_dtype), target, loss_type=args.loss_type,
+                    huber_c=args.pseudo_huber_c, current_step=current_step, total_steps=total_steps,
+                    schedule_type=args.pseudo_huber_schedule_type,
+                    c_min=args.pseudo_huber_c_min, c_max=args.pseudo_huber_c_max, reduction="none"
+                )
+                loss_contrastive = conditional_loss_with_pseudo_huber(
+                    model_pred.to(network_dtype), negative_target, loss_type=args.loss_type,
+                    huber_c=args.pseudo_huber_c, current_step=current_step, total_steps=total_steps,
+                    schedule_type=args.pseudo_huber_schedule_type,
+                    c_min=args.pseudo_huber_c_min, c_max=args.pseudo_huber_c_max, reduction="none"
+                )
+
+                loss = loss_fm - lambda_val * loss_contrastive
+                self._last_contrastive_components = {
+                    'flow_loss': loss_fm.mean().item(),
+                    'contrastive_loss': loss_contrastive.mean().item(),
+                    'lambda_val': lambda_val,
+                    'used_class_conditioning': False,
+                }
         else:
             # Use conditional loss function based on loss_type
             current_step = getattr(args, "current_step", None)
@@ -660,3 +719,14 @@ class TrainingLossComputer:
             return {}
 
         return metrics
+
+    def get_contrastive_flow_components(self) -> Optional[Dict[str, Any]]:
+        """
+        Get the last computed contrastive flow matching loss components.
+        
+        Returns:
+            Dictionary with flow_loss, contrastive_loss, lambda_val, and 
+            used_class_conditioning if contrastive flow matching was used,
+            None otherwise.
+        """
+        return self._last_contrastive_components

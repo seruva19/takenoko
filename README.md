@@ -10,7 +10,7 @@ It is intended as a playground for experimenting with new ideas and testing vari
 
 <h3>☄️ Disclaimer</h3>
 
-This project would not have been possible without [musubi-tuner](https://github.com/kohya-ss/musubi-tuner). Although extensively refactored and reworked, the original project provided the foundation on which Takenoko was built. By reusing an existing and proven codebase, I was able to focus more on experimentation and learning instead of reinventing the wheel. Thanks to [kohya-ss](https://github.com/kohya-ss/) for the awesome work. 
+This project would not have been possible without [musubi-tuner](https://github.com/kohya-ss/musubi-tuner). Although extensively refactored and reworked (to the point where upstream merge is no longer possible), the original project provided the foundation on which Takenoko was built. By reusing an existing and proven codebase, I was able to focus more on experimentation and learning instead of reinventing the wheel. Thanks to [kohya-ss](https://github.com/kohya-ss/) for the awesome work. 
 
 <h3>☄️ Docs</h3>
 
@@ -36,7 +36,7 @@ Keep in mind that work on some features is not yet complete due to time and hard
 
 | Source | Type | What was borrowed | Author(s) | License | Comment |
 |--------|------|---------|---------|---------|---------|
-| [musubi-tuner](https://github.com/kohya-ss/musubi-tuner) | repo | - Original codebase | [kohya-ss](https://github.com/kohya-ss) | Apache 2.0 | <sub>Takenoko started on top of musubi-tuner, but the codebase was changed to the point that no upstream merge is possible</sub> |
+| [musubi-tuner](https://github.com/kohya-ss/musubi-tuner) | repo | - Original codebase | [kohya-ss](https://github.com/kohya-ss) | Apache 2.0 | |
 | [blissful-tuner](https://github.com/Sarania/blissful-tuner) | repo | - Several optimization techniques | [Sarania](https://github.com/Sarania) | Apache 2.0 | |
 | [diffusion-pipe](https://github.com/tdrussell/diffusion-pipe) | repo | - Pre-computed timestep distribution algorithm<br>- AdamW8bitKahan optimizer<br> | [tdrussell](https://github.com/tdrussell) | MIT | |
 | [WanTraining](https://github.com/spacepxl/WanTraining) | repo | - Control LoRA training<br>- DWT loss | [spacepxl](https://github.com/spacepxl) | Apache 2.0 | |
@@ -67,5 +67,7 @@ Keep in mind that work on some features is not yet complete due to time and hard
 | [Mixture of Contexts for Long Video Generation](https://arxiv.org/abs/2508.21058) | paper | - Mixture of Contexts (MoC) sparse attention routing | Shengqu Cai, Ceyuan Yang, Lvmin Zhang, Yuwei Guo, Junfei Xiao, Ziyan Yang, Yinghao Xu, Zhenheng Yang, Alan Yuille, Leonidas Guibas, Maneesh Agrawala, Lu Jiang, Gordon Wetzstein | CC BY-SA 4.0 | |
 | [SPHL-for-stable-diffusion](https://github.com/kabachuha/SPHL-for-stable-diffusion) | code | - Pseudo-Huber loss implementation | [kabachuha](https://github.com/kabachuha) |  | <sub>see also [paper](https://arxiv.org/abs/2403.16728)</sub> |
 | [Context as Memory: Scene-Consistent Interactive Long Video Generation with Memory Retrieval](https://arxiv.org/abs/2506.03141) | paper | - Context-as-Memory integration | Jiwen Yu, Jianhong Bai, Yiran Qin, Quande Liu, Xintao Wang, Pengfei Wan, Di Zhang, Xihui Liu | CC BY 4.0 | |
-| [SingLoRA](https://github.com/kyegomez/SingLoRA) | repo | - SingLoRA implementation | [kyegomez](https://github.com/kyegomez) | MIT | see also [paper](https://arxiv.org/abs/2507.05566) |
+| [SingLoRA](https://github.com/kyegomez/SingLoRA) | repo | - SingLoRA implementation | [kyegomez](https://github.com/kyegomez) | MIT | <sub>see also [paper](https://arxiv.org/abs/2507.05566)</sub> |
 | [PEFT-SingLoRA](https://github.com/bghira/PEFT-SingLoRA) | repo | - Enhanced non-square matrix handling | [bghira](https://github.com/bghira) | BSD 2-clause |  |
+| [Contrastive Flow Matching](https://arxiv.org/abs/2506.05350v1) | paper | - Contrastive loss | George Stoica, Vivek Ramanujan, Xiang Fan, Ali Farhadi, Ranjay Krishna, Judy Hoffman | CC BY 4.0 | |
+| [DeltaFM](https://github.com/gstoica27/DeltaFM) | repo | - Contrastive Flow Matching implementation (class-conditioned sampling, unconditional handling) | [gstoica27](https://github.com/gstoica27) | MIT | <sub>official implementation of CFM paper</sub> |

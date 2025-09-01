@@ -784,11 +784,20 @@ def create_args_from_config(
     args.nabla_sparse_attention = config.get("nabla_sparse_attention", False)
     args.nabla_sparse_algo = config.get("nabla_sparse_algo", "nabla-0.7_sta-11-24-24")
 
-    # Contrastive Flow Matching (ΔFM) settings
+    # Contrastive Flow Matching (ΔFM) settings - Enhanced Implementation
     args.enable_contrastive_flow_matching = config.get(
         "enable_contrastive_flow_matching", False
     )
     args.contrastive_flow_lambda = config.get("contrastive_flow_lambda", 0.05)
+    args.contrastive_flow_class_conditioning = config.get(
+        "contrastive_flow_class_conditioning", True
+    )
+    args.contrastive_flow_skip_unconditional = config.get(
+        "contrastive_flow_skip_unconditional", False
+    )
+    args.contrastive_flow_null_class_idx = config.get(
+        "contrastive_flow_null_class_idx", None
+    )
 
     # Timestep bucketing (dataset-driven, per-epoch stratified uniform pool)
     # None disables bucketing; set to >=2 to enable

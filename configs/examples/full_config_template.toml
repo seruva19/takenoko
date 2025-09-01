@@ -625,11 +625,23 @@ adaptive_research_mode_enabled = false
 # ⚠️ CONTRASTIVE FLOW MATCHING (ΔFM) SETTINGS
 # =============================================================================
 
-# Enable the contrastive objective for improved generation quality and speed.
+# Enable the enhanced contrastive objective for improved generation quality and speed.
 enable_contrastive_flow_matching = false
 
-# # The lambda (λ) hyperparameter that controls the strength of the contrastive loss. The paper found 0.05 to be a robust value.
+# The lambda (λ) hyperparameter that controls the strength of the contrastive loss. The paper found 0.05 to be a robust value.
 contrastive_flow_lambda = 0.05
+
+# Enable class-conditioned negative sampling (recommended when labels are available)
+# This ensures negative samples come from different classes, improving contrastive learning effectiveness
+contrastive_flow_class_conditioning = true
+
+# Skip contrastive loss computation on unconditional samples (useful for classifier-free guidance)
+# This prevents unconditional samples from contributing to the contrastive objective
+contrastive_flow_skip_unconditional = false
+
+# Class index representing unconditional/null samples (required if skip_unconditional is true)
+# Set this to the index used for unconditional generation in your dataset
+# contrastive_flow_null_class_idx = null
 
 # =============================================================================
 # ⚠️ REPA (Representation Alignment) SETTINGS
