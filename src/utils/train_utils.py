@@ -619,13 +619,32 @@ def get_sigmas(
     dtype=torch.float32,
     *,
     source: str | None = None,
+    timestep_layout: str = "auto",  # one of: "auto", "per_sample" ([B]), "per_frame" ([B, F])
 ):
     sigmas = noise_scheduler.sigmas.to(device=device, dtype=dtype)
     schedule_timesteps = noise_scheduler.timesteps.to(device)
     timesteps = timesteps.to(device)
 
-    # if sum([(schedule_timesteps == t) for t in timesteps]) < len(timesteps):
-    if any([(schedule_timesteps == t).sum() == 0 for t in timesteps]):
+    # Resolve layout routing
+    if timestep_layout not in ("auto", "per_sample", "per_frame"):
+        timestep_layout = "auto"
+
+    if timestep_layout == "auto":
+        layout = "per_frame" if timesteps.dim() > 1 else "per_sample"
+    else:
+        layout = timestep_layout
+
+    # Prepare shapes depending on layout
+    original_shape = timesteps.shape
+    if layout == "per_frame":
+        # Expect [B, F]; flatten for indexing
+        timesteps_flat = timesteps.flatten()
+    else:
+        # per_sample: expect [B]
+        timesteps_flat = timesteps.view(-1)
+
+    # if sum([(schedule_timesteps == t) for t in timesteps_flat]) < len(timesteps_flat):
+    if any([(schedule_timesteps == t).sum() == 0 for t in timesteps_flat]):
         # round to nearest timestep
         global _warned_missing_timesteps_sources
         src = source or "unspecified"
@@ -640,14 +659,32 @@ def get_sigmas(
                 )
             _warned_missing_timesteps_sources.add(src)
         step_indices = [
-            torch.argmin(torch.abs(schedule_timesteps - t)).item() for t in timesteps
+            torch.argmin(torch.abs(schedule_timesteps - t)).item()
+            for t in timesteps_flat
         ]
     else:
-        step_indices = [(schedule_timesteps == t).nonzero().item() for t in timesteps]
+        step_indices = [
+            (schedule_timesteps == t).nonzero().item() for t in timesteps_flat
+        ]
 
     sigma = sigmas[step_indices].flatten()
-    while len(sigma.shape) < n_dim:
-        sigma = sigma.unsqueeze(-1)
+
+    # Reshape/broadcast according to layout
+    if layout == "per_frame":
+        # [B*F] -> [B, F]
+        sigma = sigma.view(original_shape)
+        # Broadcast to [B, 1, F, 1, 1] when n_dim=5 (or analogous for other n_dim)
+        # Insert channel axis at dim=1, then expand trailing dims
+        if n_dim >= 3:
+            if sigma.dim() == 2:
+                sigma = sigma.unsqueeze(1)  # [B, 1, F]
+        while len(sigma.shape) < n_dim:
+            sigma = sigma.unsqueeze(-1)
+    else:
+        # per_sample: [B] -> [B, 1, 1, ...]
+        while len(sigma.shape) < n_dim:
+            sigma = sigma.unsqueeze(-1)
+
     return sigma
 
 
@@ -661,7 +698,20 @@ def compute_loss_weighting_for_sd3(
     SD3 paper reference: https://arxiv.org/abs/2403.03206v1.
     """
     if weighting_scheme == "sigma_sqrt" or weighting_scheme == "cosmap":
-        sigmas = get_sigmas(noise_scheduler, timesteps, device, n_dim=5, dtype=dtype)
+        layout = (
+            "per_frame"
+            if hasattr(timesteps, "dim") and timesteps.dim() > 1
+            else "per_sample"
+        )
+        sigmas = get_sigmas(
+            noise_scheduler,
+            timesteps,
+            device,
+            n_dim=5,
+            dtype=dtype,
+            timestep_layout=layout,
+            source="training/weighting",
+        )
         if weighting_scheme == "sigma_sqrt":
             weighting = (sigmas**-2.0).float()
         else:

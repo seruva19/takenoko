@@ -1178,8 +1178,8 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
             T, H, W = x[0].shape[2:5]
 
         grid_sizes = torch.stack(
-            [torch.tensor(u.shape[2:], dtype=torch.long) for u in x]
-        )  # list of [F, H, W]
+            [torch.tensor(u.shape[2:], dtype=torch.long, device=t.device) for u in x]
+        )  # list of [F, H, W] placed on same device as timesteps
 
         freqs_list = []
         if not self.rope_on_the_fly:
@@ -1250,7 +1250,9 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
                 # Compute time embeddings for all tokens at once
                 rope_float32 = getattr(self, "rope_use_float32", False)
                 e_tokens_flat = self.time_embedding(
-                    sinusoidal_embedding_1d(self.freq_dim, t_tokens_flat, use_float32=rope_float32).float()
+                    sinusoidal_embedding_1d(
+                        self.freq_dim, t_tokens_flat, use_float32=rope_float32
+                    ).float()
                 )  # [sum(L), dim]
                 e0_tokens_flat = self.time_projection(e_tokens_flat).unflatten(
                     1, (6, self.dim)
@@ -1274,7 +1276,9 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
             elif self.effective_model_version == "2.1" or self._simple_modulation:
                 rope_float32 = getattr(self, "rope_use_float32", False)
                 e = self.time_embedding(
-                    sinusoidal_embedding_1d(self.freq_dim, t, use_float32=rope_float32).float()
+                    sinusoidal_embedding_1d(
+                        self.freq_dim, t, use_float32=rope_float32
+                    ).float()
                 ).to(self.e_dtype)
                 e0 = (
                     self.time_projection(e).unflatten(1, (6, self.dim)).to(self.e_dtype)
@@ -1288,7 +1292,9 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
                         t_scalar = t
                     rope_float32 = getattr(self, "rope_use_float32", False)
                     e = self.time_embedding(
-                        sinusoidal_embedding_1d(self.freq_dim, t_scalar, use_float32=rope_float32).float()
+                        sinusoidal_embedding_1d(
+                            self.freq_dim, t_scalar, use_float32=rope_float32
+                        ).float()
                     ).to(
                         self.e_dtype
                     )  # [B, dim]
@@ -1308,7 +1314,9 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
                     t = t.flatten()
                     rope_float32 = getattr(self, "rope_use_float32", False)
                     e = self.time_embedding(
-                        sinusoidal_embedding_1d(self.freq_dim, t, use_float32=rope_float32)
+                        sinusoidal_embedding_1d(
+                            self.freq_dim, t, use_float32=rope_float32
+                        )
                         .unflatten(0, (bt, seq_len))
                         .float()
                     ).to(self.e_dtype)

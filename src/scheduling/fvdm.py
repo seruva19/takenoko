@@ -1,34 +1,42 @@
 import argparse
+import logging
 import torch
 from typing import Tuple, Any, Optional
+from common.logger import get_logger
+
+logger = get_logger(__name__, level=logging.INFO)
+# One-time emission flag for PTSS parameter logging
+_ptss_params_logged_once = False
 
 
 def get_adaptive_ptss_p(
-    current_step: int, 
-    total_steps: int, 
-    initial_p: float = 0.3, 
+    current_step: int,
+    total_steps: int,
+    initial_p: float = 0.3,
     final_p: float = 0.1,
-    warmup_steps: int = 1000
+    warmup_steps: int = 1000,
 ) -> float:
     """
     Adaptive PTSS probability that decreases during training.
     Early training: Higher async probability for exploration
     Late training: Lower async probability for stability
-    
+
     Args:
         current_step: Current training step
         total_steps: Total training steps
         initial_p: Starting probability (higher for exploration)
         final_p: Ending probability (lower for stability)
         warmup_steps: Steps before adaptation begins
-        
+
     Returns:
         Adaptive PTSS probability
     """
     if current_step < warmup_steps:
         return initial_p
-    
-    progress = min(1.0, (current_step - warmup_steps) / max(total_steps - warmup_steps, 1))
+
+    progress = min(
+        1.0, (current_step - warmup_steps) / max(total_steps - warmup_steps, 1)
+    )
     return initial_p + (final_p - initial_p) * progress
 
 
@@ -56,21 +64,21 @@ def get_noisy_model_input_and_timesteps_fvdm(
         )
 
     B, C, F, H, W = latents.shape
-    T = noise_scheduler.num_train_timesteps
+    T = noise_scheduler.config.num_train_timesteps
 
     # 1. Enhanced Probabilistic Timestep Sampling Strategy (PTSS)
     # Determine PTSS probability (adaptive or fixed)
-    if getattr(args, 'fvdm_adaptive_ptss', False):
+    if getattr(args, "fvdm_adaptive_ptss", False):
         ptss_p = get_adaptive_ptss_p(
             current_step,
-            getattr(args, 'max_train_steps', 100000),
-            getattr(args, 'fvdm_ptss_initial', 0.3),
-            getattr(args, 'fvdm_ptss_final', 0.1),
-            getattr(args, 'fvdm_ptss_warmup', 1000)
+            getattr(args, "max_train_steps", 100000),
+            getattr(args, "fvdm_ptss_initial", 0.3),
+            getattr(args, "fvdm_ptss_final", 0.1),
+            getattr(args, "fvdm_ptss_warmup", 1000),
         )
     else:
-        ptss_p = getattr(args, 'fvdm_ptss_p', 0.2)  # Default to paper-recommended value
-    
+        ptss_p = getattr(args, "fvdm_ptss_p", 0.2)  # Default to paper-recommended value
+
     # Apply PTSS sampling
     is_async = torch.rand((), device=device) < ptss_p
     if is_async:
@@ -82,36 +90,86 @@ def get_noisy_model_input_and_timesteps_fvdm(
 
     # 2. Apply min/max timestep constraints
     # These are normalized to the [0, 1] range of t_cont
-    t_min = getattr(args, "min_timestep", 0.0) / T
-    t_max = getattr(args, "max_timestep", T) / T
+    original_min_timestep = int(getattr(args, "min_timestep", 0))
+    original_max_timestep = int(getattr(args, "max_timestep", T))
+    t_min = original_min_timestep / T
+    t_max = original_max_timestep / T
     t_cont = t_cont * (t_max - t_min) + t_min
-    
+
     # 2.5. Optional: Integrate with AdaptiveTimestepManager for importance-based sampling
-    if (adaptive_manager is not None and 
-        getattr(args, 'fvdm_integrate_adaptive_timesteps', False) and
-        hasattr(adaptive_manager, 'enabled') and adaptive_manager.enabled):
-        
+    resample_count_applied = 0
+    adaptive_integration_enabled = (
+        adaptive_manager is not None
+        and getattr(args, "fvdm_integrate_adaptive_timesteps", False)
+        and hasattr(adaptive_manager, "enabled")
+        and adaptive_manager.enabled
+    )
+
+    if adaptive_integration_enabled:
         try:
             # Convert to discrete timesteps for importance checking
             timesteps_discrete_check = (t_cont * (T - 1)).round().long().clamp(0, T - 1)
-            
+
             # Get importance weights
-            importance_weights = adaptive_manager.get_adaptive_sampling_weights(timesteps_discrete_check)
-            
+            importance_weights = adaptive_manager.get_adaptive_sampling_weights(
+                timesteps_discrete_check
+            )
+
             # Occasionally bias toward important timesteps (30% of the time)
             if torch.rand((), device=device) < 0.3:
                 # Find frames with low importance
                 low_importance_mask = importance_weights < 1.2
                 if low_importance_mask.any():
                     # Resample some low-importance frames to potentially hit important timesteps
-                    resample_count = min(low_importance_mask.sum().item(), max(1, F // 4))
+                    resample_count = min(
+                        low_importance_mask.sum().item(), max(1, F // 4)
+                    )
                     if resample_count > 0:
-                        resample_indices = torch.nonzero(low_importance_mask, as_tuple=True)[0][:resample_count]
+                        resample_indices = torch.nonzero(
+                            low_importance_mask, as_tuple=True
+                        )[0][:resample_count]
                         # Resample these frames
-                        new_t_values = torch.rand(resample_count, device=device, dtype=dtype) * (t_max - t_min) + t_min
+                        new_t_values = (
+                            torch.rand(resample_count, device=device, dtype=dtype)
+                            * (t_max - t_min)
+                            + t_min
+                        )
                         t_cont.view(-1)[resample_indices] = new_t_values
+                        resample_count_applied = int(resample_count)
         except Exception:
             # Graceful fallback - continue with original t_cont if integration fails
+            pass
+
+    # Explicit one-time INFO log of PTSS scheduling parameters
+    global _ptss_params_logged_once
+    if not _ptss_params_logged_once:
+        try:
+            ptss_mode = (
+                "adaptive" if getattr(args, "fvdm_adaptive_ptss", False) else "fixed"
+            )
+            sampling_mode = "async" if is_async else "sync"
+            logger.info(
+                (
+                    "⏰ FVDM PTSS applied | mode=%s | ptss_p=%.4f | sampling=%s | "
+                    "t_min_norm=%.4f | t_max_norm=%.4f | t_min_idx=%d | t_max_idx=%d | "
+                    "T=%d | step=%d | adaptive_integration=%s | resample_count=%d"
+                ),
+                ptss_mode,
+                float(ptss_p),
+                sampling_mode,
+                float(t_min),
+                float(t_max),
+                int(original_min_timestep),
+                int(original_max_timestep),
+                int(T),
+                int(current_step),
+                bool(adaptive_integration_enabled),
+                int(resample_count_applied),
+            )
+            _ptss_params_logged_once = True
+        except Exception:
+            # Logging must not break training if any attribute is missing
+            _ptss_params_logged_once = True
             pass
 
     # 3. Add noise using the Flow Matching equation
