@@ -228,7 +228,7 @@ lr_scheduler_args = ''
 # NETWORK SETTINGS
 # =============================================================================
 
-# Network module to train: "networks.lora_wan", "networks.control_lora_wan", "networks.reward_lora", "networks.vae_wan", "lycoris.kohya", "networks.t_lora", "networks.moc_lora"
+# Network module to train: "networks.lora_wan", "networks.control_lora_wan", "networks.reward_lora", "networks.vae_wan", "lycoris.kohya", "networks.t_lora", "networks.moc_lora", "networks.singlora_wan"
 # The module defines trainable adapters and is imported dynamically by the trainer.
 network_module = "networks.lora_wan"
 
@@ -317,6 +317,14 @@ network_alpha = 32
 #   "moc_max_layers=2",
 #   "moc_max_modules=4"
 # ]
+
+# SingLoRA-specific parameters
+#network_args = [
+#  "ramp_up_steps=1000",
+#  "init_method=kaiming_uniform",
+#  "use_rslora=false",
+#  "dropout=null",
+#]
 
 # arbitrary comment string stored in metadata
 # training_comment = "trained with Takenoko" 
@@ -1001,7 +1009,7 @@ fvdm_ptss_warmup = 1000
 
 # FVDM training enhancements
 # Weight for temporal consistency loss (0.0 = disabled)
-fvdm_temporal_consistency_weight = 0.0    
+fvdm_temporal_consistency_weight = 0.1    
 
 # Weight for frame diversity regularization (0.0 = disabled)
 fvdm_frame_diversity_weight = 0.0         
