@@ -37,6 +37,7 @@ from scheduling.timestep_utils import (
 )
 from core.validation_core import ValidationCore
 from criteria.training_loss import TrainingLossComputer
+from common.context_memory_manager import ContextMemoryManager
 
 from junctions.training_events import trigger_event
 
@@ -132,6 +133,9 @@ class TrainingCore:
 
         # Centralized loss computation
         self.loss_computer = TrainingLossComputer(self.config)
+
+        # Context memory components (all-in-one manager)
+        self.context_memory_manager = ContextMemoryManager(self.config.__dict__)
 
         # Toggle for alternating progress postfix (iter_ms vs peak VRAM)
         self._perf_display_toggle: bool = False
@@ -865,6 +869,23 @@ class TrainingCore:
 
                     model_pred, target, intermediate_z = model_result
 
+                    # Context memory processing
+                    context_memory_loss, context_stats = self.context_memory_manager.process_training_step(
+                        latents=latents,
+                        global_step=global_step,
+                        step=step,
+                        args=args,
+                        accelerator=accelerator,
+                        temporal_consistency_loss_fn=self.context_memory_manager.create_temporal_consistency_loss_fn(),
+                        batch=batch
+                    )
+                    
+                    # Log context memory stats if available
+                    if context_stats:
+                        self.context_memory_manager.log_stats_to_accelerator(
+                            context_stats, accelerator, global_step
+                        )
+
                     # Trigger after_forward junction event
                     trigger_event(
                         "after_forward",
@@ -928,6 +949,15 @@ class TrainingCore:
                         raft=getattr(self, "raft", None),
                         warp_fn=getattr(self, "warp", None),
                         adaptive_manager=self.adaptive_manager,
+                    )
+                    
+                    # Integrate context memory loss into total loss
+                    self.context_memory_manager.integrate_context_loss(
+                        loss_components=loss_components,
+                        context_memory_loss=context_memory_loss,
+                        config=self.config.__dict__,
+                        accelerator=accelerator,
+                        global_step=global_step
                     )
 
                     # Trigger after_loss_computation junction event

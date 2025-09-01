@@ -906,6 +906,77 @@ fluxflow_block_perturb_prob = 0.5
 fluxflow_frame_dim_in_batch = 2
 
 # =============================================================================
+# ⚠️ CONTEXT AS MEMORY SETTINGS
+# =============================================================================
+
+# Enable context-as-memory features for scene-consistent long video generation
+# When enabled, stores previously generated frames as memory for improved consistency
+ctxmem_enabled = false
+
+# Basic context settings
+# Number of context frames to use during generation
+ctxmem_context_size = 4
+
+# Maximum frames to keep in memory buffer
+ctxmem_max_memory_frames = 100
+
+# Update memory every N training steps
+ctxmem_memory_update_frequency = 10
+
+# Frame selection strategies:
+# - "recent": Select most recent frames (fastest, good baseline)
+# - "fov_overlap": Select based on FOV overlap with camera poses (paper's method)
+# - "semantic": Select based on visual similarity (experimental)
+# - "mixed": Combine recent and semantic selection (experimental)
+ctxmem_frame_selection_strategy = "semantic"
+
+# Similarity threshold for semantic selection (0.0 to 1.0)
+ctxmem_semantic_similarity_threshold = 0.7
+
+# FOV-based selection settings
+# Enable FOV-based frame selection using camera poses
+ctxmem_use_fov_selection = false
+
+# Default field of view in degrees (from paper: 52.67)
+ctxmem_default_fov = 52.67
+
+# Minimum overlap threshold for FOV-based selection (0.0 to 1.0)
+ctxmem_fov_overlap_threshold = 0.1
+
+# Maximum camera distance for FOV overlap consideration (meters)
+ctxmem_max_camera_distance = 10.0
+
+# Context conditioning method:
+# - "concatenation": Concatenate context frames along temporal dimension (recommended)
+ctxmem_context_conditioning_method = "concatenation"
+
+# Weight for context conditioning in loss computation
+ctxmem_context_weight = 1.0
+
+# Variable length context support (experimental)
+ctxmem_use_variable_length_context = false
+
+# Training enhancements
+# Enable progressive context training (start without context, gradually enable)
+ctxmem_progressive_context_training = true
+
+# Context warmup steps (when progressive training is enabled)
+ctxmem_context_warmup_steps = 500
+
+# Randomly drop context frames during training for regularization
+ctxmem_context_dropout_rate = 0.1
+
+# Temporal consistency loss weight (0.0 to disable)
+ctxmem_temporal_consistency_loss_weight = 0.1
+
+# Performance optimizations
+# Enable caching of frame embeddings for similarity computation
+ctxmem_use_context_caching = true
+
+# Enable asynchronous memory updates (experimental)
+ctxmem_async_memory_updates = false
+
+# =============================================================================
 # ⚠️ FVDM SETTINGS
 # =============================================================================
 
