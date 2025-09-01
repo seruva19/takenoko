@@ -983,8 +983,38 @@ ctxmem_async_memory_updates = false
 # Enable Frame-Aware Video Diffusion Model (FVDM) training
 enable_fvdm = false
 
-# Probability for the Probabilistic Timestep Sampling Strategy (PTSS) in FVDM. The paper suggests 0.2.
-fvdm_ptss_p = 1
+# Probabilistic Timestep Sampling Strategy (PTSS) settings
+# Fixed PTSS probability
+fvdm_ptss_p = 0.2
+
+# Adaptive PTSS: dynamically adjust probability during training
+fvdm_adaptive_ptss = true
+
+# Starting probability (higher for exploration) 
+fvdm_ptss_initial = 0.3    
+
+# Ending probability (lower for stability)  
+fvdm_ptss_final = 0.1      
+
+# Steps before adaptation begins
+fvdm_ptss_warmup = 1000    
+
+# FVDM training enhancements
+# Weight for temporal consistency loss (0.0 = disabled)
+fvdm_temporal_consistency_weight = 0.0    
+
+# Weight for frame diversity regularization (0.0 = disabled)
+fvdm_frame_diversity_weight = 0.0         
+
+# Use with AdaptiveTimestepManager if enabled
+fvdm_integrate_adaptive_timesteps = false 
+
+# FVDM evaluation and logging
+# Compute and log temporal coherence metrics
+fvdm_eval_temporal_metrics = true        
+
+# Steps between FVDM metric evaluation and logging
+fvdm_eval_frequency = 1000               
 
 # =============================================================================
 # VALIDATION SETTINGS

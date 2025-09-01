@@ -16,7 +16,7 @@ from common.logger import get_logger
 logger = get_logger(__name__, level=logging.INFO)
 
 import utils.fluxflow_augmentation as fluxflow_augmentation
-import scheduling.fvdm as fvdm
+from scheduling.fvdm_manager import create_fvdm_manager
 
 from modules.scheduling_flow_match_discrete import FlowMatchDiscreteScheduler
 from utils.train_utils import (
@@ -169,8 +169,16 @@ class TrainingCore:
         _configure_advanced_logging(args)
 
     def initialize_adaptive_timestep_sampling(self, args: argparse.Namespace) -> None:
-        """Initialize adaptive timestep sampling if enabled."""
+        """Initialize adaptive timestep sampling and FVDM manager."""
         self.adaptive_manager = _initialize_adaptive_timestep_sampling(args)
+        
+        # Initialize unified FVDM manager (handles all FVDM functionality)
+        # Note: Device will be properly set when accelerator is available
+        self.fvdm_manager = create_fvdm_manager(
+            args, 
+            device=torch.device('cpu'),  # Temporary device, will be updated
+            adaptive_manager=self.adaptive_manager
+        )
 
         # Connect adaptive manager to timestep distribution
         if (
@@ -642,6 +650,12 @@ class TrainingCore:
                     )
 
             for step, batch in enumerate(train_dataloader):
+                # Update FVDM manager device on first step (when accelerator is available)
+                if step == 0 and hasattr(self, 'fvdm_manager') and self.fvdm_manager.device != accelerator.device:
+                    self.fvdm_manager.device = accelerator.device
+                    if hasattr(self.fvdm_manager, 'metrics') and self.fvdm_manager.metrics:
+                        self.fvdm_manager.metrics.device = accelerator.device
+                
                 # Start performance timing for this step
                 start_step_timing()
 
@@ -686,23 +700,11 @@ class TrainingCore:
                     # Sample noise that we'll add to the latents
                     noise = torch.randn_like(latents)
 
-                    if hasattr(args, "enable_fvdm") and args.enable_fvdm:
-                        # This inner 'if' is ONLY for the one-time log message
-                        if accelerator.is_main_process and step == 0:
-                            logger.info(
-                                "FVDM training enabled. Using FVDM timestep sampling."
-                            )
-
-                        # This function call happens on EVERY step when FVDM is enabled
-                        noisy_model_input, timesteps, sigmas = (
-                            fvdm.get_noisy_model_input_and_timesteps_fvdm(
-                                args,
-                                noise,
-                                latents,
-                                noise_scheduler,
-                                accelerator.device,
-                                dit_dtype,
-                            )
+                    # Use unified FVDM manager for clean interface
+                    if self.fvdm_manager.enabled:
+                        # FVDM is enabled - use FVDM manager
+                        noisy_model_input, timesteps, sigmas = self.fvdm_manager.get_noisy_input_and_timesteps(
+                            noise, latents, noise_scheduler, dit_dtype, step
                         )
                     else:
                         # Initialize timestep distribution if needed
@@ -959,6 +961,31 @@ class TrainingCore:
                         accelerator=accelerator,
                         global_step=global_step
                     )
+                    
+                    # FVDM: Record training metrics and integrate additional loss components
+                    if self.fvdm_manager.enabled:
+                        try:
+                            # Record FVDM training metrics
+                            self.fvdm_manager.record_training_step(
+                                frames=latents,
+                                timesteps=timesteps, 
+                                loss=loss_components['loss'],
+                                step=global_step
+                            )
+                            
+                            # Compute and integrate FVDM additional loss components
+                            fvdm_additional_loss, fvdm_loss_details = self.fvdm_manager.get_additional_loss(
+                                frames=latents,
+                                timesteps=timesteps
+                            )
+                            
+                            if fvdm_additional_loss.item() > 0:
+                                # Add FVDM loss components to the total loss
+                                loss_components['loss'] = loss_components['loss'] + fvdm_additional_loss
+                                loss_components.update({f'fvdm_{k}': v for k, v in fvdm_loss_details.items()})
+                                
+                        except Exception as e:
+                            logger.debug(f"FVDM integration warning: {e}")
 
                     # Trigger after_loss_computation junction event
                     trigger_event(
@@ -1312,6 +1339,15 @@ class TrainingCore:
                     self.adaptive_manager,
                     self.loss_computer,
                 )
+
+                # FVDM: Log additional metrics if enabled and appropriate
+                if self.fvdm_manager.should_log_metrics(global_step):
+                    try:
+                        fvdm_metrics = self.fvdm_manager.get_metrics_for_logging(global_step)
+                        if fvdm_metrics:
+                            accelerator.log(fvdm_metrics, step=global_step)
+                    except Exception as e:
+                        logger.debug(f"FVDM metrics logging warning: {e}")
 
                 # Trigger step_end junction event
                 trigger_event(

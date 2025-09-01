@@ -761,6 +761,17 @@ def create_args_from_config(
     # FVDM settings
     args.enable_fvdm = config.get("enable_fvdm", False)
     args.fvdm_ptss_p = config.get("fvdm_ptss_p", 0.2)
+    
+    # Enhanced FVDM settings
+    args.fvdm_adaptive_ptss = config.get("fvdm_adaptive_ptss", False)
+    args.fvdm_ptss_initial = config.get("fvdm_ptss_initial", 0.3)
+    args.fvdm_ptss_final = config.get("fvdm_ptss_final", 0.1)
+    args.fvdm_ptss_warmup = config.get("fvdm_ptss_warmup", 1000)
+    args.fvdm_temporal_consistency_weight = config.get("fvdm_temporal_consistency_weight", 0.0)
+    args.fvdm_frame_diversity_weight = config.get("fvdm_frame_diversity_weight", 0.0)
+    args.fvdm_integrate_adaptive_timesteps = config.get("fvdm_integrate_adaptive_timesteps", False)
+    args.fvdm_eval_temporal_metrics = config.get("fvdm_eval_temporal_metrics", False)
+    args.fvdm_eval_frequency = config.get("fvdm_eval_frequency", 1000)
 
     # FOPP settings
     args.fopp_num_timesteps = config.get("fopp_num_timesteps", 1000)
