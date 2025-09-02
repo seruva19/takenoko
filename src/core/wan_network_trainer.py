@@ -5,14 +5,12 @@ Much cleaner and more maintainable than the original monolithic implementation.
 """
 
 import argparse
-import json
 import math
 import os
 import random
 import time
-import gc
 from multiprocessing import Value
-from typing import Any, Dict, List, Optional
+from typing import Any
 import torch
 from tqdm import tqdm
 from accelerate.utils import set_seed
@@ -30,7 +28,6 @@ from utils.train_utils import (
 )
 from utils import model_utils
 from wan.configs.config import WAN_CONFIGS
-from wan.modules.vae import WanVAE
 from utils.tread import TREADRouter
 
 # Import all our refactored components
@@ -43,7 +40,7 @@ from core.checkpoint_manager import CheckpointManager
 from core.training_core import TrainingCore
 from core.vae_training_core import VaeTrainingCore
 from reward.reward_training_core import RewardTrainingCore
-from core.repa_helper import RepaHelper
+from utils.repa_helper import RepaHelper
 from scheduling.timestep_utils import (
     initialize_timestep_distribution,
     get_noisy_model_input_and_timesteps,
