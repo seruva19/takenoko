@@ -16,6 +16,10 @@ import torch.nn.functional as F
 from common.logger import get_logger
 from criteria.dispersive_loss import dispersive_loss_info_nce
 from criteria.pseudo_huber_loss import conditional_loss_with_pseudo_huber
+from core.masked_training_manager import (
+    create_masked_training_manager,
+    MaskedTrainingManager,
+)
 from utils.train_utils import get_sigmas
 
 
@@ -65,6 +69,8 @@ class TrainingLossComputer:
     def __init__(self, config: Any) -> None:
         self.config = config
         self._last_contrastive_components = None
+        # Add masked training manager (initialized later with args)
+        self._masked_training_manager: Optional[MaskedTrainingManager] = None
 
     # ---- Internal helpers ----
     def _compute_seq_len(self, latents: torch.Tensor) -> int:
@@ -149,6 +155,80 @@ class TrainingLossComputer:
             # Restore
             accelerator.unwrap_model(network).multiplier = original_multiplier
 
+    def initialize_masked_training(self, args) -> None:
+        """Initialize masked training manager from args."""
+        self._masked_training_manager = create_masked_training_manager(args)
+        if self._masked_training_manager:
+            logger.info("Masked training with prior preservation enabled")
+
+    def _compute_prior_prediction_if_needed(
+        self,
+        args,
+        accelerator,
+        transformer,
+        network,
+        latents,
+        noisy_model_input,
+        timesteps,
+        batch,
+        network_dtype,
+    ) -> Optional[torch.Tensor]:
+        """Compute prior prediction for masked training if enabled."""
+        if (
+            self._masked_training_manager is None
+            or self._masked_training_manager.config.masked_prior_preservation_weight
+            <= 0
+        ):
+            return None
+
+        if transformer is None or network is None:
+            logger.warning(
+                "Cannot compute prior prediction: transformer or network is None"
+            )
+            return None
+
+        try:
+            # Temporarily disable LoRA
+            original_multiplier = accelerator.unwrap_model(network).multiplier
+            accelerator.unwrap_model(network).multiplier = 0.0
+
+            with torch.no_grad():
+                # Compute sequence length for transformer
+                seq_len = self._compute_seq_len(latents)
+
+                # Use Takenoko's actual context structure - check multiple possible keys
+                context = batch.get("text_encoder_hidden_states")
+                if context is None:
+                    context = batch.get("encoder_hidden_states")
+                if context is None:
+                    context = batch.get("context")
+
+                # Ensure context is in correct format for Takenoko
+                if context is not None:
+                    if not isinstance(context, list):
+                        context = [context] if context is not None else []
+                else:
+                    context = []
+
+                # Get prior prediction using Takenoko's transformer interface
+                prior_pred_list = transformer(
+                    noisy_model_input,
+                    t=timesteps,
+                    context=context,
+                    seq_len=seq_len,
+                    y=batch.get("y", None),  # Include y parameter if available
+                )
+                prior_pred = torch.stack(prior_pred_list, dim=0).detach()
+                return prior_pred
+
+        except Exception as e:
+            logger.warning(f"Failed to compute prior prediction: {e}")
+            return None
+        finally:
+            # Restore LoRA multiplier
+            if "original_multiplier" in locals():
+                accelerator.unwrap_model(network).multiplier = original_multiplier
+
     def compute_training_loss(
         self,
         *,
@@ -190,9 +270,12 @@ class TrainingLossComputer:
                     compute_enhanced_contrastive_loss,
                     extract_class_labels_from_batch,
                 )
+
                 use_enhanced = True
             except ImportError:
-                logger.warning("Enhanced contrastive flow utilities not available, using basic implementation")
+                logger.warning(
+                    "Enhanced contrastive flow utilities not available, using basic implementation"
+                )
                 use_enhanced = False
 
             batch_size = latents.size(0)
@@ -204,20 +287,28 @@ class TrainingLossComputer:
                 # Enhanced implementation with class-conditioned sampling
                 labels = extract_class_labels_from_batch(batch)
                 use_class_conditioning = (
-                    getattr(args, "contrastive_flow_class_conditioning", True) 
+                    getattr(args, "contrastive_flow_class_conditioning", True)
                     and labels is not None
                 )
-                
+
                 if use_class_conditioning:
                     try:
-                        negative_indices = class_conditioned_negative_sampling(labels, accelerator.device)
+                        negative_indices = class_conditioned_negative_sampling(
+                            labels, accelerator.device
+                        )
                     except (ValueError, RuntimeError) as e:
-                        logger.warning(f"Class-conditioned sampling failed ({e}), falling back to random sampling")
-                        negative_indices = torch.randperm(batch_size, device=accelerator.device)
+                        logger.warning(
+                            f"Class-conditioned sampling failed ({e}), falling back to random sampling"
+                        )
+                        negative_indices = torch.randperm(
+                            batch_size, device=accelerator.device
+                        )
                         use_class_conditioning = False  # Update for monitoring
                 else:
-                    negative_indices = torch.randperm(batch_size, device=accelerator.device)
-                
+                    negative_indices = torch.randperm(
+                        batch_size, device=accelerator.device
+                    )
+
                 negative_latents = latents[negative_indices]
                 negative_noise = noise[negative_indices]
                 negative_target = negative_noise - negative_latents.to(
@@ -226,11 +317,17 @@ class TrainingLossComputer:
 
                 def loss_fn(pred, tgt, **kwargs):
                     return conditional_loss_with_pseudo_huber(
-                        pred, tgt, loss_type=args.loss_type, huber_c=args.pseudo_huber_c,
-                        current_step=current_step, total_steps=total_steps,
+                        pred,
+                        tgt,
+                        loss_type=args.loss_type,
+                        huber_c=args.pseudo_huber_c,
+                        current_step=current_step,
+                        total_steps=total_steps,
                         schedule_type=args.pseudo_huber_schedule_type,
-                        c_min=args.pseudo_huber_c_min, c_max=args.pseudo_huber_c_max,
-                        reduction="none", **kwargs
+                        c_min=args.pseudo_huber_c_min,
+                        c_max=args.pseudo_huber_c_max,
+                        reduction="none",
+                        **kwargs,
                     )
 
                 contrastive_result = compute_enhanced_contrastive_loss(
@@ -238,18 +335,24 @@ class TrainingLossComputer:
                     target=target,
                     negative_target=negative_target,
                     labels=labels,
-                    null_class_idx=getattr(args, "contrastive_flow_null_class_idx", None),
-                    dont_contrast_on_unconditional=getattr(args, "contrastive_flow_skip_unconditional", False),
+                    null_class_idx=getattr(
+                        args, "contrastive_flow_null_class_idx", None
+                    ),
+                    dont_contrast_on_unconditional=getattr(
+                        args, "contrastive_flow_skip_unconditional", False
+                    ),
                     lambda_val=lambda_val,
                     loss_fn=loss_fn,
                 )
-                
-                loss = contrastive_result['total_loss']
+
+                loss = contrastive_result["total_loss"]
                 self._last_contrastive_components = {
-                    'flow_loss': contrastive_result['flow_loss'].mean().item(),
-                    'contrastive_loss': contrastive_result['contrastive_loss'].mean().item(),
-                    'lambda_val': lambda_val,
-                    'used_class_conditioning': use_class_conditioning,
+                    "flow_loss": contrastive_result["flow_loss"].mean().item(),
+                    "contrastive_loss": contrastive_result["contrastive_loss"]
+                    .mean()
+                    .item(),
+                    "lambda_val": lambda_val,
+                    "used_class_conditioning": use_class_conditioning,
                 }
             else:
                 # Basic implementation (original Takenoko behavior)
@@ -261,24 +364,36 @@ class TrainingLossComputer:
                 )
 
                 loss_fm = conditional_loss_with_pseudo_huber(
-                    model_pred.to(network_dtype), target, loss_type=args.loss_type,
-                    huber_c=args.pseudo_huber_c, current_step=current_step, total_steps=total_steps,
+                    model_pred.to(network_dtype),
+                    target,
+                    loss_type=args.loss_type,
+                    huber_c=args.pseudo_huber_c,
+                    current_step=current_step,
+                    total_steps=total_steps,
                     schedule_type=args.pseudo_huber_schedule_type,
-                    c_min=args.pseudo_huber_c_min, c_max=args.pseudo_huber_c_max, reduction="none"
+                    c_min=args.pseudo_huber_c_min,
+                    c_max=args.pseudo_huber_c_max,
+                    reduction="none",
                 )
                 loss_contrastive = conditional_loss_with_pseudo_huber(
-                    model_pred.to(network_dtype), negative_target, loss_type=args.loss_type,
-                    huber_c=args.pseudo_huber_c, current_step=current_step, total_steps=total_steps,
+                    model_pred.to(network_dtype),
+                    negative_target,
+                    loss_type=args.loss_type,
+                    huber_c=args.pseudo_huber_c,
+                    current_step=current_step,
+                    total_steps=total_steps,
                     schedule_type=args.pseudo_huber_schedule_type,
-                    c_min=args.pseudo_huber_c_min, c_max=args.pseudo_huber_c_max, reduction="none"
+                    c_min=args.pseudo_huber_c_min,
+                    c_max=args.pseudo_huber_c_max,
+                    reduction="none",
                 )
 
                 loss = loss_fm - lambda_val * loss_contrastive
                 self._last_contrastive_components = {
-                    'flow_loss': loss_fm.mean().item(),
-                    'contrastive_loss': loss_contrastive.mean().item(),
-                    'lambda_val': lambda_val,
-                    'used_class_conditioning': False,
+                    "flow_loss": loss_fm.mean().item(),
+                    "contrastive_loss": loss_contrastive.mean().item(),
+                    "lambda_val": lambda_val,
+                    "used_class_conditioning": False,
                 }
         else:
             # Use conditional loss function based on loss_type
@@ -311,10 +426,57 @@ class TrainingLossComputer:
         # ---- Masked training ----
         mask = batch.get("mask_signal", None)
         if mask is not None:
-            mask = mask.to(device=accelerator.device, dtype=network_dtype)
-            while mask.dim() < loss.dim():
-                mask = mask.unsqueeze(-1)
-            loss = loss * mask
+            if self._masked_training_manager is not None:
+                # Use enhanced masked training with prior preservation
+                # Check if DOP has already computed a prior prediction to avoid duplication
+                prior_pred = None
+                if (
+                    getattr(args, "diff_output_preservation", False)
+                    and "t5_preservation" in batch
+                    and transformer is not None
+                    and network is not None
+                ):
+                    # DOP is active - we'll compute DOP's prior and reuse it for masking
+                    logger.debug(
+                        "DOP active: deferring prior computation to DOP section"
+                    )
+                else:
+                    # No DOP conflict - compute prior for masking only
+                    prior_pred = self._compute_prior_prediction_if_needed(
+                        args,
+                        accelerator,
+                        transformer,
+                        network,
+                        latents,
+                        noisy_model_input,
+                        timesteps,
+                        batch,
+                        network_dtype,
+                    )
+
+                # Replace basic masking with enhanced version
+                loss = self._masked_training_manager.compute_masked_loss_with_prior(
+                    model_pred=model_pred.to(network_dtype),
+                    target=target,
+                    mask=mask,
+                    prior_pred=prior_pred,  # Will be None if DOP is active
+                    loss_type=getattr(args, "loss_type", "mse"),
+                    huber_c=getattr(args, "pseudo_huber_c", 1.0),
+                    current_step=getattr(args, "current_step", None),
+                    total_steps=getattr(args, "total_steps", None),
+                    schedule_type=getattr(
+                        args, "pseudo_huber_schedule_type", "constant"
+                    ),
+                    c_min=getattr(args, "pseudo_huber_c_min", 0.01),
+                    c_max=getattr(args, "pseudo_huber_c_max", 10.0),
+                )
+                base_loss = loss  # Update base_loss for consistency
+            else:
+                # Existing basic masking (unchanged for backward compatibility)
+                mask = mask.to(device=accelerator.device, dtype=network_dtype)
+                while mask.dim() < loss.dim():
+                    mask = mask.unsqueeze(-1)
+                loss = loss * mask
 
         if weighting is not None:
             loss = loss * weighting
@@ -508,6 +670,38 @@ class TrainingLossComputer:
                     dop_context=dop_embeds,
                     model_input_control=model_input_control,
                 )
+
+                # Apply masked training to DOP prior if both are enabled
+                # This ensures DOP's prior is also subject to masking constraints
+                mask = batch.get("mask_signal", None)
+                if (
+                    mask is not None
+                    and self._masked_training_manager is not None
+                    and self._masked_training_manager.config.masked_prior_preservation_weight
+                    > 0
+                ):
+
+                    logger.debug("Applying masked training to DOP prior prediction")
+                    # Apply masking to the DOP prior prediction using base model as "prior"
+                    # This creates a DOP-aware masked prior that respects both constraints
+                    masked_dop_prior = (
+                        self._masked_training_manager.compute_masked_loss_with_prior(
+                            model_pred=prior_pred,
+                            target=target,
+                            mask=mask,
+                            prior_pred=None,  # No recursive prior for DOP's own prior
+                            loss_type=getattr(args, "loss_type", "mse"),
+                            huber_c=getattr(args, "pseudo_huber_c", 1.0),
+                            current_step=getattr(args, "current_step", None),
+                            total_steps=getattr(args, "total_steps", None),
+                            schedule_type=getattr(
+                                args, "pseudo_huber_schedule_type", "constant"
+                            ),
+                            c_min=getattr(args, "pseudo_huber_c_min", 0.01),
+                            c_max=getattr(args, "pseudo_huber_c_max", 10.0),
+                        )
+                    )
+                    # Note: We don't replace base_loss here since DOP has its own loss component
 
                 # LoRA-enabled prediction on preservation prompt
                 seq_len = self._compute_seq_len(latents)
@@ -723,9 +917,9 @@ class TrainingLossComputer:
     def get_contrastive_flow_components(self) -> Optional[Dict[str, Any]]:
         """
         Get the last computed contrastive flow matching loss components.
-        
+
         Returns:
-            Dictionary with flow_loss, contrastive_loss, lambda_val, and 
+            Dictionary with flow_loss, contrastive_loss, lambda_val, and
             used_class_conditioning if contrastive flow matching was used,
             None otherwise.
         """

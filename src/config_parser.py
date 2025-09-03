@@ -761,15 +761,19 @@ def create_args_from_config(
     # FVDM settings
     args.enable_fvdm = config.get("enable_fvdm", False)
     args.fvdm_ptss_p = config.get("fvdm_ptss_p", 0.2)
-    
+
     # Enhanced FVDM settings
     args.fvdm_adaptive_ptss = config.get("fvdm_adaptive_ptss", False)
     args.fvdm_ptss_initial = config.get("fvdm_ptss_initial", 0.3)
     args.fvdm_ptss_final = config.get("fvdm_ptss_final", 0.1)
     args.fvdm_ptss_warmup = config.get("fvdm_ptss_warmup", 1000)
-    args.fvdm_temporal_consistency_weight = config.get("fvdm_temporal_consistency_weight", 0.0)
+    args.fvdm_temporal_consistency_weight = config.get(
+        "fvdm_temporal_consistency_weight", 0.0
+    )
     args.fvdm_frame_diversity_weight = config.get("fvdm_frame_diversity_weight", 0.0)
-    args.fvdm_integrate_adaptive_timesteps = config.get("fvdm_integrate_adaptive_timesteps", False)
+    args.fvdm_integrate_adaptive_timesteps = config.get(
+        "fvdm_integrate_adaptive_timesteps", False
+    )
     args.fvdm_eval_temporal_metrics = config.get("fvdm_eval_temporal_metrics", False)
     args.fvdm_eval_frequency = config.get("fvdm_eval_frequency", 1000)
 
@@ -833,8 +837,25 @@ def create_args_from_config(
     args.repa_loss_lambda = config.get("repa_loss_lambda", 0.5)
     args.repa_similarity_fn = config.get("repa_similarity_fn", "cosine")
 
-    # Use original config file directly - no need for temporary files!
-    # The caching scripts can handle full config files and extract what they need
+    # Masked Training Configuration
+    args.use_masked_training_with_prior = config.get(
+        "use_masked_training_with_prior", False
+    )
+    args.unmasked_probability = config.get("unmasked_probability", 0.1)
+    args.unmasked_weight = config.get("unmasked_weight", 0.1)
+    args.masked_prior_preservation_weight = config.get(
+        "masked_prior_preservation_weight", 0.0
+    )
+    args.normalize_masked_area_loss = config.get("normalize_masked_area_loss", False)
+    args.mask_interpolation_mode = config.get("mask_interpolation_mode", "area")
+    args.enable_prior_computation = config.get("enable_prior_computation", True)
+    args.prior_computation_method = config.get(
+        "prior_computation_method", "lora_disabled"
+    )
+
+    # Video-specific parameters
+    args.temporal_consistency_weight = config.get("temporal_consistency_weight", 0.0)
+    args.frame_consistency_mode = config.get("frame_consistency_mode", "adjacent")
 
     # Validate that we have dataset configuration
     if "datasets" not in config and "val_datasets" not in config:

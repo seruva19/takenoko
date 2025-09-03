@@ -106,9 +106,6 @@ gradient_accumulation_steps = 1
 # Mixed precision training (choices: "no", "fp16", "bf16")
 mixed_precision = "fp16"
 
-# Weight for regularization loss (1.0 = normal, higher = stronger regularization)
-prior_loss_weight = 1.0
-
 # Use broadcasted per-sample time embedding for Wan 2.2/FVDM (L=1 per sample),
 # instead of per-token embeddings. Off by default for maximal expressiveness.
 broadcast_time_embed = false
@@ -346,6 +343,11 @@ network_alpha = 32
 
 # use lycoris for inference
 # lycoris = true 
+
+# Weight for regularization loss (1.0 = normal, higher = stronger regularization)
+# This applies to regularization datasets (is_reg=true) vs main dataset
+# NOT related to masked training's "masked_prior_preservation_weight"
+prior_loss_weight = 1.0
 
 # =============================================================================
 # TIMESTEP AND FLOW MATCHING SETTINGS
@@ -1170,6 +1172,53 @@ enable_optical_flow_loss = false
 lambda_optical_flow = 0.01
 
 # =============================================================================
+# ⚠️ MASKED TRAINING SETTINGS
+# =============================================================================
+
+# Enable masked training with prior preservation
+# Master toggle - MUST be true to enable the entire feature
+# Note: Works with DOP (diff_output_preservation) - DOP's prior will be masked if both enabled
+use_masked_training_with_prior = false
+
+# Probability of removing mask during training (0.0 = never remove, 1.0 = always remove)
+# Helps prevent overfitting to mask boundaries by randomly training on full images
+unmasked_probability = 0.1
+
+# Minimum weight for unmasked regions [0-1] 
+# 0.1 = light masking (10% weight to unmasked), 0.01 = heavy masking (1% weight to unmasked)
+unmasked_weight = 0.1
+
+# Weight for preserving base model predictions in unmasked areas [0-inf] 
+# This controls spatial masking within individual images/videos
+# 0.0 = disabled, 0.3-0.8 = typical range, higher = stronger preservation of original model
+masked_prior_preservation_weight = 0.0
+
+# Normalize loss by masked area size (helps balance training across different mask sizes)
+normalize_masked_area_loss = false
+
+# Method for resizing masks to match loss dimensions ("area", "bilinear", "nearest")
+# "area" provides cleanest boundaries, recommended for most use cases
+mask_interpolation_mode = "area"
+
+# Integration Parameters
+# Enable prior prediction computation (required for prior preservation)
+enable_prior_computation = true
+
+# Method for computing prior predictions ("lora_disabled" recommended)
+# "lora_disabled" = disable LoRA weights when computing base model predictions
+prior_computation_method = "lora_disabled"
+
+# Video-specific Parameters
+# Weight for temporal consistency loss in videos [0-inf] (0 = disabled)
+# 0.1-0.5 typical range, encourages smooth mask transitions between frames
+temporal_consistency_weight = 0.0
+
+# Temporal consistency computation method ("adjacent" or "all_pairs")
+# "adjacent" = compare adjacent frames only (faster)
+# "all_pairs" = compare all frame pairs (more thorough but slower)
+frame_consistency_mode = "adjacent"
+
+# =============================================================================
 # TREAD SETTINGS
 # =============================================================================
 
@@ -1677,6 +1726,9 @@ enable_bucket = true
 bucket_no_upscale = true
 
 # Directory containing mask images for masked training
+# When using masked training, ensure your dataset includes mask files alongside images/videos
+# Masks should be binary: 0 = unmasked regions, 255 = masked regions
+# For videos: masks can be per-frame or single mask applied to all frames
 # mask_path = "/path/to/mask/images" 
 
 # =============================================================================

@@ -127,6 +127,12 @@ class WanNetworkTrainer:
             except Exception as e:
                 logger.warning(f"Failed to initialize adaptive timestep sampling: {e}")
 
+        # Initialize masked training if available
+        try:
+            self.training_core.loss_computer.initialize_masked_training(args)
+        except Exception as e:
+            logger.warning(f"Failed to initialize masked training: {e}")
+
         # Initialize sampling manager now that we have config
         self.sampling_manager = SamplingManager(
             self.config, self.default_guidance_scale
