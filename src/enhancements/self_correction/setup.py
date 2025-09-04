@@ -92,7 +92,7 @@ def maybe_attach_self_correction_manager(
     if sampling_manager is None:
         return
 
-    from self_correction.manager import SelfCorrectionManager
+    from enhancements.self_correction.manager import SelfCorrectionManager
 
     sc_manager = SelfCorrectionManager(
         args=args,
