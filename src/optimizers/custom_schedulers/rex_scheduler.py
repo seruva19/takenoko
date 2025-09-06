@@ -12,6 +12,8 @@ How to enable from TOML config (handled by optimizer_manager's alias map):
     "min_lr=1e-6",
     "num_steps=10000",
     "num_warmup_steps=100",
+    "rex_alpha=0.1",
+    "rex_beta=0.9",
   ]
 
 Or use the short alias:
@@ -39,6 +41,10 @@ class RexLR(_LRScheduler):
         min_lr_ratio (float, optional): Ratio of min_lr to max_lr. Defaults to 0.01
         num_steps (int): The total number of training steps
         num_warmup_steps (int, optional): The number of warmup steps. Defaults to 0
+        rex_alpha (float): Constant added to the denominator of the REX factor;
+            prevents division-by-zero and softens the initial decay (default: 0.1).
+        rex_beta (float): Multiplier of z in the denominator of the REX factor;
+            controls how quickly the decay flattens as z increases (default: 0.9).
         last_epoch (int, optional): The index of the last step. Defaults to -1
     """
 
@@ -50,6 +56,8 @@ class RexLR(_LRScheduler):
         min_lr_ratio: Optional[float] = 0.01,
         num_steps: int = 0,
         num_warmup_steps: int = 0,
+        rex_alpha: float = 0.1,
+        rex_beta: float = 0.9,
         last_epoch: int = -1,
     ):
         # Calculate min_lr if not provided
@@ -74,6 +82,8 @@ class RexLR(_LRScheduler):
         self.max_lr = max_lr
         self.num_steps = num_steps
         self.num_warmup_steps = num_warmup_steps
+        self.rex_alpha = rex_alpha
+        self.rex_beta = rex_beta
 
         # Ensure each parameter group has an "initial_lr" key to avoid issues when resuming
         for group in optimizer.param_groups:
@@ -111,12 +121,8 @@ class RexLR(_LRScheduler):
 
         # Calculate REX curve for current step
         rex_z = (remaining_steps - (step_after % remaining_steps)) / remaining_steps
-        rex_factor = (
-            self.min_lr / self.max_lr
-            + (  # The paper uses 0.5+0.5, but IvanVassi used 0.1+0.9 which feels better
-                1.0 - self.min_lr / self.max_lr
-            )
-            * (rex_z / (0.1 + 0.9 * rex_z))
+        rex_factor = self.min_lr / self.max_lr + (1.0 - self.min_lr / self.max_lr) * (
+            rex_z / (self.rex_alpha + self.rex_beta * rex_z)
         )
 
         return [base_lr * rex_factor for base_lr in self.base_lrs]
