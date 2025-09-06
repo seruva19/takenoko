@@ -3,10 +3,12 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from common.logger import get_logger
 from dataset import config_utils
 
-logger = get_logger(__name__)
+import logging
+from common.logger import get_logger
+
+logger = get_logger(__name__, level=logging.INFO)
 
 
 def maybe_wrap_with_self_correction(

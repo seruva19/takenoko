@@ -962,6 +962,68 @@ def create_args_from_config(
         "self_correction_guidance_scale", 5.0
     )
 
+    # Enable temporal consistency enhancement for video training
+    args.enable_frequency_domain_temporal_consistency = config.get(
+        "enable_frequency_domain_temporal_consistency", False
+    )
+    args.freq_temporal_enable_motion_coherence = config.get(
+        "freq_temporal_enable_motion_coherence", False
+    )
+    args.freq_temporal_enable_prediction_loss = config.get(
+        "freq_temporal_enable_prediction_loss", False
+    )
+    args.freq_temporal_low_threshold = config.get("freq_temporal_low_threshold", 0.25)
+    args.freq_temporal_high_threshold = config.get("freq_temporal_high_threshold", 0.7)
+    args.freq_temporal_consistency_weight = config.get(
+        "freq_temporal_consistency_weight", 0.1
+    )
+    args.freq_temporal_motion_weight = config.get("freq_temporal_motion_weight", 0.05)
+    args.freq_temporal_prediction_weight = config.get(
+        "freq_temporal_prediction_weight", 0.08
+    )
+    args.freq_temporal_max_distance = config.get("freq_temporal_max_distance", 4)
+    args.freq_temporal_decay_factor = config.get("freq_temporal_decay_factor", 0.8)
+    args.freq_temporal_min_frames = config.get("freq_temporal_min_frames", 4)
+    args.freq_temporal_motion_threshold = config.get(
+        "freq_temporal_motion_threshold", 0.1
+    )
+    args.freq_temporal_preserve_dc = config.get("freq_temporal_preserve_dc", True)
+    args.freq_temporal_adaptive_threshold = config.get(
+        "freq_temporal_adaptive_threshold", False
+    )
+    args.freq_temporal_adaptive_range = tuple(
+        config.get("freq_temporal_adaptive_range", [0.15, 0.35])
+    )
+    args.freq_temporal_start_step = config.get("freq_temporal_start_step", 0)
+    args.freq_temporal_end_step = config.get("freq_temporal_end_step", None)
+    args.freq_temporal_warmup_steps = config.get("freq_temporal_warmup_steps", 100)
+    args.freq_temporal_enable_caching = config.get("freq_temporal_enable_caching", True)
+    args.freq_temporal_cache_size = config.get("freq_temporal_cache_size", 500)
+    args.freq_temporal_batch_parallel = config.get("freq_temporal_batch_parallel", True)
+    args.freq_temporal_apply_every_n_steps = config.get(
+        "freq_temporal_apply_every_n_steps", 1
+    )
+    args.freq_temporal_max_frames_per_batch = config.get(
+        "freq_temporal_max_frames_per_batch", 16
+    )
+
+    # Logging cadence for temporal consistency
+    args.freq_temporal_log_every_steps = config.get(
+        "freq_temporal_log_every_steps", 500
+    )
+    args.freq_temporal_tb_log_every_steps = config.get(
+        "freq_temporal_tb_log_every_steps", 500
+    )
+    args.freq_temporal_weight_strategy = config.get(
+        "freq_temporal_weight_strategy", "exponential"
+    )
+    args.freq_temporal_loss_reduction = config.get(
+        "freq_temporal_loss_reduction", "mean"
+    )
+    args.freq_temporal_apply_to_latent = config.get(
+        "freq_temporal_apply_to_latent", True
+    )
+
     # Inline self-correction prompts in config (preferred over external files)
     args.self_correction_prompts = None
     if "self_correction_prompts" in config:

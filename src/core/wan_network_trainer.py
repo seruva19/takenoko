@@ -133,6 +133,14 @@ class WanNetworkTrainer:
         except Exception as e:
             logger.warning(f"Failed to initialize masked training: {e}")
 
+        # Initialize temporal consistency enhancement if available
+        try:
+            self.training_core.initialize_temporal_consistency_enhancement(args)
+        except Exception as e:
+            logger.warning(
+                f"Failed to initialize temporal consistency enhancement: {e}"
+            )
+
         # Initialize sampling manager now that we have config
         self.sampling_manager = SamplingManager(
             self.config, self.default_guidance_scale
@@ -420,7 +428,9 @@ class WanNetworkTrainer:
 
         # Optionally wrap with self-correction hybrid group (delegated to helper)
         try:
-            from self_correction.setup import maybe_wrap_with_self_correction
+            from enhancements.self_correction.setup import (
+                maybe_wrap_with_self_correction,
+            )
 
             train_dataset_group = maybe_wrap_with_self_correction(
                 args,
@@ -1079,7 +1089,7 @@ class WanNetworkTrainer:
             # Run the main training loop using TrainingCore
             # Attach a self-correction manager instance if enabled so the core can call it
             try:
-                from self_correction.setup import (
+                from enhancements.self_correction.setup import (
                     maybe_attach_self_correction_manager,
                 )
 

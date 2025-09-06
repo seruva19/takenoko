@@ -7,12 +7,13 @@ from typing import Any, Dict, List, Optional
 import torch
 from accelerate import Accelerator
 
-from common.logger import get_logger
 from core.sampling_manager import SamplingManager
 from dataset import config_utils
 
+import logging
+from common.logger import get_logger
 
-logger = get_logger(__name__)
+logger = get_logger(__name__, level=logging.INFO)
 
 
 class SelfCorrectionManager:

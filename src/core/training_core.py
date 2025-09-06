@@ -15,6 +15,9 @@ from common.logger import get_logger
 
 logger = get_logger(__name__, level=logging.INFO)
 
+from enhancements.temporal_consistency.training_integration import (
+    enhance_loss_with_temporal_consistency,
+)
 import utils.fluxflow_augmentation as fluxflow_augmentation
 from scheduling.fvdm_manager import create_fvdm_manager
 
@@ -147,6 +150,9 @@ class TrainingCore:
         self._iter_time_ema_sec: Optional[float] = None
         self._iter_time_ema_beta: float = 0.95
 
+        # Initialize temporal consistency enhancement
+        self.temporal_consistency_integration = None
+
     def set_ema_beta(self, beta: float) -> None:
         """Set the EMA smoothing factor. Higher values (closer to 1.0) = more smoothing."""
         validate_ema_beta(beta)
@@ -171,13 +177,13 @@ class TrainingCore:
     def initialize_adaptive_timestep_sampling(self, args: argparse.Namespace) -> None:
         """Initialize adaptive timestep sampling and FVDM manager."""
         self.adaptive_manager = _initialize_adaptive_timestep_sampling(args)
-        
+
         # Initialize unified FVDM manager (handles all FVDM functionality)
         # Note: Device will be properly set when accelerator is available
         self.fvdm_manager = create_fvdm_manager(
-            args, 
-            device=torch.device('cpu'),  # Temporary device, will be updated
-            adaptive_manager=self.adaptive_manager
+            args,
+            device=torch.device("cpu"),  # Temporary device, will be updated
+            adaptive_manager=self.adaptive_manager,
         )
 
         # Connect adaptive manager to timestep distribution
@@ -188,6 +194,18 @@ class TrainingCore:
         ):
             if hasattr(self.timestep_distribution, "set_adaptive_manager"):
                 self.timestep_distribution.set_adaptive_manager(self.adaptive_manager)
+
+    def initialize_temporal_consistency_enhancement(
+        self, args: argparse.Namespace
+    ) -> None:
+        """Initialize temporal consistency enhancement if enabled."""
+        from enhancements.temporal_consistency.main import (
+            create_temporal_consistency_integration,
+        )
+
+        self.temporal_consistency_integration = create_temporal_consistency_integration(
+            args
+        )
 
     def update_ema_loss(self, current_loss: float) -> float:
         """Update EMA loss; warm-start and defer bias correction for early steps."""
@@ -219,29 +237,6 @@ class TrainingCore:
         )
         self._iter_time_ema_sec = new_ema
         return new_ema
-
-    # Metric helpers moved to trainer.metrics
-    # kept methods as thin wrappers for backward compatibility
-    def generate_parameter_stats(
-        self,
-        model: Any,
-        global_step: int,
-        log_every_n_steps: int = 100,
-        max_params_to_log: int = 20,
-    ) -> Dict[str, float]:
-        # Check if we should generate stats and update state if so
-        if should_generate_parameter_stats(
-            global_step, self.last_param_log_step, log_every_n_steps
-        ):
-            self.last_param_log_step = global_step
-            return _generate_parameter_stats(
-                model,
-                global_step,
-                self.last_param_log_step,
-                log_every_n_steps,
-                max_params_to_log,
-            )
-        return {}
 
     def call_dit(
         self,
@@ -618,6 +613,23 @@ class TrainingCore:
         # Initialize throughput tracker with configuration
         _initialize_throughput_tracker(args)
 
+        # Wire Temporal Consistency TensorBoard logger once (integration handles cadence)
+        try:
+            if (
+                self.temporal_consistency_integration is not None
+                and self.temporal_consistency_integration.is_enabled()
+            ):
+
+                def _tc_tb_logger(logs: Dict[str, float], step: int) -> None:
+                    accelerator.log(logs, step=step)
+
+                tb_every = getattr(args, "freq_temporal_tb_log_every_steps", None)
+                self.temporal_consistency_integration.set_tensorboard_logger(
+                    _tc_tb_logger, every_steps=tb_every
+                )
+        except Exception:
+            pass
+
         for epoch in range(epoch_to_start, num_train_epochs):
             accelerator.print(f"\nepoch {epoch+1}/{num_train_epochs}")
             if current_epoch is not None:
@@ -651,11 +663,18 @@ class TrainingCore:
 
             for step, batch in enumerate(train_dataloader):
                 # Update FVDM manager device on first step (when accelerator is available)
-                if step == 0 and hasattr(self, 'fvdm_manager') and self.fvdm_manager.device != accelerator.device:
+                if (
+                    step == 0
+                    and hasattr(self, "fvdm_manager")
+                    and self.fvdm_manager.device != accelerator.device
+                ):
                     self.fvdm_manager.device = accelerator.device
-                    if hasattr(self.fvdm_manager, 'metrics') and self.fvdm_manager.metrics:
+                    if (
+                        hasattr(self.fvdm_manager, "metrics")
+                        and self.fvdm_manager.metrics
+                    ):
                         self.fvdm_manager.metrics.device = accelerator.device
-                
+
                 # Start performance timing for this step
                 start_step_timing()
 
@@ -703,8 +722,10 @@ class TrainingCore:
                     # Use unified FVDM manager for clean interface
                     if self.fvdm_manager.enabled:
                         # FVDM is enabled - use FVDM manager
-                        noisy_model_input, timesteps, sigmas = self.fvdm_manager.get_noisy_input_and_timesteps(
-                            noise, latents, noise_scheduler, dit_dtype, step
+                        noisy_model_input, timesteps, sigmas = (
+                            self.fvdm_manager.get_noisy_input_and_timesteps(
+                                noise, latents, noise_scheduler, dit_dtype, step
+                            )
                         )
                     else:
                         # Initialize timestep distribution if needed
@@ -872,16 +893,18 @@ class TrainingCore:
                     model_pred, target, intermediate_z = model_result
 
                     # Context memory processing
-                    context_memory_loss, context_stats = self.context_memory_manager.process_training_step(
-                        latents=latents,
-                        global_step=global_step,
-                        step=step,
-                        args=args,
-                        accelerator=accelerator,
-                        temporal_consistency_loss_fn=self.context_memory_manager.create_temporal_consistency_loss_fn(),
-                        batch=batch
+                    context_memory_loss, context_stats = (
+                        self.context_memory_manager.process_training_step(
+                            latents=latents,
+                            global_step=global_step,
+                            step=step,
+                            args=args,
+                            accelerator=accelerator,
+                            temporal_consistency_loss_fn=self.context_memory_manager.create_temporal_consistency_loss_fn(),
+                            batch=batch,
+                        )
                     )
-                    
+
                     # Log context memory stats if available
                     if context_stats:
                         self.context_memory_manager.log_stats_to_accelerator(
@@ -952,38 +975,46 @@ class TrainingCore:
                         warp_fn=getattr(self, "warp", None),
                         adaptive_manager=self.adaptive_manager,
                     )
-                    
+
                     # Integrate context memory loss into total loss
                     self.context_memory_manager.integrate_context_loss(
                         loss_components=loss_components,
                         context_memory_loss=context_memory_loss,
                         config=self.config.__dict__,
                         accelerator=accelerator,
-                        global_step=global_step
+                        global_step=global_step,
                     )
-                    
+
                     # FVDM: Record training metrics and integrate additional loss components
                     if self.fvdm_manager.enabled:
                         try:
                             # Record FVDM training metrics
                             self.fvdm_manager.record_training_step(
                                 frames=latents,
-                                timesteps=timesteps, 
-                                loss=loss_components['loss'],
-                                step=global_step
+                                timesteps=timesteps,
+                                loss=loss_components["loss"],
+                                step=global_step,
                             )
-                            
+
                             # Compute and integrate FVDM additional loss components
-                            fvdm_additional_loss, fvdm_loss_details = self.fvdm_manager.get_additional_loss(
-                                frames=latents,
-                                timesteps=timesteps
+                            fvdm_additional_loss, fvdm_loss_details = (
+                                self.fvdm_manager.get_additional_loss(
+                                    frames=latents, timesteps=timesteps
+                                )
                             )
-                            
+
                             if fvdm_additional_loss.item() > 0:
                                 # Add FVDM loss components to the total loss
-                                loss_components['loss'] = loss_components['loss'] + fvdm_additional_loss
-                                loss_components.update({f'fvdm_{k}': v for k, v in fvdm_loss_details.items()})
-                                
+                                loss_components["loss"] = (
+                                    loss_components["loss"] + fvdm_additional_loss
+                                )
+                                loss_components.update(
+                                    {
+                                        f"fvdm_{k}": v
+                                        for k, v in fvdm_loss_details.items()
+                                    }
+                                )
+
                         except Exception as e:
                             logger.debug(f"FVDM integration warning: {e}")
 
@@ -1027,7 +1058,14 @@ class TrainingCore:
 
                     # Start backward pass timing
                     start_backward_pass_timing()
-                    accelerator.backward(loss_components.total_loss)
+                    loss_for_backward = enhance_loss_with_temporal_consistency(
+                        self.temporal_consistency_integration,
+                        base_loss=loss_components.total_loss,
+                        model_pred=model_pred,
+                        target=target,
+                        step=global_step,
+                    )
+                    accelerator.backward(loss_for_backward)
 
                     # End backward pass timing
                     end_backward_pass_timing()
@@ -1340,10 +1378,14 @@ class TrainingCore:
                     self.loss_computer,
                 )
 
+                # Temporal Consistency: logging handled inside integration (no per-step wiring here)
+
                 # FVDM: Log additional metrics if enabled and appropriate
                 if self.fvdm_manager.should_log_metrics(global_step):
                     try:
-                        fvdm_metrics = self.fvdm_manager.get_metrics_for_logging(global_step)
+                        fvdm_metrics = self.fvdm_manager.get_metrics_for_logging(
+                            global_step
+                        )
                         if fvdm_metrics:
                             accelerator.log(fvdm_metrics, step=global_step)
                     except Exception as e:

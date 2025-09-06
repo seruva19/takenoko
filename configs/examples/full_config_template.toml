@@ -928,6 +928,101 @@ fluxflow_block_perturb_prob = 0.5
 fluxflow_frame_dim_in_batch = 2
 
 # =============================================================================
+# TEMPORAL FREQUENCY-DOMAIN CONSISTENCY SETTINGS
+# =============================================================================
+
+# Enable frequency-domain temporal consistency enhancement for video training
+enable_frequency_domain_temporal_consistency = false
+
+# Enable motion coherence loss using frequency domain analysis
+freq_temporal_enable_motion_coherence = false
+
+# Enable frequency-domain temporal loss between prediction and target
+freq_temporal_enable_prediction_loss = false
+
+# Low-frequency threshold for structural component extraction (0.0-1.0)
+freq_temporal_low_threshold = 0.3
+
+# High-frequency threshold for motion component extraction (0.0-1.0)
+freq_temporal_high_threshold = 0.7
+
+# Loss component weights
+# Weight for structural consistency loss
+freq_temporal_consistency_weight = 0.05    
+
+# Weight for motion coherence loss  
+freq_temporal_motion_weight = 0.05      
+
+# Weight for freq-domain temporal loss
+freq_temporal_prediction_weight = 0.08    
+
+# Temporal processing parameters
+# Maximum frame distance for consistency
+freq_temporal_max_distance = 4            
+
+# Weight decay for distant frames
+freq_temporal_decay_factor = 0.8         
+
+# Minimum frames needed to apply enhancement
+freq_temporal_min_frames = 4                
+
+# Motion variation threshold for coherence loss
+freq_temporal_motion_threshold = 0.1   
+
+# Frequency analysis settings
+# Preserve DC (average brightness) component
+freq_temporal_preserve_dc = true         
+
+# Automatically adjust thresholds based on content
+freq_temporal_adaptive_threshold = false           
+
+# Range for adaptive threshold
+freq_temporal_adaptive_range = [0.15, 0.35]  
+
+# Loss scheduling - control when temporal consistency is applied
+# Step to start applying temporal loss
+freq_temporal_start_step = 0      
+
+# Step to stop applying temporal loss (unset = never)
+# freq_temporal_end_step = 1000  
+
+# Number of warmup steps for gradual introduction
+freq_temporal_warmup_steps = 100  
+
+# Performance optimization settings
+# Cache frequency masks for better performance
+freq_temporal_enable_caching = true      
+
+# Maximum number of cached frequency masks
+freq_temporal_cache_size = 500                
+
+# Process batch elements in parallel
+freq_temporal_batch_parallel = true       
+
+# Apply enhancement every N steps (1=every step)
+freq_temporal_apply_every_n_steps = 1             
+
+# Limit frames processed per batch for memory
+freq_temporal_max_frames_per_batch = 16 
+
+# Logging cadence for temporal consistency
+# Console INFO log interval (steps)
+freq_temporal_log_every_steps = 10
+
+# TensorBoard metrics interval (steps)
+freq_temporal_tb_log_every_steps = 10
+
+# Advanced settings
+# "linear", "exponential", or "uniform"
+freq_temporal_weight_strategy = "exponential"  
+
+# "mean", "sum", or "none"
+freq_temporal_loss_reduction = "mean"              
+
+# Apply to latent space vs pixel space
+freq_temporal_apply_to_latent = true         
+
+# =============================================================================
 # ⚠️ CONTEXT AS MEMORY SETTINGS
 # =============================================================================
 
