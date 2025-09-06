@@ -11,7 +11,7 @@ from typing import Optional, Dict, Any, Callable
 from dataclasses import dataclass
 
 from common.logger import get_logger
-from ..criteria.masked_loss import masked_losses_with_prior, prepare_mask_for_loss
+from criteria.masked_loss import masked_losses_with_prior, prepare_mask_for_loss
 from criteria.pseudo_huber_loss import conditional_loss_with_pseudo_huber
 
 logger = get_logger(__name__)
