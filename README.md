@@ -74,3 +74,5 @@ Keep in mind that work on some features is not yet complete due to time and hard
 | [OneTrainer](https://github.com/Nerogar/OneTrainer) | repo | - Masked training (prior preservation, unmasked weight, random mask removal) | [Nerogar](https://github.com/Nerogar) | AGPL-3.0 | |
 | [Ouroboros-Diffusion: Exploring Consistent Content Generation in Tuning-free Long Video Diffusion](https://arxiv.org/abs/2501.09019) | paper | - Frequency-domain temporal consistency | Jingyuan Chen, Fuchen Long, Jie An, Zhaofan Qiu, Ting Yao, Jiebo Luo, Tao Mei | CC BY-SA 4.0 | |
 | [mmgp](https://github.com/deepbeepmeep/mmgp) | repo | - Memory-mapped safetensors loading | [deepbeepmeep](https://github.com/deepbeepmeep) | GNU GPL |  |
+| [attention-map-diffusers](https://github.com/wooyeolbaek/attention-map-diffusers) | repo | - Cross-attention map visualization | [wooyeolbaek](https://github.com/wooyeolbaek) | MIT |  |
+
