@@ -5,11 +5,11 @@ import logging
 import os
 import numpy as np
 import torch
-from safetensors.torch import load_file
 
 
 from dataset.item_info import ItemInfo
 from common.logger import get_logger
+from memory.safetensors_loader import load_file
 
 
 logger = get_logger(__name__, level=logging.INFO)
@@ -85,7 +85,7 @@ class BucketBatchManager:
     ):
         self.batch_size = batch_size
         self.buckets = bucketed_item_info
-        self.prior_loss_weight = prior_loss_weight  # <-- Store this
+        self.prior_loss_weight = prior_loss_weight
         self.bucket_resos = list(self.buckets.keys())
         self.bucket_resos.sort()
         # Optional per-epoch timestep bucketing
@@ -125,6 +125,7 @@ class BucketBatchManager:
         self.num_timestep_buckets = (
             int(num_timestep_buckets) if num_timestep_buckets is not None else None
         )
+
 
     def prepare_timestep_pool(self) -> None:
         """Create/refresh the per-epoch timestep pool without shuffling batches."""

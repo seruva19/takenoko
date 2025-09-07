@@ -12,6 +12,7 @@ import torch.nn.functional as F
 
 import logging
 from common.logger import get_logger
+from memory.safe_memory_manager import SafeMemoryManager
 
 logger = get_logger(__name__, level=logging.INFO)
 
@@ -139,6 +140,9 @@ class TrainingCore:
 
         # Context memory components (all-in-one manager)
         self.context_memory_manager = ContextMemoryManager(self.config.__dict__)
+
+        # Training-safe memory optimization manager
+        self.memory_manager = SafeMemoryManager(self.config.__dict__)
 
         # Toggle for alternating progress postfix (iter_ms vs peak VRAM)
         self._perf_display_toggle: bool = False

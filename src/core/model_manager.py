@@ -11,7 +11,7 @@ import os
 from typing import Any, Dict, Optional, Tuple
 import torch
 from accelerate import Accelerator
-from safetensors.torch import load_file
+from memory.safetensors_loader import load_file
 
 import utils.fluxflow_augmentation as fluxflow_augmentation
 import logging

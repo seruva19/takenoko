@@ -5,7 +5,7 @@ import json
 import struct
 from typing import Dict, Any, Union, Optional
 
-from safetensors.torch import load_file
+from memory.safetensors_loader import load_file
 
 
 def mem_eff_save_file(

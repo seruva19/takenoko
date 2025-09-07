@@ -10,7 +10,7 @@ import torch.nn.functional as F
 
 from wan.modules.tokenizers import HuggingfaceTokenizer
 from accelerate import init_empty_weights
-from safetensors.torch import load_file
+from memory.safetensors_loader import load_file
 
 import logging
 

@@ -2,6 +2,7 @@ import argparse
 import logging
 from typing import Any, Dict
 from common.logger import get_logger
+from memory.config import parse_memory_optimization_config
 
 logger = get_logger(__name__, level=logging.INFO)
 
@@ -1044,5 +1045,8 @@ def create_args_from_config(
                 args.self_correction_prompts = normalized
         except Exception:
             args.self_correction_prompts = None
+
+    # Parse memory optimization configuration (delegated to memory module)
+    args = parse_memory_optimization_config(args, config)
 
     return args

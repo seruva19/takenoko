@@ -8,7 +8,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
 
-from safetensors.torch import load_file
+from memory.safetensors_loader import load_file
 
 CACHE_T = 2
 

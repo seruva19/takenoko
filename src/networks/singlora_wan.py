@@ -383,7 +383,7 @@ class SingLoRANetworkWan(nn.Module):
     def load_weights(self, file):
         """Load SingLoRA weights (following Takenoko pattern)."""
         if file.endswith(".safetensors"):
-            from safetensors.torch import load_file
+            from memory.safetensors_loader import load_file
             weights_sd = load_file(file)
         else:
             weights_sd = torch.load(file, map_location="cpu")

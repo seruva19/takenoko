@@ -5,7 +5,7 @@ import hashlib
 from io import BytesIO
 import os
 from typing import List, Optional, Tuple, Union
-import safetensors
+from memory.safetensors_loader import safe_open
 import logging
 
 from common.logger import get_logger
@@ -206,7 +206,7 @@ def load_metadata_from_safetensors(model: str) -> dict:
     if not model.endswith(".safetensors"):
         return {}
 
-    with safetensors.safe_open(model, framework="pt") as f:  # type: ignore
+    with safe_open(model, framework="pt") as f:  # type: ignore
         metadata = f.metadata()
     if metadata is None:
         metadata = {}

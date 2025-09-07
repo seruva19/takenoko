@@ -453,7 +453,7 @@ class ControlLoRANetwork(LoRANetwork):
         This helps ensure proper resumption of control LoRA training.
         """
         if os.path.splitext(file)[1] == ".safetensors":
-            from safetensors.torch import load_file
+            from memory.safetensors_loader import load_file
 
             weights_sd = load_file(file)
 

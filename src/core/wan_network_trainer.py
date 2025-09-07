@@ -38,6 +38,8 @@ from core.sampling_manager import SamplingManager
 from core.control_signal_processor import ControlSignalProcessor
 from core.checkpoint_manager import CheckpointManager
 from core.training_core import TrainingCore
+from memory.safe_memory_manager import SafeMemoryManager
+
 from core.vae_training_core import VaeTrainingCore
 from reward.reward_training_core import RewardTrainingCore
 from utils.repa_helper import RepaHelper
@@ -119,6 +121,12 @@ class WanNetworkTrainer:
         # Configure advanced logging settings (progress bar, parameter stats, etc.)
         # This ensures TOML config values are actually used instead of hardcoded defaults
         self.training_core.configure_advanced_logging(args)
+
+        # Re-initialize memory manager with training args so flags are honored
+        try:
+            self.training_core.memory_manager = SafeMemoryManager(args.__dict__)
+        except Exception:
+            pass
 
         # Initialize adaptive timestep sampling if available
         if hasattr(args, "enable_adaptive_timestep_sampling"):

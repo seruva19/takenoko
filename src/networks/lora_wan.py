@@ -858,7 +858,7 @@ class LoRANetwork(torch.nn.Module):
 
     def load_weights(self, file):
         if os.path.splitext(file)[1] == ".safetensors":
-            from safetensors.torch import load_file
+            from memory.safetensors_loader import load_file
 
             weights_sd = load_file(file)
         else:

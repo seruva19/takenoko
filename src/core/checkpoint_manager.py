@@ -14,8 +14,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 import torch
 from accelerate import Accelerator
-from safetensors.torch import save_file, load_file
-import safetensors
+from memory.safetensors_loader import torch as safetensors_torch, safe_open
 import ast
 
 import logging
@@ -422,7 +421,7 @@ class CheckpointManager:
                         "has_bias": str(transformer.patch_embedding.bias is not None),
                     }
 
-                    save_file(
+                    safetensors_torch.save_file(
                         patch_embedding_tensors, patch_embedding_path, metadata=metadata
                     )
                     logger.info(
@@ -584,10 +583,10 @@ class CheckpointManager:
                     # Load the patch embedding weights
                     try:
                         # Load tensors and metadata
-                        patch_embedding_tensors = load_file(patch_embedding_path)
+                        patch_embedding_tensors = safetensors_torch.load_file(patch_embedding_path)
 
                         # Get metadata from the file
-                        with safetensors.safe_open(
+                        with safe_open(
                             patch_embedding_path, framework="pt"
                         ) as f:  # type: ignore
                             metadata = f.metadata()

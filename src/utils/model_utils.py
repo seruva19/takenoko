@@ -2,7 +2,7 @@ import hashlib
 from io import BytesIO
 from typing import Optional
 
-import safetensors.torch
+from memory.safetensors_loader import torch as safetensors_torch; from memory.safetensors_loader import safe_open
 import torch
 
 

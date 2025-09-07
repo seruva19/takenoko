@@ -732,6 +732,34 @@ cuda_allocator_max_split_size_mb = 64
 cuda_allocator_expandable_segments = false
 
 # =============================================================================
+# ⚠️ MEMORY OPTIMIZATION SETTINGS
+# =============================================================================
+
+# Training-safe memory optimization
+# When enabled, activates memory-efficient safetensors loading and optional VRAM monitoring
+safe_memory_optimization_enabled = false
+
+# Enable memory-efficient SafeTensors loading using memory mapping
+# Reduces RAM usage during LoRA weight loading without affecting training behavior
+memory_opt_loading_enabled = true
+
+# Enable VRAM/RAM monitoring with automatic garbage collection
+# Helps prevent OOM errors during training by proactively managing memory usage
+memory_opt_monitoring_enabled = true
+
+# Garbage collection trigger threshold (0.0-1.0, default: 0.85)
+# Triggers cleanup when GPU VRAM usage exceeds this ratio
+memory_opt_gc_threshold_ratio = 0.85
+
+# Trigger garbage collection every N training steps (default: 100)
+# Higher values = less frequent cleanup, lower values = more frequent cleanup
+memory_opt_gc_interval_steps = 100
+
+# Monitor memory usage every N training steps (default: 50)
+# Controls how often memory statistics are checked and logged
+memory_opt_monitor_interval_steps = 50
+
+# =============================================================================
 # DUAL MODEL TRAINING SETTINGS
 # =============================================================================
 
@@ -1874,10 +1902,12 @@ num_repeats = 1
 # - middle: take centered window, requires setting target_frames.
 # - chunk: non-overlapping contiguous windows of length target_frame across the video, requires setting target_frames.
 # - slide: sliding windows, requires setting target_frames and frame_stride (>=1), default is 1. Overlap (frames) = target_frame - frame_stride.
-# - slide_end: sliding windows that guarantee the final window ends at the last frame; if the video is shorter than target_frame, produce a single full-length window. Requires target_frames and frame_stride (>=1). Overlap (frames) = target_frame - frame_stride.
+# - slide_end: sliding windows that guarantee the final window ends at the last frame.
+# If the video is shorter than target_frame, produce a single full-length window. Requires target_frames and frame_stride (>=1). Overlap (frames) = target_frame - frame_stride.
 # - uniform: fixed count of evenly spaced start positions, requires setting target_frames and frame_sample (>=1). If frame_sample == 1, it is auto-changed to "head" by the loader.
 # - multiple_overlapping: minimally cover the video with windows (may overlap), end-aligned, requires setting target_frames.
-# - full: use up to max_frames (rounded to N*4+1) starting at 0, requires setting target_frames to be non-empty; Uses max_frames to cap length (optional). If multiple target_frames are provided, one identical (0, use_frames) window is produced per entry; recommended target_frames = [1].
+# - full: use up to max_frames (rounded to N*4+1) starting at 0, requires setting target_frames to be non-empty.
+# Uses max_frames to cap length (optional). If multiple target_frames are provided, one identical (0, use_frames) window is produced per entry; recommended target_frames = [1].
 frame_extraction = "uniform"
 
 # Extract different frame sequence lengths
