@@ -465,14 +465,23 @@ fast_rejection_sampling = false
 # LOSS SETTINGS
 # =============================================================================
 
-# Base loss function type: "mse", "l1", "huber", "pseudo_huber", "pseudo_huber_scheduled"
+# Base loss function type - expanded support for multiple loss functions
+# Standard losses:
 # - "mse": Standard Mean Squared Error loss (default)
-# - "l1": L1 (Mean Absolute Error) loss
-# - "huber": Standard Huber loss with fixed delta
+# - "l1" or "mae": L1 (Mean Absolute Error) loss
+# - "huber": Standard Huber loss with fixed delta (smooth_l1_loss)
+# - "pure_huber": True Huber loss with configurable delta parameter
 # - "pseudo_huber": Pseudo-Huber loss with fixed c parameter
 # - "pseudo_huber_scheduled": Pseudo-Huber loss with adaptive c parameter scheduling
+# 
+# Advanced/Experimental losses:
+# - "fourier": Frequency domain loss (requires additional parameters)
+# - "dwt" or "wavelet": Discrete Wavelet Transform loss
+# - "clustered_mse": Clustered MSE loss for better handling of outliers
+# - "ew": EW (Error-Weighted) loss for adaptive weighting
 loss_type = "mse"
 
+# Pseudo-Huber loss parameters (for loss_type = "pseudo_huber" or "pseudo_huber_scheduled")
 # Pseudo-Huber c parameter (controls transition between L2 and L1 behavior)
 # Smaller values (0.1-0.5) = more L1-like (robust to outliers)
 # Larger values (1.0-2.0) = more L2-like (smooth gradients)
@@ -487,6 +496,66 @@ pseudo_huber_c_min = 0.1
 
 # Maximum c value for scheduling (end of training)
 pseudo_huber_c_max = 1.0
+
+# Huber loss parameters (for pure_huber loss type)
+# Delta parameter for pure_huber loss type
+# Controls the point where loss transitions from quadratic to linear
+huber_delta = 1.0
+
+# Fourier loss parameters (for loss_type = "fourier")
+# Weight/strength of fourier loss component
+fourier_weight = 0.05
+
+# Fourier loss computation mode
+# - "basic": Simple magnitude spectrum comparison
+# - "weighted": Frequency-weighted comparison (default)
+# - "multiscale": Multi-scale frequency analysis
+# - "adaptive": Adaptive frequency weighting
+fourier_mode = "weighted"
+
+# Norm type for fourier loss computation
+fourier_norm = "l2"  # "l1" or "l2"
+
+# Dimensions for FFT computation (usually last 2 dims for 2D)
+fourier_dims = [-2, -1]
+
+# Numerical stability epsilon
+fourier_eps = 1e-8
+
+# Scale factors for multiscale fourier loss
+fourier_multiscale_factors = [1, 2, 4]
+
+# Threshold for adaptive fourier loss
+fourier_adaptive_threshold = 0.1
+
+# Alpha parameter for adaptive fourier loss
+fourier_adaptive_alpha = 0.5
+
+# High frequency weight for weighted fourier loss
+fourier_high_freq_weight = 2.0
+
+# Wavelet/DWT loss parameters (for loss_type = "dwt" or "wavelet")
+# Wavelet type for DWT decomposition
+# Common options: "haar", "db1", "db4", "db8", "bior2.2", "coif2"
+wavelet_type = "haar"
+
+# Number of decomposition levels
+wavelet_levels = 1
+
+# Border mode for wavelet transform
+# Options: "zero", "symmetric", "periodization"
+wavelet_mode = "zero"
+
+# Clustered MSE loss parameters (for loss_type = "clustered_mse")
+# Number of clusters for clustered MSE loss
+clustered_mse_num_clusters = 8
+
+# Weight for cluster-based loss component
+clustered_mse_cluster_weight = 1.0
+
+# EW loss parameters (for loss_type = "ew")
+# Boundary shift parameter for exponential weighted loss
+ew_boundary_shift = 0.0
 
 # =============================================================================
 # ⚠️ DISPERSIVE LOSS SETTINGS

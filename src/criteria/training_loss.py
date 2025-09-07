@@ -15,7 +15,7 @@ import torch.nn.functional as F
 
 from common.logger import get_logger
 from criteria.dispersive_loss import dispersive_loss_info_nce
-from criteria.pseudo_huber_loss import conditional_loss_with_pseudo_huber
+from criteria.loss_factory import conditional_loss_with_pseudo_huber
 from core.masked_training_manager import (
     create_masked_training_manager,
     MaskedTrainingManager,
@@ -24,6 +24,36 @@ from utils.train_utils import get_sigmas
 
 
 logger = get_logger(__name__)
+
+
+def _get_loss_kwargs(args):
+    """Extract loss-specific parameters from args to pass to loss functions."""
+    return {
+        # Fourier loss parameters
+        "fourier_mode": getattr(args, "fourier_mode", "weighted"),
+        "fourier_dims": getattr(args, "fourier_dims", (-2, -1)),
+        "fourier_eps": getattr(args, "fourier_eps", 1e-8),
+        # Note: fourier_normalize removed as not supported by fourier functions
+        "fourier_multiscale_factors": getattr(
+            args, "fourier_multiscale_factors", [1, 2, 4]
+        ),
+        "fourier_adaptive_threshold": getattr(args, "fourier_adaptive_threshold", 0.1),
+        "fourier_adaptive_alpha": getattr(args, "fourier_adaptive_alpha", 0.5),
+        "fourier_high_freq_weight": getattr(args, "fourier_high_freq_weight", 2.0),
+        # Wavelet parameters
+        "wavelet_type": getattr(args, "wavelet_type", "haar"),
+        "wavelet_levels": getattr(args, "wavelet_levels", 1),
+        "wavelet_mode": getattr(args, "wavelet_mode", "zero"),
+        # Clustered MSE parameters
+        "clustered_mse_num_clusters": getattr(args, "clustered_mse_num_clusters", 8),
+        "clustered_mse_cluster_weight": getattr(
+            args, "clustered_mse_cluster_weight", 1.0
+        ),
+        # Huber parameters
+        "huber_delta": getattr(args, "huber_delta", 1.0),
+        # EW loss parameters
+        "ew_boundary_shift": getattr(args, "ew_boundary_shift", 0.0),
+    }
 
 
 @dataclass
@@ -316,6 +346,9 @@ class TrainingLossComputer:
                 )
 
                 def loss_fn(pred, tgt, **kwargs):
+                    loss_kwargs = _get_loss_kwargs(args)
+                    loss_kwargs.update(kwargs)
+
                     return conditional_loss_with_pseudo_huber(
                         pred,
                         tgt,
@@ -327,7 +360,9 @@ class TrainingLossComputer:
                         c_min=args.pseudo_huber_c_min,
                         c_max=args.pseudo_huber_c_max,
                         reduction="none",
-                        **kwargs,
+                        timesteps=timesteps,
+                        noise=noise,
+                        **loss_kwargs,
                     )
 
                 contrastive_result = compute_enhanced_contrastive_loss(
@@ -363,6 +398,8 @@ class TrainingLossComputer:
                     device=accelerator.device, dtype=network_dtype
                 )
 
+                loss_kwargs = _get_loss_kwargs(args)
+
                 loss_fm = conditional_loss_with_pseudo_huber(
                     model_pred.to(network_dtype),
                     target,
@@ -374,6 +411,9 @@ class TrainingLossComputer:
                     c_min=args.pseudo_huber_c_min,
                     c_max=args.pseudo_huber_c_max,
                     reduction="none",
+                    timesteps=timesteps,
+                    noise=noise,
+                    **loss_kwargs,
                 )
                 loss_contrastive = conditional_loss_with_pseudo_huber(
                     model_pred.to(network_dtype),
@@ -386,6 +426,9 @@ class TrainingLossComputer:
                     c_min=args.pseudo_huber_c_min,
                     c_max=args.pseudo_huber_c_max,
                     reduction="none",
+                    timesteps=timesteps,
+                    noise=noise,
+                    **loss_kwargs,
                 )
 
                 loss = loss_fm - lambda_val * loss_contrastive
@@ -411,6 +454,9 @@ class TrainingLossComputer:
                 c_min=args.pseudo_huber_c_min,
                 c_max=args.pseudo_huber_c_max,
                 reduction="none",
+                timesteps=timesteps,
+                noise=noise,
+                **_get_loss_kwargs(args),
             )
 
         # ---- Dataset sample weights ----

@@ -822,10 +822,39 @@ def create_args_from_config(
 
     # Loss function settings
     args.loss_type = config.get("loss_type", "mse")
+    
+    # Pseudo-Huber loss parameters
     args.pseudo_huber_c = config.get("pseudo_huber_c", 0.5)
     args.pseudo_huber_schedule_type = config.get("pseudo_huber_schedule_type", "linear")
     args.pseudo_huber_c_min = config.get("pseudo_huber_c_min", 0.1)
     args.pseudo_huber_c_max = config.get("pseudo_huber_c_max", 1.0)
+    
+    # Huber loss parameters (for pure_huber loss type)
+    args.huber_delta = config.get("huber_delta", 1.0)
+    
+    # Fourier loss parameters
+    args.fourier_weight = config.get("fourier_weight", 0.05)
+    args.fourier_mode = config.get("fourier_mode", "weighted")  # "basic", "weighted", "multiscale", "adaptive"
+    args.fourier_norm = config.get("fourier_norm", "l2")  # "l1", "l2" 
+    args.fourier_dims = tuple(config.get("fourier_dims", [-2, -1]))  # Dimensions for FFT
+    args.fourier_eps = config.get("fourier_eps", 1e-8)  # Numerical stability
+    # Note: fourier_normalize removed as fourier functions don't support this parameter
+    args.fourier_multiscale_factors = config.get("fourier_multiscale_factors", [1, 2, 4])
+    args.fourier_adaptive_threshold = config.get("fourier_adaptive_threshold", 0.1)
+    args.fourier_adaptive_alpha = config.get("fourier_adaptive_alpha", 0.5)
+    args.fourier_high_freq_weight = config.get("fourier_high_freq_weight", 2.0)
+    
+    # DWT/Wavelet loss parameters  
+    args.wavelet_type = config.get("wavelet_type", "haar")  # "haar", "db1", "db4", etc.
+    args.wavelet_levels = config.get("wavelet_levels", 1)  # Number of decomposition levels
+    args.wavelet_mode = config.get("wavelet_mode", "zero")  # Border mode for wavelets
+    
+    # Clustered MSE loss parameters
+    args.clustered_mse_num_clusters = config.get("clustered_mse_num_clusters", 8)
+    args.clustered_mse_cluster_weight = config.get("clustered_mse_cluster_weight", 1.0)
+    
+    # EW loss parameters
+    args.ew_boundary_shift = config.get("ew_boundary_shift", 0.0)
 
     # Optical Flow Loss (RAFT-based) settings
     args.enable_optical_flow_loss = config.get("enable_optical_flow_loss", False)

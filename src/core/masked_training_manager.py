@@ -12,7 +12,7 @@ from dataclasses import dataclass
 
 from common.logger import get_logger
 from criteria.masked_loss import masked_losses_with_prior, prepare_mask_for_loss
-from criteria.pseudo_huber_loss import conditional_loss_with_pseudo_huber
+from criteria.loss_factory import conditional_loss_with_pseudo_huber
 
 logger = get_logger(__name__)
 
@@ -208,10 +208,30 @@ class MaskedTrainingManager:
             )
         elif loss_type == "pseudo_huber":
             loss = conditional_loss_with_pseudo_huber(
-                pred_reshaped, target_reshaped, reduction="none", **kwargs
+                pred_reshaped,
+                target_reshaped,
+                loss_type=loss_type,
+                reduction="none",
+                **kwargs,
             )
         else:
-            raise ValueError(f"Unsupported loss type: {loss_type}")
+            # For other loss types, fall back to conditional_loss_with_pseudo_huber with all kwargs
+            try:
+                loss = conditional_loss_with_pseudo_huber(
+                    pred_reshaped,
+                    target_reshaped,
+                    loss_type=loss_type,
+                    reduction="none",
+                    **kwargs,
+                )
+            except Exception as e:
+                # Final fallback to MSE loss to prevent crashes
+                logger.warning(
+                    f"Loss type '{loss_type}' failed in masked training, falling back to MSE: {e}"
+                )
+                loss = F.mse_loss(
+                    pred_reshaped.float(), target_reshaped.float(), reduction="none"
+                )
 
         # Reshape back to original dimensions if needed
         if pred.dim() == 5:

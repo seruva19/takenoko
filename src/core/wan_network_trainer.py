@@ -1013,7 +1013,7 @@ class WanNetworkTrainer:
             logger.info("🎨 Starting VAE training mode")
 
             # Log loss type information
-            from criteria.pseudo_huber_loss import log_loss_type_info
+            from criteria.loss_factory import log_loss_type_info
 
             log_loss_type_info(args)
 
@@ -1047,7 +1047,7 @@ class WanNetworkTrainer:
             logger.info("🏆 Starting Reward LoRA training mode")
 
             # Log loss type information
-            from criteria.pseudo_huber_loss import log_loss_type_info
+            from criteria.loss_factory import log_loss_type_info
 
             log_loss_type_info(args)
 
@@ -1080,7 +1080,7 @@ class WanNetworkTrainer:
             logger.info("🤖 Starting DiT training mode")
 
             # Log loss type information
-            from criteria.pseudo_huber_loss import log_loss_type_info
+            from criteria.loss_factory import log_loss_type_info
 
             log_loss_type_info(args)
 
