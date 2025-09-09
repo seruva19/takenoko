@@ -14,7 +14,7 @@ This project would not have been possible without [musubi-tuner](https://github.
 
 <h3>☄️ Docs</h3>
 
-Since this project is mostly aimed at personal use and is in a state of constant improvement (without guaranteeing backwards compatibility), it probably won't have comprehensive documentation in the near future (unless it somehow becomes popular, which I hope it does not). I've tried to provide detailed comments in the config template, but they can't cover everything. As a workaround, I recommend using [repomix](https://repomix.com/) to compress the entire repository into a single XML AI-readable file (will take around 400K tokens), then feeding it into the free Gemini 2.5 Pro with 1M context window (in [Google AI Studio](https://aistudio.google.com/)) and asking questions about various aspects of the project.
+Since this project is mostly aimed at personal use and is in a state of constant improvement (without guaranteeing backwards compatibility), it probably won't have comprehensive documentation in the near future (unless it somehow becomes popular, which I hope it does not). I've tried to provide detailed comments in the config template, but they can't cover everything. As a workaround, I recommend using [repomix](https://repomix.com/) to compress the entire repository into a single XML AI-readable file (will take around 600K tokens), then feeding it into the free Gemini 2.5 Pro with 1M context window (in [Google AI Studio](https://aistudio.google.com/)) and asking questions about various aspects of the project.
 
 <h3>☄️ Quick Start (Windows)</h3>
 
@@ -52,7 +52,8 @@ Keep in mind that work on some features is not yet complete due to time and hard
 | [Sana](https://github.com/NVlabs/Sana) | repo | - CAME 8-bit optimizer | [NVlabs](https://github.com/NVlabs) | Apache 2.0 | |
 | [SimpleTuner](https://github.com/bghira/SimpleTuner) | repo | - Routed TREAD<br>- SOAP optimizer<br>- Masked training (spatial-first loss, area interpolation, proper normalization, auto mask generation) | [bghira](https://github.com/bghira) | AGPL-3.0 | |
 | [diffusion-pipe (pr)](https://github.com/Ada123-a/diffusion-pipe-TREAD) | repo | - Frame-based TREAD | [Ada123-a](https://github.com/Ada123-a) | MIT |  |
-| [Representation Alignment for Generation: Training Diffusion Transformers Is Easier Than You Think](https://arxiv.org/abs/2410.06940) | paper | - Representation alignment method | Sihyun Yu, Sangkyung Kwak, Huiwon Jang, Jongheon Jeong, Jonathan Huang, Jinwoo Shin, Saining Xie | CC BY 4.0 | |
+| [Representation Alignment for Generation: Training Diffusion Transformers Is Easier Than You Think](https://arxiv.org/abs/2410.06940) | paper | -  Representational alignment loss, 3-layer MLP projection head, forward hook-based feature capture  | Sihyun Yu, Sangkyung Kwak, Huiwon Jang, Jongheon Jeong, Jonathan Huang, Jinwoo Shin, Saining Xie | CC BY 4.0 | |
+| [dino](https://github.com/facebookresearch/dino) | repo | - VisionTransformer implementation | [facebookresearch](https://github.com/facebookresearch) | MIT | |
 | [Sophia](https://github.com/Liuhong99/Sophia) | repo | - Sophia optimizer | [Liuhong99](https://github.com/Liuhong99) | MIT | |
 | [Adaptive Non-Uniform Timestep Sampling for Diffusion Model Training](https://github.com/ku-dmlab/Adaptive-Timestep-Sampler) | repo | - Adaptive timestep sampling | [KU-DMLab](https://github.com/ku-dmlab) | MIT | <sub>see also [paper](https://arxiv.org/abs/2411.09998)</sub> |
 | [Temporal Regularization Makes Your Video Generator Stronger](https://arxiv.org/abs/2503.15417) | paper | - Temporal regularization via perturbation | Harold Haodong Chen, Haojian Huang, Xianfeng Wu, Yexin Liu, Yajing Bai, Wen-Jie Shu, Harry Yang, Ser-Nam Lim | arXiv 1.0 | |

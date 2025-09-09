@@ -862,10 +862,15 @@ def create_args_from_config(
 
     # REPA (Representation Alignment) settings
     args.enable_repa = config.get("enable_repa", False)
-    args.repa_encoder_name = config.get("repa_encoder_name", "dinov2_vitb14")
+    args.repa_encoder_name = config.get("repa_encoder_name", "dinov2-vit-b")
     args.repa_alignment_depth = config.get("repa_alignment_depth", 8)
     args.repa_loss_lambda = config.get("repa_loss_lambda", 0.5)
     args.repa_similarity_fn = config.get("repa_similarity_fn", "cosine")
+    
+    # Enhanced REPA settings (now the only REPA implementation)
+    args.repa_input_resolution = config.get("repa_input_resolution", 256)
+    args.repa_ensemble_mode = config.get("repa_ensemble_mode", "individual")
+    args.repa_shared_projection = config.get("repa_shared_projection", False)
 
     # Masked Training Configuration
     args.use_masked_training_with_prior = config.get(

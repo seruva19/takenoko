@@ -1,7 +1,7 @@
 # Takenoko Configuration File
 # This file contains all possible parameters for training with default values and comments
 # Remove the # at the beginning of lines to enable/configure parameters
-# "⚠️" means the section is under construction and relevant functionality has not been fully tested yet
+# "⚠️" means that either relevant functionality is not ready (under construction) or has not been fully tested yet
 
 # =============================================================================
 # TARGET TRAINING
@@ -718,24 +718,32 @@ contrastive_flow_skip_unconditional = false
 # ⚠️ REPA (Representation Alignment) SETTINGS
 # =============================================================================
 
-# Set to false to disable
+# Enable REPA for representational alignment during training
 enable_repa = false
 
-# Name of the pretrained visual encoder from the `timm` library. 
-# DINOv2 models: "dinov2_vitb14", "dinov2_vitl14", "dinov2_vitg14".
-# CLIP models: "clip_vitb32", "clip_vitl14".
-# EfficientNet models: "efficientnet_b0", "efficientnet_b1".
-# ResNet models: "resnet50", "resnet101".
-repa_encoder_name = "dinov2_vitb14"
+# Visual encoder specification - supports both single and multi-encoder setups
+# Single encoder: "dinov2-vit-b", "dinov2-vit-l", "dinov2-vit-g", "clip-vit-L", "mocov3-vit-b"
+# Multi-encoder: "dinov2-vit-b,dinov2-vit-l", "dinov2-vit-b,clip-vit-L"
+# Supported: DINOv2 (s/b/l/g), CLIP (B/L), MoCo-v3 (s/b/l), MAE (l), I-JEPA (h)
+repa_encoder_name = "dinov2-vit-b"
 
-# The depth (layer index) of the diffusion transformer to align. The paper finds that aligning early layers (e.g., 8) is most effective.
+# Diffusion layer alignment depth - single (8) or multi-layer ("8,12,16")
 repa_alignment_depth = 8
 
-# The lambda (λ) hyperparameter that controls the strength of the REPA loss. The paper found 0.5 to be a robust value.
-repa_loss_lambda = 0.5
+# REPA loss weight (0.5 = paper default)
+repa_loss_lambda = 0.1
 
-# The similarity function to use for alignment. "cosine" is recommended. Options: "cosine", "nt_xent"
+# Similarity function ("cosine" recommended, "mse" alternative)
 repa_similarity_fn = "cosine"
+
+# Input resolution (256 or 512, 512 DINOv2-only)
+repa_input_resolution = 256
+
+# Ensemble mode ("individual" = separate heads, "concat" = concatenated features)
+repa_ensemble_mode = "individual"
+
+# Projection sharing (false = individual heads per encoder, true = shared head)
+repa_shared_projection = false
 
 # =============================================================================
 # ⚠️ FOPP SETTINGS

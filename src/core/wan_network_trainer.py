@@ -42,7 +42,7 @@ from memory.safe_memory_manager import SafeMemoryManager
 
 from core.vae_training_core import VaeTrainingCore
 from reward.reward_training_core import RewardTrainingCore
-from utils.repa_helper import RepaHelper
+from enhancements.repa.repa_helper import RepaHelper
 from scheduling.timestep_utils import (
     initialize_timestep_distribution,
     get_noisy_model_input_and_timesteps,
@@ -1087,8 +1087,10 @@ class WanNetworkTrainer:
             # ========== REPA Helper Setup ==========
             repa_helper = None
             if hasattr(args, "enable_repa") and args.enable_repa:
-                logger.info("REPA is enabled. Setting up the helper module.")
-                repa_helper = RepaHelper(transformer, args)
+                from enhancements.repa.enhanced_repa_helper import EnhancedRepaHelper
+
+                logger.info("REPA is enabled. Setting up the enhanced helper module.")
+                repa_helper = EnhancedRepaHelper(transformer, args)
                 repa_helper.setup_hooks()
 
                 # Prepare repa_helper with accelerator
@@ -1147,7 +1149,7 @@ class WanNetworkTrainer:
                 remove_model=remove_model,
                 is_main_process=is_main_process,
                 val_epoch_step_sync=val_epoch_step_sync,
-                repa_helper=repa_helper,  # NEW ARGUMENT
+                repa_helper=repa_helper,
                 dual_model_manager=dual_model_manager,
             )
 

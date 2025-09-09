@@ -100,6 +100,34 @@ def get_default_metric_descriptions() -> Dict[str, str]:
         "loss/video": "Training loss for video data sources only (lower is better).",
         "loss/image": "Training loss for image data sources only (lower is better).",
         "loss/source": "Training loss for specific data source type (lower is better).",
+        # REPA metrics (Representation Alignment)
+        "repa/total_loss": "Total REPA alignment loss across all encoders and layers (lower is better).",
+        "repa/loss_lambda": "REPA loss weighting factor in total loss computation (informational).",
+        "repa/num_encoders": "Number of active encoders in REPA ensemble (informational).",
+        "repa/num_alignment_layers": "Number of diffusion transformer layers used for alignment (informational).",
+        # REPA per-encoder metrics
+        "repa/encoders/*/feature_norm": "L2 norm of features from specific encoder (stable values preferred).",
+        "repa/encoders/*/feature_mean": "Mean value of features from specific encoder (stable values preferred).",
+        "repa/encoders/*/feature_std": "Standard deviation of features from specific encoder (stable values preferred).",
+        "repa/encoders/*/layer_count": "Number of alignment layers for specific encoder (informational).",
+        # REPA per-layer metrics
+        "repa/layers/*/similarity_mean": "Mean cosine similarity between diffusion and encoder features at specific layer (higher values indicate better alignment).",
+        "repa/layers/*/similarity_std": "Standard deviation of cosine similarities at specific layer (lower values indicate more consistent alignment).",
+        "repa/layers/*/similarity_min": "Minimum cosine similarity at specific layer (higher values indicate worst-case alignment quality).",
+        "repa/layers/*/similarity_max": "Maximum cosine similarity at specific layer (informational).",
+        "repa/layers/*/loss_mean": "Mean alignment loss (negative cosine similarity) at specific layer (lower is better).",
+        "repa/layers/*/loss_std": "Standard deviation of alignment loss at specific layer (lower values indicate more stable alignment).",
+        "repa/layers/*/loss_min": "Minimum alignment loss at specific layer (lower is better).",
+        "repa/layers/*/loss_max": "Maximum alignment loss at specific layer (informational).",
+        # REPA summary statistics
+        "repa/summary/similarity_mean": "Mean cosine similarity across all encoders and layers (higher values indicate better overall alignment).",
+        "repa/summary/similarity_std": "Standard deviation of cosine similarities across all encoders and layers (lower values indicate more consistent alignment).",
+        "repa/summary/similarity_min": "Minimum cosine similarity across all encoders and layers (higher values indicate worst-case alignment quality).",
+        "repa/summary/similarity_max": "Maximum cosine similarity across all encoders and layers (informational).",
+        "repa/summary/loss_mean": "Mean alignment loss across all encoders and layers (lower is better).",
+        "repa/summary/loss_std": "Standard deviation of alignment loss across all encoders and layers (lower values indicate more stable alignment).",
+        "repa/summary/loss_min": "Minimum alignment loss across all encoders and layers (lower is better).",
+        "repa/summary/loss_max": "Maximum alignment loss across all encoders and layers (informational).",
         # Gradient monitoring
         "grad_norm": "Global gradient norm across all model parameters; indicates gradient flow strength (moderate values preferred).",
         # Learning rate tracking
