@@ -1549,6 +1549,31 @@ logging_level = "INFO"
 # Append small emoji hints to TensorBoard tags (e.g., loss 📉, throughput 📈)
 tensorboard_append_direction_hints = true
 
+# Add prefix for each log directory
+# log_prefix = "" 
+
+# Name of tracker to use for logging, default is script-specific default name
+# log_tracker_name = "" 
+
+# Path to tracker config file to use for logging
+# log_tracker_config = "" 
+
+# Automatically launch TensorBoard server on training start
+launch_tensorboard_server = true
+
+# Host for TensorBoard server
+tensorboard_host = "127.0.0.1"
+
+# Port for TensorBoard server  
+tensorboard_port = 6006
+
+# Enable auto-reload of logs (default: true)
+tensorboard_auto_reload = true
+
+# =============================================================================
+# ADDITIONAL LOGGING SETTINGS
+# =============================================================================
+
 # Enable periodic logging of additional training loss diagnostics
 log_extra_train_metrics = true
 
@@ -1641,31 +1666,6 @@ val_split_namespaces = true
 # =============================================================================
 # TIMESTEP DISTRIBUTION LOGGING
 # =============================================================================
-
-# Add prefix for each log directory
-# log_prefix = "" 
-
-# Name of tracker to use for logging, default is script-specific default name
-# log_tracker_name = "" 
-
-# Path to tracker config file to use for logging
-# log_tracker_config = "" 
-
-# WandB support has been removed. The following options are deprecated and ignored.
-# wandb_run_name = ""
-# wandb_api_key = ""
-
-# Automatically launch TensorBoard server on training start
-launch_tensorboard_server = true
-
-# Host for TensorBoard server
-tensorboard_host = "127.0.0.1"
-
-# Port for TensorBoard server  
-tensorboard_port = 6006
-
-# Enable auto-reload of logs (default: true)
-tensorboard_auto_reload = true
 
 # Timestep distribution logging
 # Choose how to visualize timestep distributions in TensorBoard during training.
