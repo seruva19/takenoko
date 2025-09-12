@@ -514,7 +514,9 @@ class ModelManager:
             logger.info(f"load network weights from {args.network_weights}: {info}")
 
         if args.gradient_checkpointing:
-            transformer.enable_gradient_checkpointing()
+            transformer.enable_gradient_checkpointing(
+                args.gradient_checkpointing_cpu_offload
+            )
             network.enable_gradient_checkpointing()  # may have no effect
 
         return network

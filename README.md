@@ -6,7 +6,7 @@
 <i>An opinionated, perpetual WIP project aimed at hacking WanVideo 2.1(2)-T2V-(A)14B LoRA training.</i>
 \
 \
-It is intended as a playground for experimenting with new ideas and testing various training features, including some that might ultimately turn out to be useless. The configuration file structure may change at any time, and some non-functioning options may still be present. <b>It only supports Wan2.1-T2V-14B and Wan2.2-T2V-A14B LoRA training.</b>
+It is intended as a playground for experimenting with new ideas and testing various training features, including some that might ultimately turn out to be useless. The configuration file structure may change at any time, and some non-functioning options may still be present. <b>It only supports Wan2.1-T2V-14B and Wan2.2-T2V-A14B training.</b>
 
 <h3>☄️ Disclaimer</h3>
 
@@ -76,4 +76,5 @@ Keep in mind that work on some features is not yet complete due to time and hard
 | [Ouroboros-Diffusion: Exploring Consistent Content Generation in Tuning-free Long Video Diffusion](https://arxiv.org/abs/2501.09019) | paper | - Frequency-domain temporal consistency | Jingyuan Chen, Fuchen Long, Jie An, Zhaofan Qiu, Ting Yao, Jiebo Luo, Tao Mei | CC BY-SA 4.0 | |
 | [mmgp](https://github.com/deepbeepmeep/mmgp) | repo | - Memory-mapped safetensors loading | [deepbeepmeep](https://github.com/deepbeepmeep) | GNU GPL |  |
 | [attention-map-diffusers](https://github.com/wooyeolbaek/attention-map-diffusers) | repo | - Cross-attention map visualization | [wooyeolbaek](https://github.com/wooyeolbaek) | MIT |  |
-
+| [musubi-tuner (fork)](https://github.com/betterftr/musubi-tuner) | repo | - Full model fine-tuning | [betterftr](https://github.com/betterftr) | Apache 2.0 | |
+| [stochastic_round_cuda](https://github.com/ethansmith2000/stochastic_round_cuda) | repo | - Stochastic rounding CUDA implementation | [ethansmith2000](https://github.com/ethansmith2000) | MIT | |

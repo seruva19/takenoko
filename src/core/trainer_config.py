@@ -38,6 +38,7 @@ class TrainerConfig:
             "takenoko_num_batches_per_epoch": num_batches_per_epoch,
             "takenoko_num_epochs": num_train_epochs,
             "takenoko_gradient_checkpointing": args.gradient_checkpointing,
+            "takenoko_gradient_checkpointing_cpu_offload": args.gradient_checkpointing_cpu_offload,
             "takenoko_gradient_accumulation_steps": args.gradient_accumulation_steps,
             "takenoko_max_train_steps": args.max_train_steps,
             "takenoko_lr_warmup_steps": args.lr_warmup_steps,

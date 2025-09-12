@@ -126,7 +126,6 @@ class BucketBatchManager:
             int(num_timestep_buckets) if num_timestep_buckets is not None else None
         )
 
-
     def prepare_timestep_pool(self) -> None:
         """Create/refresh the per-epoch timestep pool without shuffling batches."""
         self._prepare_timestep_pool_internal()

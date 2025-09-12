@@ -15,6 +15,7 @@ from torch.distributed._tensor import Replicate, Shard  # type: ignore
 
 from utils.lora_utils import load_safetensors_with_lora_and_fp8
 from utils.safetensors_utils import MemoryEfficientSafeOpen, load_safetensors
+from utils.model_utils import create_cpu_offloading_wrapper
 
 import logging
 
@@ -523,12 +524,15 @@ class WanAttentionBlock(nn.Module):
         self.attention_dtype = torch.float32
 
         self.gradient_checkpointing = False
+        self.activation_cpu_offloading = False
 
-    def enable_gradient_checkpointing(self):
+    def enable_gradient_checkpointing(self, activation_cpu_offloading: bool = False):
         self.gradient_checkpointing = True
+        self.activation_cpu_offloading = activation_cpu_offloading
 
     def disable_gradient_checkpointing(self):
         self.gradient_checkpointing = False
+        self.activation_cpu_offloading = False
 
     @torch.compiler.disable()
     def get_modulation(self, e: torch.Tensor):
@@ -670,8 +674,13 @@ class WanAttentionBlock(nn.Module):
             sparse_attention (bool): Whether to use sparse attention (default: False)
         """
         if self.training and self.gradient_checkpointing:
+            forward_fn = self._forward
+            if self.activation_cpu_offloading:
+                forward_fn = create_cpu_offloading_wrapper(
+                    forward_fn, self.modulation.device
+                )
             return checkpoint(
-                self._forward,
+                forward_fn,
                 x,
                 e,
                 seq_lens,
@@ -974,6 +983,7 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
         self.init_weights()
 
         self.gradient_checkpointing = False
+        self.activation_cpu_offloading = False
 
         # offloading
         self.blocks_to_swap = None
@@ -1047,16 +1057,20 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
 
         return state_dict  # type: ignore
 
-    def enable_gradient_checkpointing(self):
+    def enable_gradient_checkpointing(self, activation_cpu_offloading: bool = False):
         self.gradient_checkpointing = True
+        self.activation_cpu_offloading = activation_cpu_offloading
 
         for block in self.blocks:  # type: ignore
-            block.enable_gradient_checkpointing()  # type: ignore
+            block.enable_gradient_checkpointing(activation_cpu_offloading)  # type: ignore
 
-        logger.info("WanModel: Gradient checkpointing enabled.")
+        logger.info(
+            f"WanModel: Gradient checkpointing enabled. Activation CPU offloading: {activation_cpu_offloading}"
+        )
 
     def disable_gradient_checkpointing(self):
         self.gradient_checkpointing = False
+        self.activation_cpu_offloading = False
 
         for block in self.blocks:  # type: ignore
             block.disable_gradient_checkpointing()  # type: ignore
@@ -1111,7 +1125,7 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
     def prepare_block_swap_before_forward(self):
         if self.blocks_to_swap is None or self.blocks_to_swap == 0:
             return
-        self.offloader.prepare_block_devices_before_forward(self.blocks)  # type: ignore
+        self.offloader.prepare_block_devices_before_forward(self.blocks)
 
     def forward(
         self,
@@ -1409,6 +1423,9 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
         # Optional intermediate capture for dispersive loss
         intermediate_z = None
 
+        # Track input device for consistency check when CPU offloading is enabled
+        input_device = x.device
+
         for block_idx, block in enumerate(self.blocks):  # type: ignore
             is_block_skipped = (
                 skip_block_indices is not None and block_idx in skip_block_indices
@@ -1512,7 +1529,7 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
                     tread_mask_info = router.get_mask(
                         x, mask_ratio=mask_ratio, force_keep=force_keep_mask  # type: ignore
                     )
-                    saved_tokens = x.clone()
+                    saved_tokens = x
                     x = router.start_route(x, tread_mask_info)
                     routing_now = True
 
@@ -1627,12 +1644,19 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
                     if e0_full_saved is not None:
                         kwargs["e"] = e0_full_saved
                         e0_full_saved = None
+                    # release references early to help GC
+                    saved_tokens = None
+                    tread_mask_info = None
 
                 routing_now = False
                 route_ptr += 1
 
             if self.blocks_to_swap:
                 self.offloader.submit_move_blocks_forward(self.blocks, block_idx)  # type: ignore
+
+        # Ensure device consistency after CPU offloading operations
+        if x.device != input_device:
+            x = x.to(input_device)
 
         # head
         x = self.head(x, e)

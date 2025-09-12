@@ -574,7 +574,7 @@ def generate_safe_progress_metrics(
                 if peak_allocated > 0.1:
                     metrics["peak"] = f"{peak_allocated:.2f} GiB"
                 try:
-                    import pynvml  # type: ignore
+                    import pynvml  # nvidia-ml-py package
 
                     pynvml.nvmlInit()
                     handle = pynvml.nvmlDeviceGetHandleByIndex(0)

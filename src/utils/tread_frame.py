@@ -151,15 +151,32 @@ def pack_frame_routed_tokens(
             ],
             dim=0,
         )
-        routed_tok = torch.cat(
-            [
-                torch.arange(
-                    int(f) * hw, int(f) * hw + hw, device=device, dtype=torch.long
+        
+        # Handle case where no frames are routed (e.g., image-only training with F=1)
+        if len(routed_frames) == 0:
+            # One-time warning about frame-based TREAD with image data
+            if not hasattr(pack_frame_routed_tokens, '_image_tread_warning_issued'):
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.warning(
+                    f"⚠️  Frame-based TREAD routing detected with image-only data (F=1). "
+                    f"No frames to route - this typically happens when using frame-based TREAD modes "
+                    f"('frame_contiguous' or 'frame_stride') with image training. "
+                    f"Consider using TREAD mode 'full' for token-level routing with images."
                 )
-                for f in routed_frames
-            ],
-            dim=0,
-        )
+                setattr(pack_frame_routed_tokens, '_image_tread_warning_issued', True)
+            
+            routed_tok = torch.zeros(0, device=device, dtype=torch.long)
+        else:
+            routed_tok = torch.cat(
+                [
+                    torch.arange(
+                        int(f) * hw, int(f) * hw + hw, device=device, dtype=torch.long
+                    )
+                    for f in routed_frames
+                ],
+                dim=0,
+            )
 
         idx_proc_list.append(kept_tok)
         idx_rout_list.append(routed_tok)

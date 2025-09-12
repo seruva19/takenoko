@@ -1351,6 +1351,8 @@ class TrainingCore:
                         step
                         + 1,  # step is 0-indexed, but we want 1-indexed for display
                         len(train_dataloader),
+                        transformer,
+                        network,
                     )
                 )
 

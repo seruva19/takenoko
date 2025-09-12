@@ -52,9 +52,9 @@ TAKENOKO_METADATA_MINIMUM_KEYS = [
 
 
 # checkpoint
-EPOCH_STATE_NAME = "{}-{:06d}-state"
-EPOCH_FILE_NAME = "{}-{:06d}"
-EPOCH_DIFFUSERS_DIR_NAME = "{}-{:06d}"
+EPOCH_STATE_NAME = "{}-epoch{:06d}-state"
+EPOCH_FILE_NAME = "{}-epoch{:06d}"
+EPOCH_DIFFUSERS_DIR_NAME = "{}-epoch{:06d}"
 LAST_STATE_NAME = "{}-state"
 STEP_STATE_NAME = "{}-step{:08d}-state"
 STEP_FILE_NAME = "{}-step{:08d}"
@@ -68,7 +68,6 @@ def get_time_flag():
 def get_sanitized_config_or_none(args: argparse.Namespace):
     # if `--log_config` is enabled, return args for logging. if not, return None.
     # when `--log_config is enabled, filter out sensitive values from args
-    # if wandb is not enabled, the log is not exposed to the public, but it is fine to filter out sensitive values to be safe
 
     if not args.log_config:
         return None
@@ -757,3 +756,15 @@ def read_step_from_state_dir(state_dir: str) -> Optional[int]:
         except Exception as e:
             logger.warning(f"Failed to read step.txt: {e}")
     return None
+
+
+# Utility to save step to step.txt in state dir
+def save_step_to_state_dir(state_dir: str, step: int) -> None:
+    """Save step number to step.txt for proper checkpoint resuming."""
+    os.makedirs(state_dir, exist_ok=True)
+    step_file = os.path.join(state_dir, "step.txt")
+    try:
+        with open(step_file, "w") as f:
+            f.write(str(step))
+    except Exception as e:
+        logger.warning(f"Failed to write step.txt: {e}")

@@ -364,7 +364,6 @@ class WanNetworkTrainer:
             self.show_timesteps(args)
             return
 
-        # ========== Session Setup ==========
         session_id = random.randint(0, 2**32)
         training_started_at = time.time()
 
@@ -372,7 +371,6 @@ class WanNetworkTrainer:
             args.seed = random.randint(0, 2**32)
         set_seed(args.seed)
 
-        # ========== Dataset Setup ==========
         blueprint_generator = BlueprintGenerator(ConfigSanitizer())
         logger.info(f"Load dataset config from {args.dataset_config}")
         user_config = config_utils.load_user_config(args.dataset_config)
@@ -594,9 +592,7 @@ class WanNetworkTrainer:
                     except Exception:
                         pass
 
-                    logger.info(
-                        "🛣️  TREAD routing enabled with %d route(s)", len(routes)
-                    )
+                    logger.info("🛣️ TREAD routing enabled with %d route(s)", len(routes))
                 except Exception as e:
                     logger.warning(f"Failed to enable TREAD routing: {e}")
             else:

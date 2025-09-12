@@ -31,8 +31,23 @@ class TREADRouter:
     """
 
     def __init__(self, seed: int = 42, device: Any = None):
-        self.generator = torch.Generator(device=device)
-        self.generator.manual_seed(seed)
+        # Maintain one RNG generator per device type to avoid device mismatch
+        self.seed = int(seed)
+        self._generators: dict[str, torch.Generator] = {}
+        if device is not None:
+            dev_type = torch.device(device).type
+            gen = torch.Generator(device=dev_type)
+            gen.manual_seed(self.seed)
+            self._generators[dev_type] = gen
+
+    def _get_generator_for(self, device: Any) -> torch.Generator:
+        dev_type = torch.device(device).type
+        gen = self._generators.get(dev_type)
+        if gen is None:
+            gen = torch.Generator(device=dev_type)
+            gen.manual_seed(self.seed)
+            self._generators[dev_type] = gen
+        return gen
 
     # --------------------------------------------------------------------- #
     # helpers
@@ -95,7 +110,7 @@ class TREADRouter:
             score.shape,
             dtype=score.dtype,
             device=score.device,
-            generator=self.generator,
+            generator=self._get_generator_for(score.device),
         )
 
         mix = (1.0 - l1_reg) * noise + l1_reg * score  # convex combination

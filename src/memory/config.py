@@ -28,6 +28,26 @@ def parse_memory_optimization_config(
         "memory_opt_unsafe_quantization": False,  # Would break LORA gradients
         "memory_opt_inference_model_hooks": False,  # Would interfere with training
         "memory_opt_inference_optimizations": False,  # Incompatible with training
+        # Memory Tracking Configuration (new)
+        "memory_tracking_enabled": False,  # Master switch for memory tracking
+        "memory_tracking_max_records": 10000,  # Maximum allocation records to keep
+        "memory_tracking_stack_traces": False,  # Capture stack traces (expensive)
+        "memory_tracking_tensor_tracking": True,  # Track individual tensor references
+        "memory_tracking_auto_snapshot_interval": 100,  # Auto-snapshot every N allocations
+        "memory_tracking_verbosity": "standard",  # "minimal", "standard", "debug"
+        "memory_tracking_export_on_oom": True,  # Export diagnostics on OOM errors
+        "memory_tracking_export_directory": "logs",  # Directory for diagnostic exports
+        # CUDA configuration defaults (handled by memory_utils.py but tracked here)
+        # All optimizations DISABLED by default - no tuning applied unless explicitly enabled
+        "cuda_allocator_enable": False,
+        "cuda_allocator_max_split_size_mb": 512,  # Only used when allocator enabled
+        "cuda_allocator_expandable_segments": True,  # Only used when allocator enabled
+        "cuda_launch_blocking": False,  # Default: async execution (faster)
+        "cuda_managed_force_device_alloc": False,  # Default: no unified memory
+        "cuda_visible_devices": None,  # Default: use all available GPUs
+        "cuda_memory_fraction": None,  # Default: use PyTorch default (no artificial limit)
+        "cuda_empty_cache": False,  # Default: don't clear cache at startup
+        "cuda_flash_sdp_enabled": None,  # Default: use PyTorch default
     }
 
     # Root-level overrides for known keys only (section is ignored by design)
@@ -43,7 +63,7 @@ def parse_memory_optimization_config(
         for feature_key in feature_keys:
             if memory_config.get(feature_key, False):
                 logger.info(
-                    f"Feature '{feature_key}' disabled because master switch 'safe_memory_optimization_enabled' is False"
+                    f"Feature '{feature_key}' disabled (safe_memory_optimization_enabled=False)"
                 )
                 memory_config[feature_key] = False
     else:

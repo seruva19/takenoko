@@ -210,8 +210,15 @@ def create_args_from_config(
     )
     args.seed = config.get("seed", 42)
     args.gradient_checkpointing = config.get("gradient_checkpointing", False)
+    args.gradient_checkpointing_cpu_offload = config.get(
+        "gradient_checkpointing_cpu_offload", False
+    )
     args.gradient_accumulation_steps = config.get("gradient_accumulation_steps", 1)
     args.mixed_precision = config.get("mixed_precision", "no")
+    
+    # Stochastic rounding for BF16 training stability
+    args.use_stochastic_rounding = config.get("use_stochastic_rounding", True)
+    args.use_stochastic_rounding_cuda = config.get("use_stochastic_rounding_cuda", False)
 
     # Optimizer settings
     args.optimizer_type = config.get("optimizer_type", "")
@@ -581,7 +588,7 @@ def create_args_from_config(
     args.alternate_perf_postfix = config.get("alternate_perf_postfix", True)
 
     # TensorBoard server settings
-    args.launch_tensorboard_server = config.get("launch_tensorboard_server", False)
+    args.launch_tensorboard_server = config.get("launch_tensorboard_server", True)
     args.tensorboard_host = config.get("tensorboard_host", "127.0.0.1")
     args.tensorboard_port = config.get("tensorboard_port", 6006)
     args.tensorboard_auto_reload = config.get("tensorboard_auto_reload", True)
@@ -608,6 +615,13 @@ def create_args_from_config(
     # Full precision settings (commented out in parser but used in code)
     args.full_fp16 = config.get("full_fp16", False)
     args.full_bf16 = config.get("full_bf16", False)
+
+    # WanFinetune specific settings
+    args.fine_tune_ratio = config.get("fine_tune_ratio", 1.0)
+    args.freeze_original = config.get("freeze_original", False)
+    args.finetune_text_encoder = config.get("finetune_text_encoder", False)
+    args.fused_backward_pass = config.get("fused_backward_pass", False)
+    args.mem_eff_save = config.get("mem_eff_save", True)
 
     # Timestep and flow matching settings
     args.timestep_sampling = config.get("timestep_sampling", "shift")
@@ -822,37 +836,45 @@ def create_args_from_config(
 
     # Loss function settings
     args.loss_type = config.get("loss_type", "mse")
-    
+
     # Pseudo-Huber loss parameters
     args.pseudo_huber_c = config.get("pseudo_huber_c", 0.5)
     args.pseudo_huber_schedule_type = config.get("pseudo_huber_schedule_type", "linear")
     args.pseudo_huber_c_min = config.get("pseudo_huber_c_min", 0.1)
     args.pseudo_huber_c_max = config.get("pseudo_huber_c_max", 1.0)
-    
+
     # Huber loss parameters (for pure_huber loss type)
     args.huber_delta = config.get("huber_delta", 1.0)
-    
+
     # Fourier loss parameters
     args.fourier_weight = config.get("fourier_weight", 0.05)
-    args.fourier_mode = config.get("fourier_mode", "weighted")  # "basic", "weighted", "multiscale", "adaptive"
-    args.fourier_norm = config.get("fourier_norm", "l2")  # "l1", "l2" 
-    args.fourier_dims = tuple(config.get("fourier_dims", [-2, -1]))  # Dimensions for FFT
+    args.fourier_mode = config.get(
+        "fourier_mode", "weighted"
+    )  # "basic", "weighted", "multiscale", "adaptive"
+    args.fourier_norm = config.get("fourier_norm", "l2")  # "l1", "l2"
+    args.fourier_dims = tuple(
+        config.get("fourier_dims", [-2, -1])
+    )  # Dimensions for FFT
     args.fourier_eps = config.get("fourier_eps", 1e-8)  # Numerical stability
     # Note: fourier_normalize removed as fourier functions don't support this parameter
-    args.fourier_multiscale_factors = config.get("fourier_multiscale_factors", [1, 2, 4])
+    args.fourier_multiscale_factors = config.get(
+        "fourier_multiscale_factors", [1, 2, 4]
+    )
     args.fourier_adaptive_threshold = config.get("fourier_adaptive_threshold", 0.1)
     args.fourier_adaptive_alpha = config.get("fourier_adaptive_alpha", 0.5)
     args.fourier_high_freq_weight = config.get("fourier_high_freq_weight", 2.0)
-    
-    # DWT/Wavelet loss parameters  
+
+    # DWT/Wavelet loss parameters
     args.wavelet_type = config.get("wavelet_type", "haar")  # "haar", "db1", "db4", etc.
-    args.wavelet_levels = config.get("wavelet_levels", 1)  # Number of decomposition levels
+    args.wavelet_levels = config.get(
+        "wavelet_levels", 1
+    )  # Number of decomposition levels
     args.wavelet_mode = config.get("wavelet_mode", "zero")  # Border mode for wavelets
-    
+
     # Clustered MSE loss parameters
     args.clustered_mse_num_clusters = config.get("clustered_mse_num_clusters", 8)
     args.clustered_mse_cluster_weight = config.get("clustered_mse_cluster_weight", 1.0)
-    
+
     # EW loss parameters
     args.ew_boundary_shift = config.get("ew_boundary_shift", 0.0)
 
@@ -866,7 +888,7 @@ def create_args_from_config(
     args.repa_alignment_depth = config.get("repa_alignment_depth", 8)
     args.repa_loss_lambda = config.get("repa_loss_lambda", 0.5)
     args.repa_similarity_fn = config.get("repa_similarity_fn", "cosine")
-    
+
     # Enhanced REPA settings (now the only REPA implementation)
     args.repa_input_resolution = config.get("repa_input_resolution", 256)
     args.repa_ensemble_mode = config.get("repa_ensemble_mode", "individual")

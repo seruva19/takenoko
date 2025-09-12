@@ -112,7 +112,6 @@ class BaseDataset(torch.utils.data.Dataset):
         else:
             return dataset_type
 
-
     def get_dataset_details(self) -> str:
         """Get detailed information about this dataset for logging."""
         details = []
@@ -816,7 +815,7 @@ class ImageDataset(BaseDataset):
                 setattr(self.batch_manager, "num_timestep_buckets", num_timestep_buckets)  # type: ignore
         except Exception:
             pass
-        
+
         self.batch_manager.show_bucket_info()
 
         self.num_train_items = sum(
@@ -1412,8 +1411,7 @@ class VideoDataset(BaseDataset):
 
         # prepare batch manager
         self.batch_manager = BucketBatchManager(bucketed_item_info, self.batch_size, prior_loss_weight)  # type: ignore
-        
-        
+
         self.batch_manager.show_bucket_info()
 
         self.num_train_items = sum(
@@ -1573,7 +1571,6 @@ class DatasetGroup(torch.utils.data.ConcatDataset):
             dataset_id = dataset.get_dataset_identifier()
             dataset_details = dataset.get_dataset_details()
             logger.info(f"   {dataset_id}{dataset_details}")
-
 
     def get_dataset_identifier(self) -> str:
         """Get identifier for the dataset group."""

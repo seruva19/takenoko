@@ -1,8 +1,9 @@
 import hashlib
 from io import BytesIO
-from typing import Optional
+from typing import Any, Callable, Optional
 
-from memory.safetensors_loader import torch as safetensors_torch; from memory.safetensors_loader import safe_open
+from memory.safetensors_loader import torch as safetensors_torch
+from memory.safetensors_loader import safe_open
 import torch
 
 
@@ -77,7 +78,7 @@ def precalculate_safetensors_hashes(tensors, metadata):
     # calculating the hash, as they are meant to be immutable
     metadata = {k: v for k, v in metadata.items() if k.startswith("ss_")}
 
-    bytes = safetensors.torch.save(tensors, metadata)
+    bytes = safetensors_torch.save(tensors, metadata)
     b = BytesIO(bytes)
 
     model_hash = addnet_hash_safetensors(b)
@@ -151,3 +152,82 @@ def str_to_dtype(
         return torch.float8_e4m3fn  # default fp8
     else:
         raise ValueError(f"Unsupported dtype: {s}")
+
+
+def to_device(x: Any, device: torch.device) -> Any:
+    """
+    Recursively moves torch.Tensor objects (and containers thereof) to the specified device.
+
+    Args:
+        x: A torch.Tensor, or a (possibly nested) list, tuple, or dict containing tensors.
+        device: The target device to move tensors to.
+
+    Returns:
+        The same structure as x, with all torch.Tensor objects moved to the specified device.
+        Non-tensor objects are returned unchanged.
+    """
+    if isinstance(x, torch.Tensor):
+        return x.to(device)
+    elif isinstance(x, list):
+        return [to_device(elem, device) for elem in x]
+    elif isinstance(x, tuple):
+        return tuple(to_device(elem, device) for elem in x)
+    elif isinstance(x, dict):
+        return {k: to_device(v, device) for k, v in x.items()}
+    else:
+        return x
+
+
+def to_cpu(x: Any) -> Any:
+    """
+    Recursively moves torch.Tensor objects (and containers thereof) to CPU.
+
+    Args:
+        x: A torch.Tensor, or a (possibly nested) list, tuple, or dict containing tensors.
+
+    Returns:
+        The same structure as x, with all torch.Tensor objects moved to CPU.
+        Non-tensor objects are returned unchanged.
+    """
+    if isinstance(x, torch.Tensor):
+        return x.cpu()
+    elif isinstance(x, list):
+        return [to_cpu(elem) for elem in x]
+    elif isinstance(x, tuple):
+        return tuple(to_cpu(elem) for elem in x)
+    elif isinstance(x, dict):
+        return {k: to_cpu(v) for k, v in x.items()}
+    else:
+        return x
+
+
+def create_cpu_offloading_wrapper(func: Callable, device: torch.device) -> Callable:
+    """
+    Create a wrapper function that offloads inputs to CPU before calling the original function
+    and moves outputs back to the specified device.
+
+    This is used for activation CPU offloading during gradient checkpointing to reduce VRAM usage
+    at the cost of some performance. It's particularly effective when the latents tensor is long,
+    meaning the image size is large or the number of frames is large (e.g., for video training).
+
+    Args:
+        func: The original function to wrap.
+        device: The device to move outputs back to.
+
+    Returns:
+        A wrapped function that offloads inputs to CPU and moves outputs back to the specified device.
+    """
+
+    def wrapper(orig_func: Callable) -> Callable:
+        def custom_forward(*inputs):
+            nonlocal device, orig_func
+            # Move inputs to target device for computation
+            cuda_inputs = to_device(inputs, device)
+            # Execute the original function
+            outputs = orig_func(*cuda_inputs)
+            # Offload outputs to CPU to save VRAM
+            return to_cpu(outputs)
+
+        return custom_forward
+
+    return wrapper(func)

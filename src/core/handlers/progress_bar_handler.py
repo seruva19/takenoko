@@ -26,6 +26,8 @@ def process_enhanced_progress_bar(
     max_mean_logs: Optional[Dict[str, Any]] = None,
     current_step_in_epoch: Optional[int] = None,
     total_steps_in_epoch: Optional[int] = None,
+    transformer: Optional[Any] = None,
+    network: Optional[Any] = None,
 ) -> Tuple[Dict[str, Any], bool, Optional[float]]:
     """Process enhanced progress bar metrics and update display.
 
@@ -44,6 +46,10 @@ def process_enhanced_progress_bar(
         iter_time_ema_beta: EMA beta for iteration time
         progress_bar: Progress bar object
         max_mean_logs: Additional logs from weight scaling
+        current_step_in_epoch: Current step in epoch
+        total_steps_in_epoch: Total steps in epoch
+        transformer: WAN transformer model for layer information
+        network: LoRA network for layer information
 
     Returns:
         Tuple of (enhanced_logs, new_perf_display_toggle, new_iter_time_ema_sec)
@@ -74,6 +80,30 @@ def process_enhanced_progress_bar(
             current_step_in_epoch,
             total_steps_in_epoch,
         )
+        
+        # Add layer information if available
+        layer_stats = {}
+        if transformer is not None:
+            try:
+                from .layer_info_utils import get_model_layer_info, get_compact_layer_stats
+                
+                layer_info = get_model_layer_info(transformer, network)
+                layer_stats = get_compact_layer_stats(layer_info)
+                
+                # Validate fine-tuning is happening
+                from .layer_info_utils import validate_finetuning_progress
+                if not validate_finetuning_progress(layer_info):
+                    # Add warning to logs
+                    layer_stats["ft_status"] = "NO FT"
+                else:
+                    layer_stats["ft_status"] = "FT OK"
+                    
+                # Replace sample-related info with layer info
+                enhanced_logs.update(layer_stats)
+                
+            except Exception as e:
+                # Fallback if layer info fails
+                enhanced_logs["ft_status"] = "layer_err"
 
         new_iter_time_ema_sec = current_iter_time_ema_sec
         new_perf_display_toggle = current_perf_display_toggle

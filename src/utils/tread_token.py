@@ -13,7 +13,7 @@ def build_batched_rotary_from_freqs(
     """
     B = ids_shuffle.size(0)
     full_rope = [f.squeeze(1) for f in freqs_list]  # (L, D)
-    full_rope = torch.stack(full_rope, dim=0)  # (B, L, D)
+    full_rope = torch.stack(full_rope, dim=0).to(device=ids_shuffle.device)  # (B, L, D)
     shuf = torch.take_along_dim(
         full_rope,
         ids_shuffle.unsqueeze(-1).expand(B, -1, full_rope.size(-1)),
@@ -49,6 +49,8 @@ def slice_e0_for_token_route(
         assert max_idx < e0.size(1)
     saved = e0
     B, L_full, C6, C = e0.size()
+    # Ensure indices live on the same device as the tensor we gather from
+    ids_shuffle = ids_shuffle.to(device=e0.device)
     gather_idx = ids_shuffle.unsqueeze(-1).unsqueeze(-1).expand(B, L_full, C6, C)
     e_shuf = torch.take_along_dim(e0, gather_idx, dim=1)
     e_proc = e_shuf[:, :s_keep, :, :]

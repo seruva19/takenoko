@@ -7,8 +7,8 @@
 # TARGET TRAINING
 # =============================================================================
 
-# "wan21" or "wan22"
-target_model = "wan21"
+# "wan21" or "wan22" 
+target_model = "wan22"  
 
 # =============================================================================
 # CHECKPOINT SETTINGS
@@ -99,6 +99,13 @@ seed = 20250811
 # Enable gradient checkpointing
 # Reduces activation memory by recomputing during backward; slower but lower VRAM
 gradient_checkpointing = true
+
+# Enable CPU offloading for gradient checkpointing activations
+# Further reduces VRAM usage by offloading activations to CPU during gradient checkpointing
+# Must be used together with gradient_checkpointing = true
+# Particularly effective for video training or large latent sizes, but increases CPU-GPU transfer overhead
+# Memory impact: VRAM ↓, RAM ↑, Training speed: 5-20% slower depending on model and batch size
+gradient_checkpointing_cpu_offload = false
 
 # Number of updates steps to accumulate before performing a backward/update pass
 gradient_accumulation_steps = 1
@@ -225,7 +232,7 @@ lr_scheduler_args = ''
 # NETWORK SETTINGS
 # =============================================================================
 
-# Network module to train: "networks.lora_wan", "networks.control_lora_wan", "networks.reward_lora", "networks.vae_wan", "lycoris.kohya", "networks.t_lora", "networks.moc_lora", "networks.singlora_wan"
+# Network module to train: "networks.lora_wan", "networks.control_lora_wan", "networks.reward_lora", "networks.vae_wan", "lycoris.kohya", "networks.t_lora", "networks.moc_lora", "networks.singlora_wan", "networks.wan_finetune"
 # The module defines trainable adapters and is imported dynamically by the trainer.
 network_module = "networks.lora_wan"
 
@@ -348,6 +355,61 @@ network_alpha = 32
 # This applies to regularization datasets (is_reg=true) vs main dataset
 # NOT related to masked training's "masked_prior_preservation_weight"
 prior_loss_weight = 1.0
+
+# =============================================================================
+# FINE-TUNING SETTINGS
+# =============================================================================
+
+# Enable fine-tuning mode by setting network_module = "networks.wan_finetune"
+# WanFinetune provides full model fine-tuning capabilities for large transformer models
+# Requires significantly more VRAM than LoRA training
+
+# Fraction of parameters to fine-tune (0.1 = 10%, 1.0 = 100%)
+# Lower values reduce memory usage but may limit adaptation capability
+fine_tune_ratio = 1
+
+# Whether to freeze original model parameters during fine-tuning
+# false (default) = parameters are trainable, true = parameters are frozen
+freeze_original = false
+
+# Whether to also fine-tune the text encoder along with the transformer
+# Significantly increases memory usage - only enable if you have sufficient VRAM (32GB+)
+finetune_text_encoder = false
+
+# Advanced optimizations for memory efficiency and performance
+# These optimizations enable efficient training of large transformer models
+
+# Enable full BF16 training including gradients (reduces memory usage ~50%)
+# Requires mixed_precision = "bf16" to be set
+# Provides better memory efficiency for large model fine-tuning
+full_bf16 = false
+
+# Enable fused backward pass optimization for Adafactor optimizer
+# Reduces memory peaks during backward pass by fusing operations
+# Requires Adafactor optimizer and special fused optimization module
+fused_backward_pass = false
+
+# Enable memory-efficient checkpoint saving
+# Uses direct GPU→disk writes to reduce memory peaks during save operations
+# Recommended to keep enabled for fine-tuning large models
+mem_eff_save = true
+
+# Enable stochastic rounding for BF16 training (improves numerical stability)
+# Requires mixed_precision = "bf16" to be effective
+# Python implementation (default): Fast, works everywhere
+use_stochastic_rounding = true
+
+# CUDA implementation: Faster but requires compilation
+# To use CUDA stochastic rounding:
+# 1. Compile CUDA extension: cd src/utils/stochastic_rounding && python setup.py install  
+# 2. Enable: use_stochastic_rounding_cuda = true
+# NOTE: CUDA extension must be compiled on each machine individually!
+# The setup.py is configured for compute capability 8.0 (RTX 30/40 series, A100).
+# For other GPUs, modify setup.py:
+#  - GTX 16/RTX 20 series: `-gencode=arch=compute_75,code=sm_75`
+#  - RTX 30 series: `-gencode=arch=compute_86,code=sm_86` 
+#  - RTX 40 series: `-gencode=arch=compute_89,code=sm_89`
+use_stochastic_rounding_cuda = false
 
 # =============================================================================
 # TIMESTEP AND FLOW MATCHING SETTINGS
@@ -799,14 +861,42 @@ sdpa = true
 # Number of blocks to swap in the model, max XXX
 # blocks_to_swap = 20 
 
+# =============================================================================
+# CUDA ENVIRONMENT & RUNTIME SETTINGS
+# =============================================================================
+
 # Enable PyTorch CUDA allocator tuning
-cuda_allocator_enable = true
+cuda_allocator_enable = false
 
-# Max split size in MB for CUDA allocator
-cuda_allocator_max_split_size_mb = 64
+# Max split size in MB for CUDA allocator (only used when cuda_allocator_enable = true)
+# cuda_allocator_max_split_size_mb = 512
 
-# Enable expandable segments for CUDA allocator
-cuda_allocator_expandable_segments = false
+# Enable expandable segments for CUDA allocator (only used when cuda_allocator_enable = true)
+# cuda_allocator_expandable_segments = true
+
+# Enable CUDA launch blocking for debugging (synchronous kernel launches)
+# Set to true for better error reporting but slower execution
+cuda_launch_blocking = false
+
+# Enable unified memory (system RAM as GPU memory)
+# Allows GPU to use system RAM when VRAM is exhausted
+cuda_managed_force_device_alloc = false
+
+# Specify which CUDA devices to use (e.g., "0" for first GPU, "0,1" for first two)
+# Leave commented to use all available GPUs
+# cuda_visible_devices = "0"
+
+# CUDA memory fraction to allocate per process (0.0-1.0)
+# 1.0 = use default PyTorch behavior (no artificial limit)
+# Set to 0.95 to reserve 5% for system/other processes
+# cuda_memory_fraction = 0.95
+
+# Empty CUDA cache at startup to free fragmented memory
+cuda_empty_cache = false
+
+# Enable/disable Flash Scaled Dot Product Attention
+# Sometimes helps with memory usage, may affect performance
+# cuda_flash_sdp_enabled = false
 
 # =============================================================================
 # ⚠️ MEMORY OPTIMIZATION SETTINGS
@@ -835,6 +925,41 @@ memory_opt_gc_interval_steps = 100
 # Monitor memory usage every N training steps (default: 50)
 # Controls how often memory statistics are checked and logged
 memory_opt_monitor_interval_steps = 50
+
+# =============================================================================
+# MEMORY DIAGNOSTICS
+# =============================================================================
+
+# Enable comprehensive memory tracking and OOM diagnostics
+# When enabled, tracks all memory allocations and provides detailed OOM error analysis
+memory_tracking_enabled = false
+
+# Maximum number of allocation records to keep in memory (default: 10000)
+# Higher values = more detailed history, more memory overhead
+memory_tracking_max_records = 10000
+
+# Capture stack traces for allocations (expensive, only for debugging)
+# Provides detailed call stack information for each allocation
+memory_tracking_stack_traces = false
+
+# Track individual tensor references and lifecycle
+# Helps identify memory leaks and tensor usage patterns
+memory_tracking_tensor_tracking = true
+
+# Take automatic memory snapshots every N allocations (default: 100)
+# Lower values = more frequent snapshots, higher overhead
+memory_tracking_auto_snapshot_interval = 100
+
+# Memory tracking verbosity level ("minimal", "standard", "debug")
+# Controls how much detail is collected and displayed
+memory_tracking_verbosity = "standard"
+
+# Automatically export diagnostics when OOM errors occur
+# Creates detailed JSON reports for post-mortem analysis
+memory_tracking_export_on_oom = true
+
+# Directory for exporting memory diagnostic files
+memory_tracking_export_directory = "logs"
 
 # =============================================================================
 # DUAL MODEL TRAINING SETTINGS
@@ -1452,10 +1577,10 @@ strict_e_slicing_checks = false
 # =============================================================================
 
 # directory to output trained model
-output_dir = "output/wan21_lora"
+output_dir = "output/wan22_lora"
 
 # base name of trained model file 
-output_name = "wan21_lora"
+output_name = "wan22_lora"
 
 # save training state additionally (including optimizer states etc.) when saving model
 save_state = true
@@ -1538,7 +1663,7 @@ enhanced_progress_bar = true
 log_config = true
 
 # Enable logging and output TensorBoard log to this directory
-logging_dir = "logs/wan21_lora"
+logging_dir = "logs/wan22_lora"
 
 # Logging tool to use (only tensorboard is supported)
 log_with = "tensorboard"
@@ -1595,7 +1720,7 @@ throughput_window_size = 100
 # Progress bar postfix metrics mode:
 # true  - alternate each step between showing timing (step_ms) and hardware metrics (peak/util)
 # false - show both timing and hardware metrics every step
-alternate_perf_postfix = true
+alternate_perf_postfix = false
 
 # Diagnostic attention metrics, if enabled, compute lightweight cross-attention statistics (entropy, top-k mass, token focus)
 # at a configurable interval and for a small number of layers to limit overhead.

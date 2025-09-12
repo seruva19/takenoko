@@ -22,6 +22,19 @@ from common.logger import get_logger
 
 logger = get_logger(__name__, level=logging.INFO)
 
+# Import memory tracker for enhanced diagnostics
+try:
+    from utils.memory_tracker import (
+        get_memory_tracker,
+        take_memory_snapshot,
+        MemorySnapshot,
+    )
+
+    MEMORY_TRACKER_AVAILABLE = True
+except ImportError:
+    MEMORY_TRACKER_AVAILABLE = False
+    logger.debug("Memory tracker not available")
+
 # Verbosity levels for metric collection
 VerbosityLevel = Literal["minimal", "standard", "debug"]
 
@@ -559,9 +572,9 @@ class PerformanceLogger:
                 if peak_allocated > 0.1:
                     metrics["peak"] = f"{peak_allocated:.2f} GiB"
 
-            # Enhanced GPU metrics with pynvml
+            # Enhanced GPU metrics with nvidia-ml-py
             try:
-                import pynvml
+                import pynvml  # nvidia-ml-py package
 
                 pynvml.nvmlInit()
                 handle = pynvml.nvmlDeviceGetHandleByIndex(0)  # GPU 0
@@ -582,9 +595,26 @@ class PerformanceLogger:
                 pynvml.nvmlShutdown()
 
             except Exception as e:
-                logger.debug(f"Failed to get pynvml metrics: {e}")
+                logger.debug(f"Failed to get nvidia-ml-py metrics: {e}")
                 # Fallback to basic CUDA metrics
                 pass
+
+            # Add memory tracker metrics if available
+            if MEMORY_TRACKER_AVAILABLE:
+                try:
+                    tracker = get_memory_tracker(auto_install=False)
+                    summary = tracker.get_allocation_summary()
+
+                    # Add allocation statistics
+                    if summary["failed_allocations"] > 0:
+                        metrics["alloc_fails"] = str(summary["failed_allocations"])
+
+                    if summary["peak_bytes_requested"] > 0:
+                        peak_requested_gb = summary["peak_bytes_requested"] / (1024**3)
+                        metrics["peak_req"] = f"{peak_requested_gb:.2f} GiB"
+
+                except Exception as e:
+                    logger.debug(f"Failed to get memory tracker metrics: {e}")
 
         except Exception as e:
             logger.debug(f"Failed to get hardware metrics: {e}")
@@ -781,6 +811,55 @@ def snapshot_gpu_memory(tag: str = "mem") -> _Dict[str, float]:
     """
     stats: _Dict[str, float] = {}
     try:
+        # Use memory tracker for enhanced snapshot if available
+        if MEMORY_TRACKER_AVAILABLE:
+            try:
+                tracker_snapshot = take_memory_snapshot(tag)
+                stats.update(
+                    {
+                        f"{tag}/torch_allocated_gb": float(
+                            tracker_snapshot.torch_allocated
+                        )
+                        / (1024**3),
+                        f"{tag}/torch_reserved_gb": float(
+                            tracker_snapshot.torch_reserved
+                        )
+                        / (1024**3),
+                        f"{tag}/torch_free_gb": float(tracker_snapshot.torch_free)
+                        / (1024**3),
+                        f"{tag}/torch_total_gb": float(tracker_snapshot.torch_total)
+                        / (1024**3),
+                        f"{tag}/nvml_used_gb": float(tracker_snapshot.nvml_used)
+                        / (1024**3),
+                        f"{tag}/nvml_free_gb": float(tracker_snapshot.nvml_free)
+                        / (1024**3),
+                        f"{tag}/nvml_total_gb": float(tracker_snapshot.nvml_total)
+                        / (1024**3),
+                        f"{tag}/active_tensors": float(tracker_snapshot.active_tensors),
+                        f"{tag}/peak_allocated_gb": float(
+                            tracker_snapshot.peak_allocated
+                        )
+                        / (1024**3),
+                    }
+                )
+
+                # Log enhanced snapshot
+                logger.info(
+                    "ENHANCED GPU MEM SNAPSHOT %s: Allocated=%.3f GB, Reserved=%.3f GB, Free=%.3f GB, Tensors=%d",
+                    tag,
+                    stats[f"{tag}/torch_allocated_gb"],
+                    stats[f"{tag}/torch_reserved_gb"],
+                    stats[f"{tag}/torch_free_gb"],
+                    int(stats[f"{tag}/active_tensors"]),
+                )
+                return stats
+
+            except Exception as e:
+                logger.debug(
+                    f"Memory tracker snapshot failed, falling back to basic: {e}"
+                )
+
+        # Fallback to original implementation
         if torch.cuda.is_available():
             device = torch.device("cuda")
             try:
@@ -802,7 +881,7 @@ def snapshot_gpu_memory(tag: str = "mem") -> _Dict[str, float]:
 
             # NVML snapshot
             try:
-                import pynvml  # type: ignore
+                import pynvml  # nvidia-ml-py package
 
                 pynvml.nvmlInit()
                 handle = pynvml.nvmlDeviceGetHandleByIndex(0)
@@ -820,7 +899,7 @@ def snapshot_gpu_memory(tag: str = "mem") -> _Dict[str, float]:
             finally:
                 try:
                     # Safe shutdown if initialized
-                    import pynvml  # type: ignore
+                    import pynvml  # nvidia-ml-py package
 
                     if hasattr(pynvml, "nvmlShutdown"):
                         pynvml.nvmlShutdown()
@@ -871,3 +950,103 @@ def force_cuda_cleanup(tag: str = "cleanup") -> None:
         logger.warning("force_cuda_cleanup encountered an error: %s", e)
     finally:
         snapshot_gpu_memory(f"{tag}/after")
+
+
+def handle_cuda_oom_error(
+    error: torch.cuda.OutOfMemoryError, context: str = "training"
+) -> None:
+    """Handle CUDA OOM error with comprehensive diagnostics.
+
+    Args:
+        error: The CUDA OOM error that occurred
+        context: Context where the error occurred (e.g., "forward_pass", "training")
+    """
+    logger.error(f"🚨 CUDA OUT OF MEMORY ERROR in {context}")
+    logger.error(f"Error message: {error}")
+
+    # Use memory tracker for detailed diagnosis if available
+    if MEMORY_TRACKER_AVAILABLE:
+        try:
+            from utils.memory_tracker import track_cuda_oom, export_memory_diagnostics
+
+            # Get comprehensive diagnosis
+            diagnosis = track_cuda_oom(error)
+
+            # Export diagnostics to file for later analysis
+            import time
+
+            timestamp = int(time.time())
+            diagnostics_file = f"logs/oom_diagnostics_{timestamp}.json"
+
+            try:
+                export_memory_diagnostics(diagnostics_file)
+                logger.error(f"📊 Detailed diagnostics exported to: {diagnostics_file}")
+            except Exception as e:
+                logger.warning(f"Failed to export diagnostics: {e}")
+
+            return diagnosis
+
+        except Exception as e:
+            logger.warning(f"Memory tracker diagnosis failed: {e}")
+
+    # Fallback to basic diagnosis
+    logger.error("📊 Basic Memory State:")
+    try:
+        snapshot_gpu_memory("oom_fallback")
+
+        if torch.cuda.is_available():
+            device = torch.device("cuda")
+            allocated = torch.cuda.memory_allocated(device) / (1024**3)
+            reserved = torch.cuda.memory_reserved(device) / (1024**3)
+            free_bytes, total_bytes = torch.cuda.mem_get_info()
+            free_gb = free_bytes / (1024**3)
+            total_gb = total_bytes / (1024**3)
+
+            logger.error(f"   Allocated: {allocated:.2f} GB")
+            logger.error(f"   Reserved:  {reserved:.2f} GB")
+            logger.error(f"   Free:      {free_gb:.2f} GB")
+            logger.error(f"   Total:     {total_gb:.2f} GB")
+            logger.error(f"   Utilization: {(allocated/total_gb)*100:.1f}%")
+
+            # Basic recommendations
+            logger.error("💡 Recommendations:")
+            logger.error("   1. Reduce batch size")
+            logger.error("   2. Enable gradient checkpointing")
+            logger.error("   3. Use mixed precision (fp16/bf16)")
+            logger.error("   4. Try PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True")
+
+    except Exception as e:
+        logger.error(f"Failed to get basic memory info: {e}")
+
+    return None
+
+
+def track_memory_usage(operation_name: str):
+    """Decorator to track memory usage of operations and handle OOM errors.
+
+    Args:
+        operation_name: Name of the operation being tracked
+    """
+
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            if MEMORY_TRACKER_AVAILABLE:
+                from utils.memory_tracker import MemoryTrackingContext
+
+                try:
+                    with MemoryTrackingContext(f"{func.__name__}_{operation_name}"):
+                        return func(*args, **kwargs)
+                except torch.cuda.OutOfMemoryError as e:
+                    handle_cuda_oom_error(e, f"{func.__name__}_{operation_name}")
+                    raise
+            else:
+                # Fallback without memory tracking
+                try:
+                    return func(*args, **kwargs)
+                except torch.cuda.OutOfMemoryError as e:
+                    handle_cuda_oom_error(e, f"{func.__name__}_{operation_name}")
+                    raise
+
+        return wrapper
+
+    return decorator

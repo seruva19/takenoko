@@ -54,10 +54,24 @@ from dataset.config_utils import (
 )
 
 import accelerate
-from utils.memory_utils import configure_cuda_allocator_from_config
+from utils.memory_utils import configure_cuda_from_config
 from common.vram_estimator import (
-    estimate_peak_vram_gb_from_config as shared_estimate_vram,
+    estimate_and_log_vram,
 )
+
+# Import memory tracking manager
+try:
+    from utils.memory_tracking_manager import (
+        initialize_memory_tracking,
+        get_memory_tracking_manager,
+        show_memory_diagnostics as show_memory_diagnostics_func,
+        is_memory_tracking_available,
+    )
+
+    MEMORY_TRACKING_AVAILABLE = True
+except ImportError:
+    MEMORY_TRACKING_AVAILABLE = False
+    logger.debug("Memory tracking utilities not available")
 
 
 def load_training_config(config_path: str) -> Tuple[Dict[str, Any], str]:
@@ -299,10 +313,11 @@ def setup_tensorboard_if_enabled(args: argparse.Namespace):
             logger.info("TensorBoard server launch is disabled")
 
 
-def _estimate_peak_vram_gb_from_config(
+def _estimate_and_log_vram_from_config(
     config: Dict[str, Any],
+    logger: logging.Logger,
 ) -> Tuple[float, Dict[str, Any]]:
-    return shared_estimate_vram(config)
+    return estimate_and_log_vram(config, logger)
 
 
 class UnifiedTrainer:
@@ -315,12 +330,12 @@ class UnifiedTrainer:
             self.config, config_path, self.config_content
         )
 
-        # Configure CUDA allocator from TOML before any CUDA initialization
+        # Configure CUDA from TOML before any CUDA initialization
         try:
-            configure_cuda_allocator_from_config(self.config, logger)
+            configure_cuda_from_config(self.config, logger)
         except Exception as _cuda_alloc_err:
-            # Non-fatal: proceed with default allocator if misconfigured
-            logger.debug(f"CUDA allocator config skipped: {_cuda_alloc_err}")
+            # Non-fatal: proceed with default values if misconfigured
+            logger.debug(f"CUDA config skipped: {_cuda_alloc_err}")
 
         # Apply logging level from config
         try:
@@ -348,6 +363,13 @@ class UnifiedTrainer:
         # Setup TensorBoard server if enabled
         setup_tensorboard_if_enabled(self.args)
 
+        # Initialize memory tracking if enabled
+        initialize_memory_tracking(self.args) if MEMORY_TRACKING_AVAILABLE else None
+
+    def show_memory_diagnostics(self) -> None:
+        """Display comprehensive memory diagnostics."""
+        show_memory_diagnostics_func()
+
     def show_menu(self) -> str:
         """Display the main menu and get user choice"""
         print("\n" + "=" * 50)
@@ -360,15 +382,16 @@ class UnifiedTrainer:
         print("5. Estimate latent cache chunks (by frame extraction mode)")
         print("6. Reload Config File")
         print("7. Free VRAM (aggressive)")
-        print("8. Return to Config Selection")
+        print("8. Memory Diagnostics")
+        print("9. Return to Config Selection")
         print("=" * 50)
 
         while True:
-            choice = input("Enter your choice (1-8): ").strip()
-            if choice in ["1", "2", "3", "4", "5", "6", "7", "8"]:
+            choice = input("Enter your choice (1-9): ").strip()
+            if choice in ["1", "2", "3", "4", "5", "6", "7", "8", "9"]:
                 return choice
             else:
-                print("Invalid choice. Please enter 1-8.")
+                print("Invalid choice. Please enter 1-9.")
 
     def cache_latents(self) -> bool:
         """Run latent caching operation"""
@@ -986,8 +1009,20 @@ class UnifiedTrainer:
         self._log_acceleration_configuration()
 
         try:
-            # Use the unified trainer directly
-            trainer = WanNetworkTrainer()
+            # Select trainer based on network_module configuration
+            network_module = getattr(self.args, "network_module", "networks.lora_wan")
+
+            if network_module == "networks.wan_finetune":
+                # Use WanFinetune trainer for full model fine-tuning
+                from core.wan_finetune_trainer import WanFinetuneTrainer
+
+                trainer = WanFinetuneTrainer()
+                logger.info("🔥 Using WanFinetune trainer for full model fine-tuning")
+            else:
+                # Use default WAN LoRA trainer
+                trainer = WanNetworkTrainer()
+                logger.info("🔧 Using WAN LoRA trainer for LoRA training")
+
             # Store config content in trainer for state saving
             trainer.original_config_content = self.config_content  # type: ignore
             trainer.original_config_path = self.config_path  # type: ignore
@@ -1058,56 +1093,13 @@ class UnifiedTrainer:
 
             elif choice == "4":
                 try:
-                    gb, details = _estimate_peak_vram_gb_from_config(self.config)
-                    logger.info(
-                        "🧠 Estimated peak VRAM usage (per device): {:.2f} GB".format(
-                            gb
-                        )
+                    gb, details = _estimate_and_log_vram_from_config(
+                        self.config, logger
                     )
-                    logger.info(
-                        "   Shape: B={} F={} H={} W={} → lat {}x{} tokens={}".format(
-                            details["batch_size"],
-                            details["frames"],
-                            details["height"],
-                            details["width"],
-                            details["lat_h"],
-                            details["lat_w"],
-                            details["tokens_per_sample"],
-                        )
-                    )
-                    logger.info(
-                        "   Precision={} ({} bytes/elem), checkpointing={}, control_lora={}, dual={} (offload_inactive_dit={})".format(
-                            details["mixed_precision"],
-                            details["bytes_per_elem"],
-                            details["gradient_checkpointing"],
-                            details["enable_control_lora"],
-                            details["enable_dual_model_training"],
-                            details["offload_inactive_dit"],
-                        )
-                    )
-                    logger.info(
-                        "   Breakdown: activations={:.2f} GB, latents={:.2f} GB, text={:.2f} GB, overhead≈{:.2f} GB".format(
-                            details["activations_gb"],
-                            details["latents_gb"],
-                            details["text_gb"],
-                            details["overhead_gb"],
-                        )
-                    )
-                    # Optional TREAD summary
-                    try:
-                        if details.get("tread_enabled", False):
-                            logger.info(
-                                "   TREAD: enabled (mode='{}', routes={}, avg_keep_ratio={:.2f})".format(
-                                    details.get("tread_mode", "full"),
-                                    details.get("tread_routes", 0),
-                                    float(details.get("tread_avg_keep_ratio", 1.0)),
-                                )
-                            )
-                    except Exception:
-                        pass
                 except Exception as e:
                     logger.exception(f"❌ Error estimating VRAM usage: {e}")
-                input("Press Enter to continue...")
+                finally:
+                    input("Press Enter to continue...")
 
             elif choice == "5":
                 try:
@@ -1149,6 +1141,10 @@ class UnifiedTrainer:
                 input("Press Enter to continue...")
 
             elif choice == "8":
+                self.show_memory_diagnostics()
+                input("Press Enter to continue...")
+
+            elif choice == "9":
                 logger.info("Returning to config selection menu...")
                 sys.exit(100)
 

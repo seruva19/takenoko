@@ -59,32 +59,9 @@ if errorlevel 1 (
 )
 
 echo.
-echo Checking for existing virtual environment...
+echo Setting up virtual environment...
 if exist ".venv" (
     echo Virtual environment already exists at .venv
-    echo.
-    echo NOTE: Choosing 'N' will use the existing environment and verify installation.
-    echo If you do not want to reinstall or make changes at all, close this window now.
-    echo.
-    echo Do you want to recreate it? ^(y/N^)
-    set /p recreate_venv=
-    if /i "!recreate_venv!"=="y" (
-        echo Removing existing virtual environment...
-        rmdir /s /q .venv
-        echo.
-        echo Creating new virtual environment...
-        uv venv
-        if errorlevel 1 (
-            echo.
-            echo ERROR: Failed to create virtual environment!
-            echo Please check the error messages above and try again.
-            pause
-            exit /b 1
-        )
-        echo Virtual environment created successfully!
-    ) else (
-        echo Using existing virtual environment.
-    )
 ) else (
     echo Creating virtual environment...
     uv venv

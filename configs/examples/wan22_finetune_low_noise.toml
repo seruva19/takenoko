@@ -1,0 +1,192 @@
+# Takenoko WAN22 Low Noise Full Fine-Tuning Configuration
+# Optimized configuration for WAN22 T2V 14B low noise model full fine-tuning
+
+# =============================================================================
+# TARGET TRAINING
+# =============================================================================
+
+target_model = "wan22"  # WAN22 with improved architecture
+
+# =============================================================================
+# CHECKPOINT SETTINGS - WAN22 LOW NOISE MODEL
+# =============================================================================
+
+dit = "models/wan2.2_t2v_low_noise_14B_bf16.safetensors"
+fp8_scaled = false  
+fp8_base = false    
+mixed_precision_transformer = false
+vae = "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/vae/wan_2.1_vae.safetensors" 
+t5 = "https://huggingface.co/Wan-AI/Wan2.1-T2V-14B/resolve/main/models_t5_umt5-xxl-enc-bf16.pth" 
+
+# =============================================================================
+# TRAINING SETTINGS 
+# =============================================================================
+
+max_train_epochs = 1000
+max_data_loader_n_workers = 2  
+persistent_data_loader_workers = true 
+seed = 20250122  
+gradient_checkpointing = true  
+gradient_checkpointing_cpu_offload = true
+# gradient_accumulation_steps = 4  
+mixed_precision = "bf16" 
+
+# =============================================================================
+# OPTIMIZER SETTINGS 
+# =============================================================================
+
+optimizer_type = "adafactor" 
+optimizer_args = ["scale_parameter=False", "relative_step=False", "warmup_init=False"] 
+learning_rate = 1e-5  
+
+# =============================================================================
+# LEARNING RATE SCHEDULER
+# =============================================================================
+
+lr_scheduler = "linear" 
+lr_warmup_steps = 500  
+
+# =============================================================================
+# NETWORK SETTINGS
+# =============================================================================
+
+network_module = "networks.wan_finetune"  
+
+# =============================================================================
+# FINETUNE SETTINGS
+# =============================================================================
+
+fine_tune_ratio = 1.0  
+freeze_original = false  
+finetune_text_encoder = false 
+full_bf16 = true 
+fused_backward_pass = true 
+mem_eff_save = true  
+use_stochastic_rounding = true
+
+# =============================================================================
+# TIMESTEP AND FLOW MATCHING SETTINGS
+# =============================================================================
+
+timestep_sampling = "shift" 
+discrete_flow_shift = 3.0  
+min_timestep = 50   
+max_timestep = 850  
+preserve_distribution_shape = true 
+
+# =============================================================================
+# OPTIMIZATION SETTINGS
+# =============================================================================
+
+sdpa = true         
+# flash_attn = true 
+
+# =============================================================================
+# VALIDATION SETTINGS
+# =============================================================================
+
+validate_every_n_steps = 500  
+validate_on_epoch_end = true 
+validation_timesteps = "100,300,500,700" 
+use_unique_noise_per_batch = true 
+
+# =============================================================================
+# MEMORY OPTIMIZATION SETTINGS 
+# =============================================================================
+
+blocks_to_swap = 29  
+
+# =============================================================================
+# OUTPUT SETTINGS
+# =============================================================================
+
+output_dir = "output/wan22_finetune_low_noise" 
+output_name = "wan22_finetune_low_noise" 
+save_state = true 
+save_every_n_steps = 0 
+save_every_n_epochs = 1
+save_last_n_epochs = 5
+auto_resume = true 
+
+# =============================================================================
+# LOGGING SETTINGS
+# =============================================================================
+
+logging_steps = 25  
+log_with = "tensorboard"
+logging_level = "INFO"
+logging_dir = "logs/wan22_finetune_low_noise"
+log_config = true
+
+# =============================================================================
+# TIMESTEP DISTRIBUTION LOGGING
+# =============================================================================
+
+log_timestep_distribution = "histogram"
+
+# =============================================================================
+# METADATA SETTINGS
+# =============================================================================
+
+embed_config_in_metadata = true 
+
+# =============================================================================
+# SAMPLING SETTINGS
+# =============================================================================
+
+sample_every_n_steps = 500
+sample_at_first = false
+
+# =============================================================================
+# SAMPLE PROMPTS SETTINGS
+# =============================================================================
+
+[[sample_prompts]]
+
+text = """
+The scene is set beside a stormy ocean, waves foaming and spraying with dramatic energy. \
+In the foreground crouches a young woman with a well-formed body and fluffy skin tone. \
+She has short, blowsy wavy blonde hair, damp from sea spray, and wears a wet white long tank top clinging naturally to her. \
+Her features are more European in style: realistic smaller gray eyes, a wide nose, and a radiant, bright smile. \
+The background is highly detailed: storm clouds churn in the sky, waves crash dynamically, \
+and the whole environment feels alive and textured.
+"""
+
+width = 384
+height = 384
+frames = 45
+seed = 20250801
+step = 20
+cfg_scale = 6.0
+
+# =============================================================================
+# DATASET SETTINGS
+# =============================================================================
+
+[datasets.general]
+
+bucket_no_upscale = false
+
+# =============================================================================
+# TRAINING DATASETS
+# =============================================================================
+
+[[datasets.train]]
+
+image_directory = "path/to/images"
+cache_directory = "path/to/images/cache"
+resolution = [512, 512]
+batch_size = 4
+num_repeats = 1
+
+# =============================================================================
+# VALIDATION DATASETS
+# =============================================================================
+
+[[datasets.val]]
+
+image_directory = "path/to/val/images"
+cache_directory = "path/to/val/images/cache"
+resolution = [512, 512]
+batch_size = 1
+num_repeats = 1
