@@ -33,6 +33,14 @@ logger = get_logger(__name__, level=logging.INFO)
 
 class CheckpointUtils:
     """Utility class for checkpoint operations."""
+    
+    # Cache for checkpoint info extraction to avoid duplicate processing
+    _checkpoint_info_cache = {}
+    
+    @staticmethod
+    def clear_checkpoint_info_cache() -> None:
+        """Clear the checkpoint info cache. Useful for testing or long-running processes."""
+        CheckpointUtils._checkpoint_info_cache.clear()
 
     @staticmethod
     def resume_from_local_if_specified(
@@ -343,25 +351,42 @@ class CheckpointUtils:
         Returns:
             tuple[int, str]: (number, type) where type is 'step' or 'epoch'
 
-        NEW CLEAR FORMATS:
+        SUPPORTED FORMATS:
         - Step checkpoints: {output_name}-step-{number} (e.g., model-step-000700)
         - Epoch checkpoints: {output_name}-epoch-{number} (e.g., model-epoch-100)
+        - Epoch checkpoints (no dash): {output_name}-epoch{number} (e.g., model-epoch000003)
         """
+        # Check cache first to avoid duplicate processing
+        if checkpoint_path in CheckpointUtils._checkpoint_info_cache:
+            return CheckpointUtils._checkpoint_info_cache[checkpoint_path]
         # STRICT: Step-based checkpoints must have "-step-" pattern
         step_match = re.search(r"-step-(\d+)", checkpoint_path)
         if step_match:
-            return int(step_match.group(1)), "step"
+            result = (int(step_match.group(1)), "step")
+            CheckpointUtils._checkpoint_info_cache[checkpoint_path] = result
+            return result
 
-        # STRICT: Epoch-based checkpoints must have "-epoch-" pattern
+        # STRICT: Epoch-based checkpoints can have "-epoch-" or "-epoch" (no dash) pattern
         epoch_match = re.search(r"-epoch-(\d+)", checkpoint_path)
         if epoch_match:
-            return int(epoch_match.group(1)), "epoch"
+            result = (int(epoch_match.group(1)), "epoch")
+            CheckpointUtils._checkpoint_info_cache[checkpoint_path] = result
+            return result
+        
+        # Also support epoch format without dash: -epoch000003
+        epoch_no_dash_match = re.search(r"-epoch(\d+)", checkpoint_path)
+        if epoch_no_dash_match:
+            result = (int(epoch_no_dash_match.group(1)), "epoch")
+            CheckpointUtils._checkpoint_info_cache[checkpoint_path] = result
+            return result
 
         # Legacy support for existing checkpoints (will be converted)
         if "-epoch-" in checkpoint_path:
             try:
                 epoch_str = checkpoint_path.split("-epoch-")[-1]
-                return int(epoch_str), "epoch"
+                result = (int(epoch_str), "epoch")
+                CheckpointUtils._checkpoint_info_cache[checkpoint_path] = result
+                return result
             except ValueError:
                 pass
 
@@ -372,9 +397,13 @@ class CheckpointUtils:
         # Try to extract any number as epoch
         numbers = re.findall(r"\d+", checkpoint_path)
         if numbers:
-            return int(numbers[-1]), "epoch"
+            result = (int(numbers[-1]), "epoch")
+            CheckpointUtils._checkpoint_info_cache[checkpoint_path] = result
+            return result
 
-        return 0, "epoch"
+        result = (0, "epoch")
+        CheckpointUtils._checkpoint_info_cache[checkpoint_path] = result
+        return result
 
     @staticmethod
     def validate_checkpoint_consistency(

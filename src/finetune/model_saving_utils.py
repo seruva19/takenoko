@@ -23,19 +23,132 @@ except ImportError:
         logger.setLevel(level)
         return logger
 
+
 logger = get_logger(__name__, level=logging.INFO)
 
 
 class ModelSavingUtils:
     """Utility class for model operations."""
-    
-    def __init__(self, mixed_precision_dtype, full_bf16, fused_backward_pass, mem_eff_save):
+
+    def __init__(
+        self, mixed_precision_dtype, full_bf16, fused_backward_pass, mem_eff_save
+    ):
         """Initialize with trainer settings."""
         self.mixed_precision_dtype = mixed_precision_dtype
         self.full_bf16 = full_bf16
         self.fused_backward_pass = fused_backward_pass
         self.mem_eff_save = mem_eff_save
-    
+
+    @staticmethod
+    def resolve_bf16_checkpoint(dit_path: str, accelerator: Accelerator) -> str:
+        """
+        Resolve BF16 checkpoint path, converting if necessary.
+        Returns the path to use for loading.
+        """
+        # Extract filename from path (works for URLs and local paths)
+        if dit_path.startswith("http"):
+            filename = dit_path.split("/")[-1]
+        else:
+            filename = os.path.basename(dit_path)
+        
+        # If already BF16, use as-is
+        if filename.startswith("bf16_"):
+            if accelerator.is_main_process:
+                logger.info(f"🔄 Using existing BF16 checkpoint: {dit_path}")
+            return dit_path
+        
+        # Generate BF16 filename and local path
+        bf16_filename = f"bf16_{filename}"
+        models_dir = "models"
+        os.makedirs(models_dir, exist_ok=True)
+        bf16_local_path = os.path.join(models_dir, bf16_filename)
+        
+        # If BF16 version already exists, use it
+        if os.path.exists(bf16_local_path):
+            if accelerator.is_main_process:
+                logger.info(f"🔄 Using cached BF16 checkpoint: {bf16_local_path}")
+            return bf16_local_path
+        
+        # Need to convert - download original first if it's a URL
+        if dit_path.startswith("http"):
+            if accelerator.is_main_process:
+                logger.info(f"🔄 Downloading and converting {filename} to BF16...")
+                # Use existing model loading mechanism to download
+                original_local_path = os.path.join(models_dir, filename)
+                ModelSavingUtils._download_and_convert_to_bf16(dit_path, original_local_path, bf16_local_path)
+            else:
+                # Non-main processes wait for conversion to complete
+                ModelSavingUtils._wait_for_bf16_conversion(bf16_local_path)
+        else:
+            # Local file - convert directly
+            if accelerator.is_main_process:
+                logger.info(f"🔄 Converting local checkpoint {filename} to BF16...")
+                ModelSavingUtils._convert_checkpoint_to_bf16(dit_path, bf16_local_path)
+            else:
+                # Non-main processes wait for conversion
+                ModelSavingUtils._wait_for_bf16_conversion(bf16_local_path)
+        
+        return bf16_local_path
+
+    @staticmethod
+    def _download_and_convert_to_bf16(url: str, original_path: str, bf16_path: str) -> None:
+        """Download checkpoint from URL and convert to BF16."""
+        # Use existing model downloading mechanism
+        try:
+            from utils.model_utils import load_file_from_url
+            load_file_from_url(url, original_path)
+            ModelSavingUtils._convert_checkpoint_to_bf16(original_path, bf16_path)
+            # Optionally remove original to save space
+            if os.path.exists(original_path):
+                os.remove(original_path)
+                logger.info(f"🗑️ Removed original checkpoint: {original_path}")
+        except Exception as e:
+            logger.error(f"❌ Failed to download and convert checkpoint: {e}")
+            raise
+
+    @staticmethod
+    def _convert_checkpoint_to_bf16(input_path: str, output_path: str) -> None:
+        """Convert checkpoint from FP16 to BF16."""
+        try:
+            from safetensors.torch import load_file, save_file
+            import torch
+            
+            logger.info(f"🔄 Converting {input_path} to BF16...")
+            
+            # Load the checkpoint
+            state_dict = load_file(input_path)
+            
+            # Convert all tensors to BF16
+            bf16_state_dict = {}
+            for key, tensor in state_dict.items():
+                if tensor.dtype == torch.float16:
+                    bf16_state_dict[key] = tensor.to(torch.bfloat16)
+                else:
+                    bf16_state_dict[key] = tensor
+            
+            # Save as BF16 checkpoint
+            metadata = {"converted_to_bf16": "true", "source": input_path}
+            save_file(bf16_state_dict, output_path, metadata=metadata)
+            
+            logger.info(f"✅ BF16 checkpoint saved: {output_path}")
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to convert checkpoint to BF16: {e}")
+            raise
+
+    @staticmethod
+    def _wait_for_bf16_conversion(bf16_path: str, timeout: int = 300) -> None:
+        """Wait for BF16 conversion to complete (for non-main processes)."""
+        import time
+        start_time = time.time()
+        
+        while not os.path.exists(bf16_path):
+            if time.time() - start_time > timeout:
+                raise TimeoutError(f"BF16 conversion timeout: {bf16_path}")
+            time.sleep(5)  # Check every 5 seconds
+        
+        logger.info(f"✅ BF16 conversion completed: {bf16_path}")
+
     def save_model_safetensors(
         self,
         args: argparse.Namespace,
@@ -141,7 +254,9 @@ class ModelSavingUtils:
         from finetune.checkpoint_utils import CheckpointUtils
 
         # Save full model checkpoint (includes optimizer, scheduler, etc.)
-        CheckpointUtils.save_full_model_checkpoint(accelerator, args, epoch + 1, global_step)
+        CheckpointUtils.save_full_model_checkpoint(
+            accelerator, args, epoch + 1, global_step
+        )
 
         # Also save model as safetensors for inference
         output_dir = getattr(args, "output_dir", "output")
@@ -230,33 +345,10 @@ class ModelSavingUtils:
 
         return False
 
-    @staticmethod
-    def should_validate(args: argparse.Namespace, global_step: int) -> bool:
-        """Check if we should validate at this step."""
-        if getattr(args, "validate_every_n_steps", None):
-            if global_step % args.validate_every_n_steps == 0 and global_step > 0:
-                return True
-        return False
-
-    @staticmethod
-    def handle_validation(
-        args: argparse.Namespace,
-        accelerator: Accelerator,
-        transformer: torch.nn.Module,
-        val_dataset_group: Any,
-        global_step: int,
-        last_validated_step: int,
-    ) -> int:
-        """Handle validation during training."""
-        if global_step == last_validated_step:
-            return last_validated_step
-        # TODO: Add validation logic
-        return global_step
-
 
 class StateUtils:
     """Utility class for state management operations."""
-    
+
     @staticmethod
     def save_and_remove_state_stepwise(
         args: argparse.Namespace, accelerator: Accelerator, global_step: int
@@ -319,6 +411,7 @@ class StateUtils:
 
             if os.path.exists(old_state_dir):
                 import shutil
+
                 shutil.rmtree(old_state_dir)
                 logger.info(f"🗑️ Removed old state: {old_state_dir}")
 
@@ -346,5 +439,6 @@ class StateUtils:
 
             if os.path.exists(old_state_dir):
                 import shutil
+
                 shutil.rmtree(old_state_dir)
                 logger.info(f"🗑️ Removed old epoch state: {old_state_dir}")

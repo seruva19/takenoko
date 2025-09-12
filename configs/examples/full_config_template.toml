@@ -361,7 +361,6 @@ prior_loss_weight = 1.0
 # =============================================================================
 
 # Enable fine-tuning mode by setting network_module = "networks.wan_finetune"
-# WanFinetune provides full model fine-tuning capabilities for large transformer models
 # Requires significantly more VRAM than LoRA training
 
 # Fraction of parameters to fine-tune (0.1 = 10%, 1.0 = 100%)
@@ -383,6 +382,14 @@ finetune_text_encoder = false
 # Requires mixed_precision = "bf16" to be set
 # Provides better memory efficiency for large model fine-tuning
 full_bf16 = false
+
+# Automatically convert FP16 checkpoints to BF16 (finetune trainer only)
+# When enabled:
+# - Checks for existing bf16_* version in models/ directory
+# - If not found, downloads and converts FP16→BF16 automatically  
+# - Caches converted BF16 checkpoint for future runs
+# - If original filename starts with "bf16_", uses as-is
+use_or_convert_bf16 = true
 
 # Enable fused backward pass optimization for Adafactor optimizer
 # Reduces memory peaks during backward pass by fusing operations

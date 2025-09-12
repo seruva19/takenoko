@@ -276,6 +276,11 @@ class WanFinetuneTrainer:
         loading_device = "cpu" if blocks_to_swap > 0 else accelerator.device
         dit_dtype = model_utils.str_to_dtype(args.dit_dtype)
 
+        # Handle BF16 conversion if enabled
+        if getattr(args, "use_or_convert_bf16", False):
+            from finetune.model_saving_utils import ModelSavingUtils
+            args.dit = ModelSavingUtils.resolve_bf16_checkpoint(args.dit, accelerator)
+        
         logger.info(f"Loading transformer for direct fine-tuning: {args.dit}")
 
         # Determine attention mode
@@ -766,6 +771,30 @@ class WanFinetuneTrainer:
                 ),
             )
 
+        # Create validation dataloader if validation dataset exists
+        val_dataloader = None
+        val_epoch_step_sync = None
+        if val_dataset_group is not None:
+            # Use separate epoch/step tracking for validation to prevent cross-contamination
+            val_current_epoch = Value("i", 0)
+            val_current_step = Value("i", 0)
+            val_epoch_step_sync = (val_current_epoch, val_current_step)
+            
+            # Use the same collator class as training
+            val_ds_for_collator = (
+                val_dataset_group if args.max_data_loader_n_workers == 0 else None
+            )
+            val_collator = collator_class(val_current_epoch, val_current_step, val_ds_for_collator)
+            
+            import torch.utils.data
+            val_dataloader = torch.utils.data.DataLoader(
+                val_dataset_group,
+                batch_size=1,
+                shuffle=False,
+                collate_fn=val_collator,
+                num_workers=args.max_data_loader_n_workers,
+            )
+
         # Prepare data collator
         current_epoch = Value("i", 0)
         current_step = Value("i", 0)
@@ -1177,6 +1206,7 @@ class WanFinetuneTrainer:
 
         last_sampled_step = -1  # Track last sampling step
         last_validated_step = -1  # Track last validation step
+        warned_no_val_pixels_for_perceptual = False  # Warning flag for validation metrics
 
         # Test TensorBoard logging at the start
         if accelerator.is_main_process and len(accelerator.trackers) > 0:
@@ -1394,17 +1424,43 @@ class WanFinetuneTrainer:
                                     )
 
                         # Check if we should validate
-                        should_validate = ModelSavingUtils.should_validate(
-                            args, global_step
+                        should_validate = (
+                            val_dataloader is not None 
+                            and getattr(args, "validate_every_n_steps", None) is not None
+                            and global_step % args.validate_every_n_steps == 0
+                            and global_step > 0
+                            and last_validated_step != global_step
                         )
-                        if should_validate and val_dataset_group:
-                            last_validated_step = ModelSavingUtils.handle_validation(
-                                args,
-                                accelerator,
-                                transformer,
-                                val_dataset_group,
-                                global_step,
-                                last_validated_step,
+                        
+                        if should_validate:
+                            from core.handlers.validation_handler import handle_step_validation
+                            from modules.scheduling_flow_match_discrete import FlowMatchDiscreteScheduler
+                            
+                            # Create noise scheduler for validation
+                            validation_noise_scheduler = FlowMatchDiscreteScheduler(
+                                shift=getattr(args, "discrete_flow_shift", 3.0),
+                                reverse=True,
+                                solver="euler",
+                            )
+                            
+                            last_validated_step, warned_no_val_pixels_for_perceptual = handle_step_validation(
+                                should_validating=True,
+                                validation_core=self.training_core.validation_core,
+                                val_dataloader=val_dataloader,
+                                val_epoch_step_sync=val_epoch_step_sync,
+                                current_epoch=current_epoch,
+                                epoch=epoch,
+                                global_step=global_step,
+                                args=args,
+                                accelerator=accelerator,
+                                transformer=transformer,
+                                noise_scheduler=validation_noise_scheduler,
+                                control_signal_processor=None,  # Not used in finetune trainer
+                                vae=vae,  # Pass the VAE if available
+                                sampling_manager=self.sampling_manager,
+                                warned_no_val_pixels_for_perceptual=warned_no_val_pixels_for_perceptual,
+                                last_validated_step=last_validated_step,
+                                timestep_distribution=None,  # Optional parameter
                             )
 
                         # Handle step-based saving

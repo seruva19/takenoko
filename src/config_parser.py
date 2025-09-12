@@ -618,9 +618,12 @@ def create_args_from_config(
     args.dynamo_fullgraph = config.get("dynamo_fullgraph", False)
     args.dynamo_dynamic = config.get("dynamo_dynamic", False)
 
-    # Full precision settings (commented out in parser but used in code)
+    # Full precision settings
     args.full_fp16 = config.get("full_fp16", False)
     args.full_bf16 = config.get("full_bf16", False)
+
+    # BF16 checkpoint conversion (finetune trainer only)
+    args.use_or_convert_bf16 = config.get("use_or_convert_bf16", True)
 
     # WanFinetune specific settings
     args.fine_tune_ratio = config.get("fine_tune_ratio", 1.0)

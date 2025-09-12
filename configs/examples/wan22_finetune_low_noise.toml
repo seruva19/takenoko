@@ -11,12 +11,13 @@ target_model = "wan22"  # WAN22 with improved architecture
 # CHECKPOINT SETTINGS - WAN22 LOW NOISE MODEL
 # =============================================================================
 
-dit = "models/wan2.2_t2v_low_noise_14B_bf16.safetensors"
+dit = "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/diffusion_models/wan2.2_t2v_low_noise_14B_fp16.safetensors"
 fp8_scaled = false  
 fp8_base = false    
 mixed_precision_transformer = false
 vae = "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/vae/wan_2.1_vae.safetensors" 
 t5 = "https://huggingface.co/Wan-AI/Wan2.1-T2V-14B/resolve/main/models_t5_umt5-xxl-enc-bf16.pth" 
+use_or_convert_bf16 = true
 
 # =============================================================================
 # TRAINING SETTINGS 
