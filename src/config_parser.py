@@ -215,10 +215,12 @@ def create_args_from_config(
     )
     args.gradient_accumulation_steps = config.get("gradient_accumulation_steps", 1)
     args.mixed_precision = config.get("mixed_precision", "no")
-    
+
     # Stochastic rounding for BF16 training stability
     args.use_stochastic_rounding = config.get("use_stochastic_rounding", True)
-    args.use_stochastic_rounding_cuda = config.get("use_stochastic_rounding_cuda", False)
+    args.use_stochastic_rounding_cuda = config.get(
+        "use_stochastic_rounding_cuda", False
+    )
 
     # Optimizer settings
     args.optimizer_type = config.get("optimizer_type", "")
@@ -471,6 +473,10 @@ def create_args_from_config(
     args.save_last_n_steps_state = config.get("save_last_n_steps_state", None)
     args.save_state = config.get("save_state", True)
     args.save_state_on_train_end = config.get("save_state_on_train_end", False)
+
+    # New parameters for independent state saving frequency
+    args.save_state_every_n_epochs = config.get("save_state_every_n_epochs", None)
+    args.save_state_every_n_steps = config.get("save_state_every_n_steps", None)
 
     # Sampling settings
     args.sample_every_n_steps = config.get("sample_every_n_steps", None)

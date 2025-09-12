@@ -1318,6 +1318,16 @@ class TrainingCore:
                             global_step,
                             epoch,
                         )
+
+                        # Handle independent state-only saving at step level
+                        from utils.train_utils import (
+                            should_save_state_at_step,
+                            save_state_only_at_step,
+                        )
+
+                        if should_save_state_at_step(args, global_step):
+                            save_state_only_at_step(args, accelerator, global_step)
+
                         if optimizer_train_fn:
                             optimizer_train_fn()
 
@@ -1448,6 +1458,16 @@ class TrainingCore:
                 network,
                 global_step,
             )
+
+            # Handle independent state-only saving at epoch level
+            if is_main_process:
+                from utils.train_utils import (
+                    should_save_state_at_epoch,
+                    save_state_only_at_epoch,
+                )
+
+                if should_save_state_at_epoch(args, epoch + 1):
+                    save_state_only_at_epoch(args, accelerator, epoch + 1)
 
             # Only sample at end of epoch if epoch-based sampling is enabled AND it's not already sampled during the last step
             # Handle epoch-end sampling

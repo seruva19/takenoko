@@ -1610,7 +1610,13 @@ auto_resume = true
 # save_last_n_epochs = 10 
 
 # save last N checkpoints of state (overrides the value of --save_last_n_epochs)
-# save_last_n_epochs_state = 3 
+# save_last_n_epochs_state = 3
+
+# save training state (optimizer, scheduler, etc.) every N epochs, independent of checkpoint saving
+# save_state_every_n_epochs = 1
+
+# save training state (optimizer, scheduler, etc.) every N steps, independent of checkpoint saving  
+# save_state_every_n_steps = 100 
 
 # save checkpoints until N steps elapsed (remove older checkpoints if N steps elapsed)
 # save_last_n_steps = 5000 

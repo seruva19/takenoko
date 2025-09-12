@@ -258,6 +258,105 @@ def save_and_remove_state_stepwise(
                 shutil.rmtree(state_dir_old)
 
 
+def should_save_state_at_epoch(args: argparse.Namespace, epoch: int) -> bool:
+    """Check if state should be saved at this epoch based on save_state_every_n_epochs."""
+    if not getattr(args, "save_state", True):
+        return False
+
+    save_state_every_n_epochs = getattr(args, "save_state_every_n_epochs", None)
+    if save_state_every_n_epochs is None:
+        return False
+
+    return (epoch % save_state_every_n_epochs) == 0
+
+
+def should_save_state_at_step(args: argparse.Namespace, step: int) -> bool:
+    """Check if state should be saved at this step based on save_state_every_n_steps."""
+    if not getattr(args, "save_state", True):
+        return False
+
+    save_state_every_n_steps = getattr(args, "save_state_every_n_steps", None)
+    if save_state_every_n_steps is None:
+        return False
+
+    return (step % save_state_every_n_steps) == 0
+
+
+def save_state_only_at_epoch(
+    args: argparse.Namespace, accelerator: accelerate.Accelerator, epoch_no: int
+) -> None:
+    """Save only training state (not checkpoint) at specified epoch."""
+    if not accelerator.is_main_process:
+        return
+
+    model_name = args.output_name
+    logger.info(f"💾 Saving state-only at epoch {epoch_no}")
+    os.makedirs(args.output_dir, exist_ok=True)
+
+    state_dir = os.path.join(
+        args.output_dir, EPOCH_STATE_NAME.format(model_name, epoch_no)
+    )
+    accelerator.save_state(state_dir)
+
+    # Save original config file to state directory
+    save_original_config_to_state_dir(state_dir, args)
+
+    # Clean up old state-only saves if configured
+    last_n_epochs = getattr(args, "save_last_n_epochs_state", None)
+    save_state_every_n_epochs = getattr(args, "save_state_every_n_epochs", None)
+
+    if last_n_epochs is not None and save_state_every_n_epochs is not None:
+        remove_epoch_no = epoch_no - save_state_every_n_epochs * last_n_epochs
+        state_dir_old = os.path.join(
+            args.output_dir, EPOCH_STATE_NAME.format(model_name, remove_epoch_no)
+        )
+        if os.path.exists(state_dir_old):
+            logger.info(f"removing old state-only: {state_dir_old}")
+            shutil.rmtree(state_dir_old)
+
+
+def save_state_only_at_step(
+    args: argparse.Namespace, accelerator: accelerate.Accelerator, step_no: int
+) -> None:
+    """Save only training state (not checkpoint) at specified step."""
+    if not accelerator.is_main_process:
+        return
+
+    model_name = args.output_name
+    logger.info(f"💾 Saving state-only at step {step_no}")
+    os.makedirs(args.output_dir, exist_ok=True)
+
+    state_dir = os.path.join(
+        args.output_dir, STEP_STATE_NAME.format(model_name, step_no)
+    )
+    accelerator.save_state(state_dir)
+
+    # Save original config file to state directory
+    save_original_config_to_state_dir(state_dir, args)
+
+    # Save step number to step.txt
+    step_file = os.path.join(state_dir, "step.txt")
+    try:
+        with open(step_file, "w") as f:
+            f.write(str(step_no))
+    except Exception as e:
+        logger.warning(f"Failed to write step.txt: {e}")
+
+    # Clean up old state-only saves if configured
+    last_n_steps = getattr(args, "save_last_n_steps_state", None)
+    save_state_every_n_steps = getattr(args, "save_state_every_n_steps", None)
+
+    if last_n_steps is not None and save_state_every_n_steps is not None:
+        remove_step_no = step_no - (save_state_every_n_steps * last_n_steps)
+        if remove_step_no > 0:
+            state_dir_old = os.path.join(
+                args.output_dir, STEP_STATE_NAME.format(model_name, remove_step_no)
+            )
+            if os.path.exists(state_dir_old):
+                logger.info(f"removing old state-only: {state_dir_old}")
+                shutil.rmtree(state_dir_old)
+
+
 def save_state_on_train_end(
     args: argparse.Namespace, accelerator: accelerate.Accelerator
 ):

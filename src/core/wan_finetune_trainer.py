@@ -1412,6 +1412,15 @@ class WanFinetuneTrainer:
                             args, accelerator, training_model, global_step
                         )
 
+                        # Handle independent state-only saving at step level
+                        from utils.train_utils import (
+                            should_save_state_at_step,
+                            save_state_only_at_step,
+                        )
+
+                        if should_save_state_at_step(args, global_step):
+                            save_state_only_at_step(args, accelerator, global_step)
+
                 if (
                     hasattr(args, "max_train_steps")
                     and global_step >= args.max_train_steps
@@ -1430,6 +1439,15 @@ class WanFinetuneTrainer:
                 self.model_saving_utils.handle_epoch_end_saving(
                     args, epoch, accelerator, training_model, global_step
                 )
+
+                # Handle independent state-only saving at epoch level
+                from utils.train_utils import (
+                    should_save_state_at_epoch,
+                    save_state_only_at_epoch,
+                )
+
+                if should_save_state_at_epoch(args, epoch + 1):
+                    save_state_only_at_epoch(args, accelerator, epoch + 1)
 
         # Close progress bar
         progress_bar.close()
