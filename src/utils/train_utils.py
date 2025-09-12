@@ -140,25 +140,52 @@ def get_last_ckpt_name(model_name):
 
 
 def get_remove_epoch_no(args: argparse.Namespace, epoch_no: int):
-    if args.save_last_n_epochs is None:
+    """
+    Calculate which epoch checkpoint should be removed, accounting for sparse saving.
+
+    This ensures we only remove actual checkpoint epochs and maintain the correct
+    number of checkpoints when save_every_n_epochs > 1.
+    """
+    if args.save_last_n_epochs is None or args.save_every_n_epochs is None:
         return None
 
-    remove_epoch_no = epoch_no - args.save_every_n_epochs * args.save_last_n_epochs
-    if remove_epoch_no < 0:
+    # Only clean up if we're at a checkpoint saving epoch
+    if epoch_no % args.save_every_n_epochs != 0:
         return None
+
+    # Calculate which checkpoint epoch to remove
+    # We want to keep the last N checkpoints, so remove the (N+1)th oldest
+    remove_epoch_no = epoch_no - (args.save_every_n_epochs * args.save_last_n_epochs)
+
+    # Ensure the remove epoch is also a valid checkpoint epoch
+    if remove_epoch_no <= 0 or remove_epoch_no % args.save_every_n_epochs != 0:
+        return None
+
     return remove_epoch_no
 
 
 def get_remove_step_no(args: argparse.Namespace, step_no: int):
-    if args.save_last_n_steps is None:
+    """
+    Calculate which step checkpoint should be removed, accounting for sparse saving.
+
+    This ensures we only remove actual checkpoint steps and maintain the correct
+    number of checkpoints when save_every_n_steps > 1.
+    """
+    if args.save_last_n_steps is None or args.save_every_n_steps is None:
         return None
 
-    # calculate the step number to remove from the last_n_steps and save_every_n_steps
-    # e.g. if save_every_n_steps=10, save_last_n_steps=30, at step 50, keep 30 steps and remove step 10
-    remove_step_no = step_no - args.save_last_n_steps - 1
-    remove_step_no = remove_step_no - (remove_step_no % args.save_every_n_steps)
-    if remove_step_no < 0:
+    # Only clean up if we're at a checkpoint saving step
+    if step_no % args.save_every_n_steps != 0:
         return None
+
+    # Calculate which checkpoint step to remove
+    # We want to keep the last N checkpoints, so remove the (N+1)th oldest
+    remove_step_no = step_no - (args.save_every_n_steps * args.save_last_n_steps)
+
+    # Ensure the remove step is also a valid checkpoint step
+    if remove_step_no <= 0 or remove_step_no % args.save_every_n_steps != 0:
+        return None
+
     return remove_step_no
 
 

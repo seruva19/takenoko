@@ -579,9 +579,16 @@ class CheckpointUtils:
                 if not save_last_n or not save_every_n:
                     return
 
+                # Only clean up if we're at a checkpoint saving epoch
+                if current_epoch % save_every_n != 0:
+                    return
+
                 # Calculate which epoch checkpoint to remove
+                # We want to keep the last N checkpoints, so remove the (N+1)th oldest
                 remove_epoch = current_epoch - (save_every_n * save_last_n)
-                if remove_epoch <= 0:
+
+                # Ensure the remove epoch is also a valid checkpoint epoch
+                if remove_epoch <= 0 or remove_epoch % save_every_n != 0:
                     return  # Nothing to remove yet
 
                 # Find old checkpoint directory to remove
@@ -602,9 +609,16 @@ class CheckpointUtils:
                 if not save_last_n or not save_every_n:
                     return
 
+                # Only clean up if we're at a checkpoint saving step
+                if current_step % save_every_n != 0:
+                    return
+
                 # Calculate which step checkpoint to remove
+                # We want to keep the last N checkpoints, so remove the (N+1)th oldest
                 remove_step = current_step - (save_every_n * save_last_n)
-                if remove_step <= 0:
+
+                # Ensure the remove step is also a valid checkpoint step
+                if remove_step <= 0 or remove_step % save_every_n != 0:
                     return  # Nothing to remove yet
 
                 # Find old checkpoint directory to remove
