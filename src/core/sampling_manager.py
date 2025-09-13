@@ -30,7 +30,7 @@ logger = get_logger(__name__, level=logging.INFO)
 class SamplingManager:
     """Handles image/video sampling and inference operations."""
 
-    def __init__(self, config: Dict[str, Any], default_guidance_scale: float = 1.0):
+    def __init__(self, config: Dict[str, Any], default_guidance_scale: float = 5.0):
         self.config = config
         self.default_guidance_scale = default_guidance_scale
         self._vae_config = None  # Store VAE config for lazy loading
