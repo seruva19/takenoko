@@ -63,8 +63,10 @@ finetune_text_encoder = false
 full_bf16 = true 
 fused_backward_pass = true 
 mem_eff_save = true  
+memory_efficient_resume = false 
 use_stochastic_rounding = true
 use_stochastic_rounding_cuda = false
+verify_weight_dynamics_every_n_steps = 1000
 
 # =============================================================================
 # TIMESTEP AND FLOW MATCHING SETTINGS

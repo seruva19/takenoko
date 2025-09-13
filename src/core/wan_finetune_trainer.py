@@ -1,4 +1,3 @@
-# TODO: refactor, decompose to smaller files
 """WanFinetune trainer for full model fine-tuning.
 
 This trainer performs genuine full model fine-tuning:
@@ -8,21 +7,16 @@ This trainer performs genuine full model fine-tuning:
 """
 
 import argparse
-import json
 import math
 import os
 import random
-import time
 from multiprocessing import Value
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional
 import torch
 from tqdm import tqdm
 from accelerate.utils import set_seed
 from accelerate import Accelerator
-from PIL import Image
-import torchvision.transforms.functional as TF
 
-import utils.fluxflow_augmentation as fluxflow_augmentation
 from dataset import config_utils
 from dataset.config_utils import BlueprintGenerator, ConfigSanitizer
 from modules.scheduling_flow_match_discrete import FlowMatchDiscreteScheduler
@@ -30,7 +24,8 @@ from utils.train_utils import (
     collator_class,
     prepare_accelerator,
     clean_memory_on_device,
-    should_sample_images,
+    should_save_state_at_epoch,
+    should_save_state_at_step,
     LossRecorder,
 )
 from utils import model_utils
@@ -42,7 +37,6 @@ from core.optimizer_manager import OptimizerManager
 from core.model_manager import ModelManager
 from core.sampling_manager import SamplingManager
 from core.control_signal_processor import ControlSignalProcessor
-from core.checkpoint_manager import CheckpointManager
 from core.training_core import TrainingCore
 from memory.safe_memory_manager import SafeMemoryManager
 
@@ -51,16 +45,16 @@ from reward.reward_training_core import RewardTrainingCore
 from enhancements.repa.repa_helper import RepaHelper
 from tqdm import tqdm
 
-# Import extracted utilities
 from finetune.checkpoint_utils import CheckpointUtils
-from finetune.model_saving_utils import ModelSavingUtils, StateUtils
-from finetune.logging_utils import NetworkLoggingUtils, TrainingProgressLogger
-
-# FlowMatchDiscreteScheduler imported inline when needed
-from scheduling.timestep_utils import (
-    initialize_timestep_distribution,
-    get_noisy_model_input_and_timesteps,
+from finetune.model_saving_utils import ModelSavingUtils
+from finetune.logging_utils import (
+    NetworkLoggingUtils,
+    TrainingProgressLogger,
+    TimestepDistributionLogger,
 )
+from finetune.weight_dynamics_analysis import WeightDynamicsAnalyzer
+
+from scheduling.timestep_distribution import TimestepDistribution
 
 import logging
 from common.logger import get_logger
@@ -128,6 +122,13 @@ class WanFinetuneTrainer:
         # Initialize utility classes (will be properly initialized after model setup)
         self.model_saving_utils = None
 
+        # Timestep distribution for logging (reuse existing functionality)
+        self.timestep_distribution = TimestepDistribution()
+        self._timestep_logging_initialized = False
+
+        # Weight dynamics analysis for research and monitoring
+        self.weight_analyzer = WeightDynamicsAnalyzer()
+
     def handle_model_specific_args(self, args: argparse.Namespace) -> None:
         """Handle model-specific arguments for full fine-tuning."""
         self.pos_embed_cache = {}
@@ -142,10 +143,30 @@ class WanFinetuneTrainer:
         # Full fine-tuning optimization arguments
         if hasattr(args, "fused_backward_pass"):
             self.fused_backward_pass = args.fused_backward_pass
+
+            # Validate optimizer compatibility with fused backward pass
+            if self.fused_backward_pass and hasattr(args, "optimizer_type"):
+                optimizer_type = getattr(args, "optimizer_type", "adafactor").lower()
+                if optimizer_type != "adafactor":
+                    logger.warning(
+                        f"⚠️ fused_backward_pass=true only supports Adafactor optimizer. "
+                        f"Current optimizer_type='{optimizer_type}' will be ignored and Adafactor will be used."
+                    )
         if hasattr(args, "full_bf16"):
             self.full_bf16 = args.full_bf16
         if hasattr(args, "mem_eff_save"):
             self.mem_eff_save = args.mem_eff_save
+
+        # Validate FP8 compatibility with fine-tuning
+        if hasattr(args, "fp8_base") or hasattr(args, "fp8_scaled"):
+            if getattr(args, "fp8_base", False) or getattr(args, "fp8_scaled", False):
+                logger.warning(
+                    "⚠️ FP8 training is not supported for fine-tuning. Disabling FP8 options."
+                )
+                if hasattr(args, "fp8_base"):
+                    args.fp8_base = False
+                if hasattr(args, "fp8_scaled"):
+                    args.fp8_scaled = False
 
         # Initialize stochastic rounding
         if hasattr(args, "use_stochastic_rounding"):
@@ -261,15 +282,55 @@ class WanFinetuneTrainer:
         self, args: argparse.Namespace, accelerator: Accelerator
     ) -> torch.nn.Module:
         """
-        Load and prepare transformer for direct fine-tuning.
+        Load and prepare transformer for direct fine-tuning with optional memory-efficient resume.
         """
         # Memory tracing: snapshot before model loading
         if getattr(args, "trace_memory", False):
             from common.performance_logger import snapshot_gpu_memory
 
             snapshot_gpu_memory("before_transformer_load")
-        device = accelerator.device
 
+        # Check for memory-efficient resume mode
+        # This handles both explicit resume and auto-resume cases
+        memory_efficient_mode = getattr(args, "memory_efficient_resume", False)
+        will_resume = args.resume or (
+            getattr(args, "auto_resume", False) and not args.resume
+        )
+
+        if memory_efficient_mode and will_resume:
+            return self._prepare_transformer_for_memory_efficient_resume(
+                args, accelerator
+            )
+
+        # Standard loading path
+        return self._prepare_transformer_standard(args, accelerator)
+
+    def _prepare_transformer_for_memory_efficient_resume(
+        self, args: argparse.Namespace, accelerator: Accelerator
+    ) -> torch.nn.Module:
+        """
+        Memory-efficient transformer preparation using delayed checkpoint loading.
+        This loads the model normally but will replace weights immediately during resume.
+        """
+        logger.info(
+            "Memory-efficient resume: Loading base model, checkpoint weights will override"
+        )
+
+        # Load transformer using standard approach first
+        # This creates a functional model that can be used immediately
+        transformer = self._prepare_transformer_standard(args, accelerator)
+
+        logger.info(
+            "Base model loaded - checkpoint weights will override during resume"
+        )
+        return transformer
+
+    def _prepare_transformer_standard(
+        self, args: argparse.Namespace, accelerator: Accelerator
+    ) -> torch.nn.Module:
+        """
+        Standard transformer preparation - loads base model weights normally.
+        """
         # Load transformer using takenoko's model manager
         blocks_to_swap = args.blocks_to_swap if args.blocks_to_swap else 0
         self.blocks_to_swap = blocks_to_swap
@@ -279,8 +340,9 @@ class WanFinetuneTrainer:
         # Handle BF16 conversion if enabled
         if getattr(args, "use_or_convert_bf16", False):
             from finetune.model_saving_utils import ModelSavingUtils
+
             args.dit = ModelSavingUtils.resolve_bf16_checkpoint(args.dit, accelerator)
-        
+
         logger.info(f"Loading transformer for direct fine-tuning: {args.dit}")
 
         # Determine attention mode
@@ -356,6 +418,28 @@ class WanFinetuneTrainer:
             snapshot_gpu_memory("after_transformer_prep")
 
         return transformer
+
+    def resume_checkpoint_memory_efficient(
+        self,
+        accelerator: Accelerator,
+        args: argparse.Namespace,
+        transformer: torch.nn.Module,
+    ) -> Optional[int]:
+        """
+        Resume checkpoint using memory-efficient loading.
+        Delegates to CheckpointUtils for proper separation of concerns.
+
+        Returns:
+            Restored step number or None if no resume occurred
+        """
+        from finetune.checkpoint_utils import CheckpointUtils
+
+        logger.info("Starting memory-efficient checkpoint resume")
+
+        # Use the new memory-efficient method from CheckpointUtils
+        return CheckpointUtils.resume_with_true_memory_efficient_loading(
+            accelerator, args, transformer
+        )
 
     def load_t5_encoder(
         self, args: argparse.Namespace, accelerator: Accelerator
@@ -558,19 +642,17 @@ class WanFinetuneTrainer:
             solver="euler",
         )
 
-        # Get noisy input using Takenoko's method
+        # Get noisy input using Takenoko's method with timestep distribution
         noisy_model_input, timesteps, _ = get_noisy_model_input_and_timesteps(
-            args, noise, latents, noise_scheduler, device, transformer.dtype
+            args,
+            noise,
+            latents,
+            noise_scheduler,
+            device,
+            transformer.dtype,
+            timestep_distribution=self.timestep_distribution,
         )
 
-        # WAN model call using Takenoko's approach
-        lat_f, lat_h, lat_w = latents.shape[2:5]
-        # Use default WAN patch size
-        patch_size = [1, 2, 2]  # Standard WanVideo patch size
-
-        seq_len = (
-            lat_f * lat_h * lat_w // (patch_size[0] * patch_size[1] * patch_size[2])
-        )
         # Convert tensors to correct device/dtype right before model call
         context = [t.to(device=device, dtype=transformer.dtype) for t in context]
         latents = latents.to(device=device, dtype=transformer.dtype)
@@ -578,44 +660,19 @@ class WanFinetuneTrainer:
         noise = noise.to(device=device, dtype=transformer.dtype)
         timesteps = timesteps.to(device=device, dtype=transformer.dtype)
 
-        # Enable gradient checkpointing if requested
-        if getattr(args, "gradient_checkpointing", False):
-            noisy_model_input.requires_grad_(True)
-            for t in context:
-                t.requires_grad_(True)
-
+        # Use TrainingCore's call_dit method
         with accelerator.autocast():
-            # Call WAN transformer using Takenoko's method
-            try:
-                # Try WanVideo signature
-                model_pred = transformer(
-                    noisy_model_input,
-                    t=timesteps,
-                    context=context,
-                    clip_fea=None,  # only T2V fine-tuning
-                    seq_len=seq_len,
-                    y=None,  # No image latents for T2V
-                )
-            except TypeError:
-                # Fallback to simpler signature
-                if len(context) > 0:
-                    model_pred = transformer(
-                        noisy_model_input,
-                        timestep=timesteps,
-                        encoder_hidden_states=context[0],
-                    )
-                else:
-                    model_pred = transformer(noisy_model_input, timestep=timesteps)
-
-        # Handle output format
-        if isinstance(model_pred, list):
-            model_pred = torch.stack(model_pred, dim=0)  # list to tensor
-        elif isinstance(model_pred, tuple):
-            model_pred = model_pred[0]
-
-        # Flow matching target computation
-        target = noise - latents  # Flow matching target
-        target = target.to(device=device, dtype=transformer.dtype)
+            model_pred, target, _ = self.training_core.call_dit(
+                args,
+                accelerator,
+                transformer,
+                latents,
+                batch,
+                noise,
+                noisy_model_input,
+                timesteps,
+                transformer.dtype,
+            )
 
         # Loss computation with weighting
         loss = torch.nn.functional.mse_loss(
@@ -779,14 +836,17 @@ class WanFinetuneTrainer:
             val_current_epoch = Value("i", 0)
             val_current_step = Value("i", 0)
             val_epoch_step_sync = (val_current_epoch, val_current_step)
-            
+
             # Use the same collator class as training
             val_ds_for_collator = (
                 val_dataset_group if args.max_data_loader_n_workers == 0 else None
             )
-            val_collator = collator_class(val_current_epoch, val_current_step, val_ds_for_collator)
-            
+            val_collator = collator_class(
+                val_current_epoch, val_current_step, val_ds_for_collator
+            )
+
             import torch.utils.data
+
             val_dataloader = torch.utils.data.DataLoader(
                 val_dataset_group,
                 batch_size=1,
@@ -832,75 +892,33 @@ class WanFinetuneTrainer:
         if getattr(args, "verbose_network", False):
             NetworkLoggingUtils.log_detailed_network_info(transformer, args)
 
-        # Extract trainable parameters for optimizer manager
-        trainable_params = []
-        for param_group in params_to_optimize:
-            trainable_params.extend(param_group["params"])
+        # Create optimizer directly
+        logger.info(f"Creating Adafactor optimizer directly")
 
-        # Get optimizer for training
-        (
-            optimizer_name,
-            optimizer_args,
-            optimizer,
-            optimizer_train_fn,
-            optimizer_eval_fn,
-        ) = self.optimizer_manager.get_optimizer(args, transformer, trainable_params)
+        # Extract parameters for direct optimizer creation
+        trainable_params = params_to_optimize[0]["params"]
 
-        # Apply fused backward pass if enabled for memory optimization
-        if self.fused_backward_pass:
-            logger.info("⚡ Enabling fused backward pass optimization")
-            try:
-                import modules.adafactor_fused as adafactor_fused
+        # Create Adafactor optimizer directly
+        import transformers.optimization
 
-                adafactor_fused.patch_adafactor_fused(
-                    optimizer,
-                    self.use_stochastic_rounding,
-                    getattr(self, "use_stochastic_rounding_cuda", False),
-                )
+        optimizer_kwargs = {
+            "scale_parameter": False,
+            "relative_step": False,
+            "warmup_init": False,
+        }
 
-                # Create gradient hooks for fused optimization
-                for param_group, param_name_group in zip(
-                    optimizer.param_groups, param_names
-                ):
-                    for parameter, param_name in zip(
-                        param_group["params"], param_name_group
-                    ):
-                        if parameter.requires_grad:
+        optimizer = transformers.optimization.Adafactor(
+            trainable_params, lr=args.learning_rate, **optimizer_kwargs
+        )
 
-                            def create_grad_hook(p_name, p_group):
-                                def grad_hook(tensor: torch.Tensor):
-                                    # Process gradient immediately
-                                    if (
-                                        accelerator.sync_gradients
-                                        and getattr(args, "max_grad_norm", 0.0) != 0.0
-                                    ):
-                                        accelerator.clip_grad_norm_(
-                                            tensor, args.max_grad_norm
-                                        )
+        # Set optimizer metadata for logging
+        optimizer_name = "transformers.optimization.Adafactor"
+        optimizer_args = ",".join([f"{k}={v}" for k, v in optimizer_kwargs.items()])
 
-                                    # Apply optimizer step to this parameter immediately
-                                    # Use the underlying optimizer if wrapped by accelerator
-                                    actual_optimizer = getattr(
-                                        optimizer, "optimizer", optimizer
-                                    )
-                                    actual_optimizer.step_param(tensor, p_group)
-
-                                    # Clear gradient immediately to free memory
-                                    tensor.grad = None
-                                    return tensor
-
-                                return grad_hook
-
-                            parameter.register_post_accumulate_grad_hook(
-                                create_grad_hook(param_name, param_group)
-                            )
-
-                logger.info("✅ Fused backward pass enabled")
-            except ImportError:
-                logger.warning(
-                    "⚠️  Fused backward pass module not found, falling back to standard optimization"
-                )
-                self.fused_backward_pass = False
+        logger.info(
+            f"✅ Created Adafactor optimizer: {optimizer_name} | {optimizer_args}"
+        )
+        # Fused backward pass will be applied AFTER accelerator.prepare()
 
         # Optionally wrap with self-correction hybrid group (delegated to helper)
         try:
@@ -948,7 +966,6 @@ class WanFinetuneTrainer:
                 vae = None
 
         # Initialize sampling manager (but postpone T5 preprocessing until after config setup)
-        sample_parameters = None
         if getattr(args, "sample_every_n_steps", None) or getattr(
             args, "sample_every_n_epochs", None
         ):
@@ -997,8 +1014,6 @@ class WanFinetuneTrainer:
                     f"Failed to process sample_prompts from config, will use fallback if sampling occurs: {_sp_err}"
                 )
 
-        # Keep preprocessed sample_parameters if present so periodic sampling uses config prompts
-
         # Calculate maximum training steps
         if args.max_train_epochs is not None:
             args.max_train_steps = args.max_train_epochs * math.ceil(
@@ -1013,7 +1028,7 @@ class WanFinetuneTrainer:
         # Send max_train_steps to dataset group
         train_dataset_group.set_max_train_steps(args.max_train_steps)
 
-        # Prepare learning rate scheduler
+        # Prepare learning rate scheduler (use optimizer manager for LR scheduler)
         lr_scheduler = self.optimizer_manager.get_lr_scheduler(
             args, optimizer, accelerator.num_processes
         )
@@ -1046,13 +1061,70 @@ class WanFinetuneTrainer:
             optimizer, train_dataloader, lr_scheduler
         )
 
+        # Apply fused backward pass AFTER accelerator.prepare() when optimizer is wrapped
+        if self.fused_backward_pass:
+            logger.info("⚡ Enabling fused backward pass optimization (post-prepare)")
+            try:
+                import modules.adafactor_fused as adafactor_fused
+
+                # Patch the underlying optimizer inside the AcceleratedOptimizer wrapper
+                underlying_optimizer = getattr(optimizer, "optimizer", optimizer)
+                adafactor_fused.patch_adafactor_fused(
+                    underlying_optimizer,
+                    self.use_stochastic_rounding,
+                    getattr(self, "use_stochastic_rounding_cuda", False),
+                )
+
+                # Create gradient hooks for fused optimization
+                for param_group, param_name_group in zip(
+                    underlying_optimizer.param_groups, param_names
+                ):
+                    for parameter, param_name in zip(
+                        param_group["params"], param_name_group
+                    ):
+                        if parameter.requires_grad:
+
+                            def create_grad_hook(p_name, p_group):
+                                def grad_hook(tensor: torch.Tensor):
+                                    # Process gradient immediately
+                                    if (
+                                        accelerator.sync_gradients
+                                        and getattr(args, "max_grad_norm", 0.0) != 0.0
+                                    ):
+                                        accelerator.clip_grad_norm_(
+                                            tensor, args.max_grad_norm
+                                        )
+
+                                    # Apply optimizer step to this parameter immediately
+                                    if accelerator.sync_gradients:
+                                        underlying_optimizer.step_param(tensor, p_group)
+
+                                    # Clear gradient immediately to free memory
+                                    tensor.grad = None
+
+                                return grad_hook
+
+                            parameter.register_post_accumulate_grad_hook(
+                                create_grad_hook(param_name, param_group)
+                            )
+
+                logger.info("✅ Fused backward pass enabled (post-prepare)")
+            except ImportError:
+                logger.warning(
+                    "⚠️  Fused backward pass module not found, falling back to standard optimization"
+                )
+                self.fused_backward_pass = False
+
         # Register checkpoint hooks for proper fine-tuning save/load (matching LoRA approach)
         CheckpointUtils.register_hooks_for_finetuning(accelerator, args)
 
         # training_model is the transformer itself (full fine-tuning)
         training_model = transformer
 
-        # Initialize enhanced REPA helper if enabled
+        # Initialize weight dynamics analysis baseline
+        self.weight_analyzer.initialize_baseline_statistics(training_model)
+
+        # TODO: Initialize enhanced REPA helper if enabled
         repa_helper = None
         if getattr(args, "enable_repa", False):
             try:
@@ -1070,10 +1142,8 @@ class WanFinetuneTrainer:
                     logger.warning(f"Failed to initialize basic REPA helper: {e2}")
 
         # Set training mode and ensure proper device placement
-        if args.gradient_checkpointing:
-            transformer.train()
-        else:
-            transformer.eval()
+        # Always use training mode for fine-tuning to ensure weight updates
+        transformer.train()
 
         # Ensure block swap is set for training (not forward-only)
         if hasattr(transformer, "switch_block_swap_for_training"):
@@ -1142,9 +1212,16 @@ class WanFinetuneTrainer:
                 pass
 
         # Handle checkpoint resume for FULL MODEL fine-tuning
-        restored_step = CheckpointUtils.resume_from_local_if_specified(
-            accelerator, args
-        )
+        if getattr(args, "memory_efficient_resume", False):
+            # Use memory-efficient direct weight loading
+            restored_step = self.resume_checkpoint_memory_efficient(
+                accelerator, args, transformer
+            )
+        else:
+            # Use standard checkpoint loading
+            restored_step = CheckpointUtils.resume_from_local_if_specified(
+                accelerator, args
+            )
 
         if restored_step is not None:
             logger.info(f"✅ Resumed from checkpoint: step {restored_step}")
@@ -1206,7 +1283,9 @@ class WanFinetuneTrainer:
 
         last_sampled_step = -1  # Track last sampling step
         last_validated_step = -1  # Track last validation step
-        warned_no_val_pixels_for_perceptual = False  # Warning flag for validation metrics
+        warned_no_val_pixels_for_perceptual = (
+            False  # Warning flag for validation metrics
+        )
 
         # Test TensorBoard logging at the start
         if accelerator.is_main_process and len(accelerator.trackers) > 0:
@@ -1261,6 +1340,12 @@ class WanFinetuneTrainer:
             training_model.train()
 
             for step, batch in enumerate(train_dataloader):
+                # Initialize timestep distribution and logging (using centralized utility)
+                if not self._timestep_logging_initialized:
+                    TimestepDistributionLogger.initialize_and_log_timestep_distribution(
+                        args, accelerator, self.timestep_distribution
+                    )
+                    self._timestep_logging_initialized = True
                 with accelerator.accumulate(training_model):
                     # Forward pass using the transformer DIRECTLY
                     loss = self.forward_pass(
@@ -1289,6 +1374,26 @@ class WanFinetuneTrainer:
                         # Fused backward pass - optimizer.step() and zero_grad() handled by hooks
                         if accelerator.sync_gradients:
                             lr_scheduler.step()
+
+                            # Store weight change info for progress bar (for debugging)
+                            if global_step % 1 == 0:
+                                sample_param = next(training_model.parameters())
+                                weight_mean = sample_param.data.mean().item()
+
+                                # Store first weight for comparison
+                                if not hasattr(training_model, "_debug_first_weight"):
+                                    training_model._debug_first_weight = weight_mean
+                                    training_model._weight_change = 0.0
+                                    training_model._weight_status = "init"
+                                else:
+                                    change = abs(
+                                        weight_mean - training_model._debug_first_weight
+                                    )
+                                    training_model._weight_change = change
+                                    if change < 1e-7:
+                                        training_model._weight_status = "minimal"
+                                    else:
+                                        training_model._weight_status = "changing"
 
                 # Enhanced logging with comprehensive metrics
                 if global_step % getattr(args, "logging_steps", 10) == 0:
@@ -1336,17 +1441,55 @@ class WanFinetuneTrainer:
                     current_loss = float(loss.detach().item())
                     loss_recorder.add(epoch=epoch + 1, step=step, loss=current_loss)
 
-                    # Update progress bar
+                    # Update progress bar with weight change info
                     progress_bar.update(1)
-                    progress_bar.set_postfix(
-                        {
-                            "loss": f"{current_loss:.6f}",
-                            "avg_loss": f"{loss_recorder.moving_average:.6f}",
-                            "epoch": epoch + 1,
-                        }
+
+                    # Prepare progress bar data
+                    current_lr = (
+                        lr_scheduler.get_last_lr()[0]
+                        if lr_scheduler
+                        else args.learning_rate
                     )
+                    postfix_data = {
+                        "loss": f"{current_loss:.6f}",
+                        "avg": f"{loss_recorder.moving_average:.6f}",
+                        "ep": epoch + 1,
+                        "lr": f"{current_lr:.2e}",
+                    }
+
+                    # Add weight change info if available
+                    if hasattr(training_model, "_weight_change") and hasattr(
+                        training_model, "_weight_status"
+                    ):
+                        if training_model._weight_status == "changing":
+                            postfix_data["Δw"] = (
+                                f"✅ {training_model._weight_change:.2e}"
+                            )
+                        elif training_model._weight_status == "minimal":
+                            postfix_data["Δw"] = (
+                                f"⚠️ {training_model._weight_change:.2e}"
+                            )
+                        else:
+                            pass
+
+                    progress_bar.set_postfix(postfix_data)
 
                     global_step += 1
+
+                    # Weight dynamics analysis at configurable intervals
+                    analysis_frequency = getattr(
+                        args, "verify_weight_dynamics_every_n_steps", 0
+                    )
+                    if analysis_frequency > 0 and global_step % analysis_frequency == 0:
+                        analysis_result = (
+                            self.weight_analyzer.analyze_parameter_evolution(
+                                training_model, global_step
+                            )
+                        )
+                        if analysis_result and accelerator.is_main_process:
+                            self.weight_analyzer.log_dynamics_analysis_summary(
+                                analysis_result
+                            )
 
                     # Handle sampling, validation, and saving
                     if accelerator.is_main_process:
@@ -1371,7 +1514,7 @@ class WanFinetuneTrainer:
                                         f"🎨 Generating samples at step {global_step}"
                                     )
 
-                                    # Use pre-processed sample parameters (like LoRA trainer)
+                                    # Use pre-processed sample parameters
                                     if self.sample_parameters is None:
                                         # Fallback: create default parameters if none were preprocessed
                                         logger.info(
@@ -1425,57 +1568,72 @@ class WanFinetuneTrainer:
 
                         # Check if we should validate
                         should_validate = (
-                            val_dataloader is not None 
-                            and getattr(args, "validate_every_n_steps", None) is not None
+                            val_dataloader is not None
+                            and getattr(args, "validate_every_n_steps", None)
+                            is not None
                             and global_step % args.validate_every_n_steps == 0
                             and global_step > 0
                             and last_validated_step != global_step
                         )
-                        
+
                         if should_validate:
-                            from core.handlers.validation_handler import handle_step_validation
-                            from modules.scheduling_flow_match_discrete import FlowMatchDiscreteScheduler
-                            
+                            from core.handlers.validation_handler import (
+                                handle_step_validation,
+                            )
+                            from modules.scheduling_flow_match_discrete import (
+                                FlowMatchDiscreteScheduler,
+                            )
+
                             # Create noise scheduler for validation
                             validation_noise_scheduler = FlowMatchDiscreteScheduler(
                                 shift=getattr(args, "discrete_flow_shift", 3.0),
                                 reverse=True,
                                 solver="euler",
                             )
-                            
-                            last_validated_step, warned_no_val_pixels_for_perceptual = handle_step_validation(
-                                should_validating=True,
-                                validation_core=self.training_core.validation_core,
-                                val_dataloader=val_dataloader,
-                                val_epoch_step_sync=val_epoch_step_sync,
-                                current_epoch=current_epoch,
-                                epoch=epoch,
-                                global_step=global_step,
-                                args=args,
-                                accelerator=accelerator,
-                                transformer=transformer,
-                                noise_scheduler=validation_noise_scheduler,
-                                control_signal_processor=None,  # Not used in finetune trainer
-                                vae=vae,  # Pass the VAE if available
-                                sampling_manager=self.sampling_manager,
-                                warned_no_val_pixels_for_perceptual=warned_no_val_pixels_for_perceptual,
-                                last_validated_step=last_validated_step,
-                                timestep_distribution=None,  # Optional parameter
+
+                            last_validated_step, warned_no_val_pixels_for_perceptual = (
+                                handle_step_validation(
+                                    should_validating=True,
+                                    validation_core=self.training_core.validation_core,
+                                    val_dataloader=val_dataloader,
+                                    val_epoch_step_sync=val_epoch_step_sync,
+                                    current_epoch=current_epoch,
+                                    epoch=epoch,
+                                    global_step=global_step,
+                                    args=args,
+                                    accelerator=accelerator,
+                                    transformer=transformer,
+                                    noise_scheduler=validation_noise_scheduler,
+                                    control_signal_processor=None,  # Not used in finetune trainer
+                                    vae=vae,  # Pass the VAE if available
+                                    sampling_manager=self.sampling_manager,
+                                    warned_no_val_pixels_for_perceptual=warned_no_val_pixels_for_perceptual,
+                                    last_validated_step=last_validated_step,
+                                    timestep_distribution=None,  # Optional parameter
+                                )
                             )
 
-                        # Handle step-based saving
+                        # Handle step-based saving (includes model and state)
                         self.model_saving_utils.handle_step_saving(
                             args, accelerator, training_model, global_step
                         )
 
-                        # Handle independent state-only saving at step level
-                        from utils.train_utils import (
-                            should_save_state_at_step,
-                            save_state_only_at_step,
-                        )
-
+                        # Handle additional state saving based on save_state_every_n_steps
                         if should_save_state_at_step(args, global_step):
-                            save_state_only_at_step(args, accelerator, global_step)
+                            output_dir = getattr(args, "output_dir", "output")
+                            output_name = getattr(args, "output_name", "wan_finetune")
+
+                            # Save state directory for resume functionality
+                            state_dir = os.path.join(
+                                output_dir, f"{output_name}-step{global_step:06d}-state"
+                            )
+                            logger.info(f"💾 Saving additional state to: {state_dir}")
+                            accelerator.save_state(state_dir)
+
+                            # Save step info for resume
+                            step_file = os.path.join(state_dir, "step.txt")
+                            with open(step_file, "w") as f:
+                                f.write(str(global_step))
 
                 if (
                     hasattr(args, "max_train_steps")
@@ -1490,20 +1648,31 @@ class WanFinetuneTrainer:
             ):
                 break
 
-            # Handle epoch-end saving
+            # Handle epoch-end saving (includes model and state)
             if accelerator.is_main_process:
                 self.model_saving_utils.handle_epoch_end_saving(
                     args, epoch, accelerator, training_model, global_step
                 )
 
-                # Handle independent state-only saving at epoch level
-                from utils.train_utils import (
-                    should_save_state_at_epoch,
-                    save_state_only_at_epoch,
-                )
-
+                # Handle additional state saving based on save_state_every_n_epochs
                 if should_save_state_at_epoch(args, epoch + 1):
-                    save_state_only_at_epoch(args, accelerator, epoch + 1)
+                    output_dir = getattr(args, "output_dir", "output")
+                    output_name = getattr(args, "output_name", "wan_finetune")
+
+                    # Save state directory for resume functionality
+                    state_dir = os.path.join(
+                        output_dir, f"{output_name}-epoch{epoch+1:04d}-state"
+                    )
+                    logger.info(f"💾 Saving additional state to: {state_dir}")
+                    accelerator.save_state(state_dir)
+
+                    # Save step and epoch info for resume
+                    step_file = os.path.join(state_dir, "step.txt")
+                    with open(step_file, "w") as f:
+                        f.write(str(global_step))
+                    epoch_file = os.path.join(state_dir, "epoch.txt")
+                    with open(epoch_file, "w") as f:
+                        f.write(str(epoch + 1))
 
         # Close progress bar
         progress_bar.close()

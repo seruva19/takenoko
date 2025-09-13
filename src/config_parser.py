@@ -85,7 +85,7 @@ def create_args_from_config(
     args.model_cache_dir = config.get("model_cache_dir")
     args.fp16_accumulation = config.get("fp16_accumulation", False)
     # Memory tracing (optional)
-    args.trace_memory = config.get("trace_memory", False)
+    args.trace_memory = config.get("trace_memory", True)
 
     # TREAD configuration (optional)
     # 1) Native TOML tables: tread_config.routes = [ {selection_ratio=..., start_layer_idx=..., end_layer_idx=...}, ... ]
@@ -464,6 +464,7 @@ def create_args_from_config(
     args.output_dir = config.get("output_dir", "output")
     args.output_name = config.get("output_name", "wan21_lora")
     args.resume = config.get("resume")
+
     args.auto_resume = config.get("auto_resume", True)
     args.save_every_n_epochs = config.get("save_every_n_epochs", None)
     args.save_every_n_steps = config.get("save_every_n_steps", 1000)
@@ -630,6 +631,10 @@ def create_args_from_config(
     args.finetune_text_encoder = config.get("finetune_text_encoder", False)
     args.fused_backward_pass = config.get("fused_backward_pass", False)
     args.mem_eff_save = config.get("mem_eff_save", True)
+    args.memory_efficient_resume = config.get("memory_efficient_resume", False)
+    args.verify_weight_dynamics_every_n_steps = config.get(
+        "verify_weight_dynamics_every_n_steps", 0
+    )
 
     # Timestep and flow matching settings
     args.timestep_sampling = config.get("timestep_sampling", "shift")

@@ -387,6 +387,10 @@ full_bf16 = false
 # - If original filename starts with "bf16_", uses as-is
 use_or_convert_bf16 = true
 
+# Enable memory-efficient checkpoint loading (reduces RAM usage during resume)
+# Only affects resume operations, has no effect on fresh training
+memory_efficient_resume = false 
+
 # Enable fused backward pass optimization for Adafactor optimizer
 # Reduces memory peaks during backward pass by fusing operations
 # Requires Adafactor optimizer and special fused optimization module
@@ -396,6 +400,11 @@ fused_backward_pass = false
 # Uses direct GPU→disk writes to reduce memory peaks during save operations
 # Recommended to keep enabled for fine-tuning large models
 mem_eff_save = true
+
+# Weight dynamics analysis frequency (0 = disabled)
+# Set to 50-500 to monitor parameter evolution and training efficiency across model components
+# Provides research insights into learning patterns, plasticity, and component specialization
+verify_weight_dynamics_every_n_steps = 0
 
 # Enable stochastic rounding for BF16 training (improves numerical stability)
 # Requires mixed_precision = "bf16" to be effective
@@ -1598,7 +1607,7 @@ save_every_n_steps = 50
 auto_resume = true
 
 # saved state to resume training
-# resume = "path/to/resume/state" 
+# resume = "path/to/resume/state"
 
 # fp16 training including gradients (temporary disabled)
 # full_fp16 = false 

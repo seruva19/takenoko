@@ -50,32 +50,34 @@ class ModelSavingUtils:
             filename = dit_path.split("/")[-1]
         else:
             filename = os.path.basename(dit_path)
-        
+
         # If already BF16, use as-is
         if filename.startswith("bf16_"):
             if accelerator.is_main_process:
                 logger.info(f"🔄 Using existing BF16 checkpoint: {dit_path}")
             return dit_path
-        
+
         # Generate BF16 filename and local path
         bf16_filename = f"bf16_{filename}"
         models_dir = "models"
         os.makedirs(models_dir, exist_ok=True)
         bf16_local_path = os.path.join(models_dir, bf16_filename)
-        
+
         # If BF16 version already exists, use it
         if os.path.exists(bf16_local_path):
             if accelerator.is_main_process:
                 logger.info(f"🔄 Using cached BF16 checkpoint: {bf16_local_path}")
             return bf16_local_path
-        
+
         # Need to convert - download original first if it's a URL
         if dit_path.startswith("http"):
             if accelerator.is_main_process:
                 logger.info(f"🔄 Downloading and converting {filename} to BF16...")
                 # Use existing model loading mechanism to download
                 original_local_path = os.path.join(models_dir, filename)
-                ModelSavingUtils._download_and_convert_to_bf16(dit_path, original_local_path, bf16_local_path)
+                ModelSavingUtils._download_and_convert_to_bf16(
+                    dit_path, original_local_path, bf16_local_path
+                )
             else:
                 # Non-main processes wait for conversion to complete
                 ModelSavingUtils._wait_for_bf16_conversion(bf16_local_path)
@@ -87,15 +89,18 @@ class ModelSavingUtils:
             else:
                 # Non-main processes wait for conversion
                 ModelSavingUtils._wait_for_bf16_conversion(bf16_local_path)
-        
+
         return bf16_local_path
 
     @staticmethod
-    def _download_and_convert_to_bf16(url: str, original_path: str, bf16_path: str) -> None:
+    def _download_and_convert_to_bf16(
+        url: str, original_path: str, bf16_path: str
+    ) -> None:
         """Download checkpoint from URL and convert to BF16."""
         # Use existing model downloading mechanism
         try:
             from utils.model_utils import load_file_from_url
+
             load_file_from_url(url, original_path)
             ModelSavingUtils._convert_checkpoint_to_bf16(original_path, bf16_path)
             # Optionally remove original to save space
@@ -112,12 +117,12 @@ class ModelSavingUtils:
         try:
             from safetensors.torch import load_file, save_file
             import torch
-            
+
             logger.info(f"🔄 Converting {input_path} to BF16...")
-            
+
             # Load the checkpoint
             state_dict = load_file(input_path)
-            
+
             # Convert all tensors to BF16
             bf16_state_dict = {}
             for key, tensor in state_dict.items():
@@ -125,13 +130,13 @@ class ModelSavingUtils:
                     bf16_state_dict[key] = tensor.to(torch.bfloat16)
                 else:
                     bf16_state_dict[key] = tensor
-            
+
             # Save as BF16 checkpoint
             metadata = {"converted_to_bf16": "true", "source": input_path}
             save_file(bf16_state_dict, output_path, metadata=metadata)
-            
+
             logger.info(f"✅ BF16 checkpoint saved: {output_path}")
-            
+
         except Exception as e:
             logger.error(f"❌ Failed to convert checkpoint to BF16: {e}")
             raise
@@ -140,13 +145,14 @@ class ModelSavingUtils:
     def _wait_for_bf16_conversion(bf16_path: str, timeout: int = 300) -> None:
         """Wait for BF16 conversion to complete (for non-main processes)."""
         import time
+
         start_time = time.time()
-        
+
         while not os.path.exists(bf16_path):
             if time.time() - start_time > timeout:
                 raise TimeoutError(f"BF16 conversion timeout: {bf16_path}")
             time.sleep(5)  # Check every 5 seconds
-        
+
         logger.info(f"✅ BF16 conversion completed: {bf16_path}")
 
     def save_model_safetensors(
@@ -230,12 +236,21 @@ class ModelSavingUtils:
             args, accelerator, training_model, model_path, global_step
         )
 
-        # Save state for resuming if enabled
+        # Save accelerator state for checkpoint resume functionality
         if getattr(args, "save_state", True):
-            StateUtils.save_and_remove_state_stepwise(args, accelerator, global_step)
+            state_dir = os.path.join(
+                output_dir, f"{output_name}-step{global_step:06d}-state"
+            )
+            logger.info(f"💾 Saving checkpoint state to: {state_dir}")
+            accelerator.save_state(state_dir)
+            # Save step info for resume
+            step_file = os.path.join(state_dir, "step.txt")
+            with open(step_file, "w") as f:
+                f.write(str(global_step))
 
-        # Cleanup old models if save_last_n_steps is set
+        # Cleanup old models and states if save_last_n_steps is set
         self.cleanup_old_step_models(args, global_step)
+        self.cleanup_old_step_states(args, global_step)
 
     def handle_epoch_end_saving(
         self,
@@ -250,15 +265,7 @@ class ModelSavingUtils:
         if not save_every_n_epochs or (epoch + 1) % save_every_n_epochs != 0:
             return
 
-        # Import checkpoint utils for checkpoint saving
-        from finetune.checkpoint_utils import CheckpointUtils
-
-        # Save full model checkpoint (includes optimizer, scheduler, etc.)
-        CheckpointUtils.save_full_model_checkpoint(
-            accelerator, args, epoch + 1, global_step
-        )
-
-        # Also save model as safetensors for inference
+        # Save model as safetensors for inference
         output_dir = getattr(args, "output_dir", "output")
         output_name = getattr(args, "output_name", "wan_finetune")
 
@@ -269,8 +276,24 @@ class ModelSavingUtils:
             args, accelerator, training_model, model_path, global_step
         )
 
-        # Cleanup old models if save_last_n_epochs is set
+        # Save accelerator state for checkpoint resume functionality
+        if getattr(args, "save_state", True):
+            state_dir = os.path.join(
+                output_dir, f"{output_name}-epoch{epoch+1:04d}-state"
+            )
+            logger.info(f"💾 Saving epoch checkpoint state to: {state_dir}")
+            accelerator.save_state(state_dir)
+            # Save step and epoch info for resume
+            step_file = os.path.join(state_dir, "step.txt")
+            with open(step_file, "w") as f:
+                f.write(str(global_step))
+            epoch_file = os.path.join(state_dir, "epoch.txt")
+            with open(epoch_file, "w") as f:
+                f.write(str(epoch + 1))
+
+        # Cleanup old models and states if save_last_n_epochs is set
         self.cleanup_old_epoch_models(args, epoch + 1)
+        self.cleanup_old_epoch_states(args, epoch + 1)
 
         logger.info(f"💾 Saved epoch {epoch+1} checkpoint")
 
@@ -324,74 +347,10 @@ class ModelSavingUtils:
                 os.remove(old_model_path)
                 logger.info(f"🗑️ Removed old epoch model: {old_model_path}")
 
-    @staticmethod
-    def should_sample_images(
-        args: argparse.Namespace, global_step: int, epoch: int
-    ) -> bool:
-        """Check if we should sample images at this step/epoch."""
-        # Step-based sampling
-        if getattr(args, "sample_every_n_steps", None):
-            if global_step % args.sample_every_n_steps == 0 and global_step > 0:
-                return True
-
-        # Epoch-based sampling
-        if getattr(args, "sample_every_n_epochs", None):
-            if epoch % args.sample_every_n_epochs == 0:
-                return True
-
-        # Sample at first step if configured
-        if getattr(args, "sample_at_first", False) and global_step == 0:
-            return True
-
-        return False
-
-
-class StateUtils:
-    """Utility class for state management operations."""
-
-    @staticmethod
-    def save_and_remove_state_stepwise(
-        args: argparse.Namespace, accelerator: Accelerator, global_step: int
+    def cleanup_old_step_states(
+        self, args: argparse.Namespace, current_step: int
     ) -> None:
-        """Save accelerator state for step-based checkpoints and cleanup old ones."""
-        if not accelerator.is_main_process:
-            return
-
-        output_dir = getattr(args, "output_dir", "output")
-        output_name = getattr(args, "output_name", "wan_finetune")
-
-        # Save current state
-        state_dir = os.path.join(output_dir, f"{output_name}-{global_step:06d}-state")
-        logger.info(f"💾 Saving training state to: {state_dir}")
-        accelerator.save_state(state_dir)
-
-        # Cleanup old states
-        StateUtils._cleanup_old_states_stepwise(args, global_step)
-
-    @staticmethod
-    def save_and_remove_state_on_epoch_end(
-        args: argparse.Namespace, accelerator: Accelerator, epoch: int, global_step: int
-    ) -> None:
-        """Save accelerator state for epoch-based checkpoints and cleanup old ones."""
-        if not accelerator.is_main_process:
-            return
-
-        output_dir = getattr(args, "output_dir", "output")
-        output_name = getattr(args, "output_name", "wan_finetune")
-
-        # Save current state
-        state_dir = os.path.join(output_dir, f"{output_name}-epoch{epoch+1:04d}-state")
-        logger.info(f"💾 Saving training state (epoch end) to: {state_dir}")
-        accelerator.save_state(state_dir)
-
-        # Cleanup old states
-        StateUtils._cleanup_old_states_on_epoch_end(args, epoch + 1)
-
-    @staticmethod
-    def _cleanup_old_states_stepwise(
-        args: argparse.Namespace, current_step: int
-    ) -> None:
-        """Remove old step-based state directories."""
+        """Cleanup old step-based state directories."""
         save_last_n_steps = getattr(args, "save_last_n_steps", None)
         save_every_n_steps = getattr(args, "save_every_n_steps", None)
 
@@ -406,20 +365,19 @@ class StateUtils:
             output_dir = getattr(args, "output_dir", "output")
             output_name = getattr(args, "output_name", "wan_finetune")
             old_state_dir = os.path.join(
-                output_dir, f"{output_name}-{remove_step:06d}-state"
+                output_dir, f"{output_name}-step{remove_step:06d}-state"
             )
 
             if os.path.exists(old_state_dir):
                 import shutil
 
                 shutil.rmtree(old_state_dir)
-                logger.info(f"🗑️ Removed old state: {old_state_dir}")
+                logger.info(f"🗑️ Removed old step state: {old_state_dir}")
 
-    @staticmethod
-    def _cleanup_old_states_on_epoch_end(
-        args: argparse.Namespace, current_epoch: int
+    def cleanup_old_epoch_states(
+        self, args: argparse.Namespace, current_epoch: int
     ) -> None:
-        """Remove old epoch-based state directories."""
+        """Cleanup old epoch-based state directories."""
         save_last_n_epochs = getattr(args, "save_last_n_epochs", None)
         save_every_n_epochs = getattr(args, "save_every_n_epochs", None)
 
@@ -442,3 +400,24 @@ class StateUtils:
 
                 shutil.rmtree(old_state_dir)
                 logger.info(f"🗑️ Removed old epoch state: {old_state_dir}")
+
+    @staticmethod
+    def should_sample_images(
+        args: argparse.Namespace, global_step: int, epoch: int
+    ) -> bool:
+        """Check if we should sample images at this step/epoch."""
+        # Step-based sampling
+        if getattr(args, "sample_every_n_steps", None):
+            if global_step % args.sample_every_n_steps == 0 and global_step > 0:
+                return True
+
+        # Epoch-based sampling
+        if getattr(args, "sample_every_n_epochs", None):
+            if epoch % args.sample_every_n_epochs == 0:
+                return True
+
+        # Sample at first step if configured
+        if getattr(args, "sample_at_first", False) and global_step == 0:
+            return True
+
+        return False
