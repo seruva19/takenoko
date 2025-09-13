@@ -627,7 +627,6 @@ def create_args_from_config(
 
     # WanFinetune specific settings
     args.fine_tune_ratio = config.get("fine_tune_ratio", 1.0)
-    args.freeze_original = config.get("freeze_original", False)
     args.finetune_text_encoder = config.get("finetune_text_encoder", False)
     args.fused_backward_pass = config.get("fused_backward_pass", False)
     args.mem_eff_save = config.get("mem_eff_save", True)

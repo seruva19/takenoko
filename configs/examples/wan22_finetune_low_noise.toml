@@ -12,18 +12,18 @@ target_model = "wan22"  # WAN22 with improved architecture
 # =============================================================================
 
 dit = "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/diffusion_models/wan2.2_t2v_low_noise_14B_fp16.safetensors"
+use_or_convert_bf16 = true
 fp8_scaled = false  
 fp8_base = false    
 mixed_precision_transformer = false
 vae = "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/vae/wan_2.1_vae.safetensors" 
 t5 = "https://huggingface.co/Wan-AI/Wan2.1-T2V-14B/resolve/main/models_t5_umt5-xxl-enc-bf16.pth" 
-use_or_convert_bf16 = true
 
 # =============================================================================
 # TRAINING SETTINGS 
 # =============================================================================
 
-max_train_epochs = 1000
+max_train_epochs = 10
 max_data_loader_n_workers = 2  
 persistent_data_loader_workers = true 
 seed = 20250122  
@@ -39,12 +39,13 @@ mixed_precision = "bf16"
 optimizer_type = "adafactor" 
 optimizer_args = ["scale_parameter=False", "relative_step=False", "warmup_init=False"] 
 learning_rate = 1e-5  
+max_grad_norm = 0
 
 # =============================================================================
 # LEARNING RATE SCHEDULER
 # =============================================================================
 
-lr_scheduler = "linear" 
+lr_scheduler = "constant_with_warmup" 
 lr_warmup_steps = 500  
 
 # =============================================================================
@@ -58,12 +59,12 @@ network_module = "networks.wan_finetune"
 # =============================================================================
 
 fine_tune_ratio = 1.0  
-freeze_original = false  
 finetune_text_encoder = false 
 full_bf16 = true 
 fused_backward_pass = true 
 mem_eff_save = true  
 use_stochastic_rounding = true
+use_stochastic_rounding_cuda = false
 
 # =============================================================================
 # TIMESTEP AND FLOW MATCHING SETTINGS
@@ -95,7 +96,7 @@ use_unique_noise_per_batch = true
 # MEMORY OPTIMIZATION SETTINGS 
 # =============================================================================
 
-blocks_to_swap = 29  
+blocks_to_swap = 20  
 
 # =============================================================================
 # OUTPUT SETTINGS
@@ -103,9 +104,10 @@ blocks_to_swap = 29
 
 output_dir = "output/wan22_finetune_low_noise" 
 output_name = "wan22_finetune_low_noise" 
-save_state = true 
 save_every_n_steps = 0 
-save_every_n_epochs = 1
+save_state = true 
+save_state_every_n_epochs = 5
+save_every_n_epochs = 5
 save_last_n_epochs = 5
 auto_resume = true 
 
@@ -113,9 +115,9 @@ auto_resume = true
 # LOGGING SETTINGS
 # =============================================================================
 
+logging_level = "INFO"
 logging_steps = 25  
 log_with = "tensorboard"
-logging_level = "INFO"
 logging_dir = "logs/wan22_finetune_low_noise"
 log_config = true
 
@@ -167,6 +169,8 @@ cfg_scale = 6.0
 [datasets.general]
 
 bucket_no_upscale = false
+num_repeats = 1
+batch_size = 8
 
 # =============================================================================
 # TRAINING DATASETS
@@ -176,9 +180,7 @@ bucket_no_upscale = false
 
 image_directory = "path/to/images"
 cache_directory = "path/to/images/cache"
-resolution = [512, 512]
-batch_size = 4
-num_repeats = 1
+resolution = [768, 768]
 
 # =============================================================================
 # VALIDATION DATASETS
@@ -189,5 +191,3 @@ num_repeats = 1
 image_directory = "path/to/val/images"
 cache_directory = "path/to/val/images/cache"
 resolution = [512, 512]
-batch_size = 1
-num_repeats = 1

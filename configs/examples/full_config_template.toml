@@ -367,10 +367,6 @@ prior_loss_weight = 1.0
 # Lower values reduce memory usage but may limit adaptation capability
 fine_tune_ratio = 1
 
-# Whether to freeze original model parameters during fine-tuning
-# false (default) = parameters are trainable, true = parameters are frozen
-freeze_original = false
-
 # Whether to also fine-tune the text encoder along with the transformer
 # Significantly increases memory usage - only enable if you have sufficient VRAM (32GB+)
 finetune_text_encoder = false

@@ -1,4 +1,5 @@
-# Takenoko Configuration File
+# Takenoko WAN21 LoRA Fine-Tuning Configuration
+# Optimized configuration for WAN21 T2V 14B model LoRA fine-tuning
 
 # =============================================================================
 # TARGET TRAINING
