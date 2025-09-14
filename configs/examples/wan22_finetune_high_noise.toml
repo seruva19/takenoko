@@ -1,4 +1,4 @@
-# Takenoko WAN22 Low Noise Full Fine-Tuning Configuration
+# Takenoko WAN22 High Noise Full Fine-Tuning Configuration
 # Optimized configuration for WAN22 T2V 14B low noise model full fine-tuning
 
 # =============================================================================
@@ -8,10 +8,10 @@
 target_model = "wan22"  # WAN22 with improved architecture
 
 # =============================================================================
-# CHECKPOINT SETTINGS - WAN22 LOW NOISE MODEL
+# CHECKPOINT SETTINGS - WAN22 HIGH NOISE MODEL
 # =============================================================================
 
-dit = "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/diffusion_models/wan2.2_t2v_low_noise_14B_fp16.safetensors"
+dit = "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/diffusion_models/wan2.2_t2v_high_noise_14B_fp16.safetensors"
 use_or_convert_bf16 = true
 fp8_scaled = false  
 fp8_base = false    
@@ -74,8 +74,8 @@ verify_weight_dynamics_every_n_steps = 0
 
 timestep_sampling = "shift" 
 discrete_flow_shift = 3.0  
-min_timestep = 0   
-max_timestep = 875  
+min_timestep = 875
+max_timestep = 1000  
 preserve_distribution_shape = true 
 
 # =============================================================================
@@ -91,7 +91,7 @@ sdpa = true
 
 validate_every_n_steps = 500  
 validate_on_epoch_end = true 
-validation_timesteps = "100,300,500,700" 
+validation_timesteps = "900,925,950,975" 
 use_unique_noise_per_batch = true 
 
 # =============================================================================
@@ -104,8 +104,8 @@ blocks_to_swap = 20
 # OUTPUT SETTINGS
 # =============================================================================
 
-output_dir = "output/wan22_finetune_low_noise" 
-output_name = "wan22_finetune_low_noise" 
+output_dir = "output/wan22_finetune_high_noise" 
+output_name = "wan22_finetune_high_noise" 
 save_every_n_steps = 0 
 save_state = true 
 save_state_every_n_epochs = 5
@@ -120,7 +120,7 @@ auto_resume = true
 logging_level = "INFO"
 logging_steps = 25  
 log_with = "tensorboard"
-logging_dir = "logs/wan22_finetune_low_noise"
+logging_dir = "logs/wan22_finetune_high_noise"
 log_config = true
 
 # =============================================================================
