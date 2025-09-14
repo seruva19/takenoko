@@ -83,7 +83,7 @@ network_args = [
   "use_scalar=False",                   # Use scalar adaptation for LoRA/LoHa/LoKr (default: False)
   
   # Weight Decomposition (DoRA)
-  "dora_wd=0.0",                        # Enable DoRA weight decomposition (default: False)
+  "dora_wd=False",                      # Enable DoRA weight decomposition (default: False)
   
   # Bypass Mode
   "bypass_mode=False",                  # Use Y=WX+ΔWX instead of Y=(W+ΔW)X (default: False)
@@ -92,7 +92,7 @@ network_args = [
   "train_norm=False",                   # Train normalization layers (default: False)
   
   # Diag-OFT Settings
-  "rescaled=1",                         # Enable rescaled OFT (default: False)
+  "rescaled=True",                      # Enable rescaled OFT (default: False)
   "constraint=0.0",                     # Constraint value for constrained OFT (default: 0.0)
   
   # Additional Settings
