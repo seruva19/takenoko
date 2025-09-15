@@ -387,9 +387,11 @@ full_bf16 = false
 # - If original filename starts with "bf16_", uses as-is
 use_or_convert_bf16 = true
 
-# Enable memory-efficient checkpoint loading (reduces RAM usage during resume)
-# Only affects resume operations, has no effect on fresh training
-memory_efficient_resume = false 
+# Enable direct checkpoint loading (skip base model)
+# When enabled:
+# - Skips base model loading and directly loads checkpoint weights
+# - Requires checkpoint to be in the correct format
+direct_checkpoint_loading = true
 
 # Enable fused backward pass optimization for Adafactor optimizer
 # Reduces memory peaks during backward pass by fusing operations

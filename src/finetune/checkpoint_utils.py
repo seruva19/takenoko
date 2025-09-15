@@ -16,6 +16,7 @@ import signal
 import time
 import logging
 from typing import Any, Optional, Tuple, Dict
+from itertools import chain
 import torch
 from accelerate import Accelerator
 
@@ -23,6 +24,12 @@ try:
     from safetensors.torch import load_file
 except ImportError:
     load_file = None
+
+# Memory-efficient safetensors reader
+try:
+    from utils.safetensors_utils import MemoryEfficientSafeOpen
+except Exception:
+    MemoryEfficientSafeOpen = None  # type: ignore
 
 try:
     from common.logger import get_logger
@@ -47,6 +54,26 @@ class CheckpointUtils:
     def clear_checkpoint_info_cache() -> None:
         """Clear the checkpoint info cache. Useful for testing or long-running processes."""
         CheckpointUtils._checkpoint_info_cache.clear()
+
+    @staticmethod
+    def _extract_step_from_checkpoint(checkpoint_path: str) -> Optional[int]:
+        """Extract step number from checkpoint path for direct loading."""
+        try:
+            checkpoint_number, checkpoint_type = (
+                CheckpointUtils._extract_checkpoint_info(checkpoint_path)
+            )
+            if checkpoint_type == "step":
+                return checkpoint_number
+            elif checkpoint_type == "epoch":
+                # For epoch-based checkpoints, we can't determine exact step without dataloader info
+                # Return a placeholder that will be handled by the training loop
+                return checkpoint_number * 1000  # Rough estimate
+            else:
+                logger.warning(f"Unknown checkpoint type: {checkpoint_type}")
+                return None
+        except Exception as e:
+            logger.error(f"Failed to extract step from checkpoint: {e}")
+            return None
 
     @staticmethod
     def resume_from_local_if_specified(
@@ -718,259 +745,6 @@ class CheckpointUtils:
             return 0
 
         # If no pattern matches, return 0
-        return 0
-
-    @staticmethod
-    def resume_with_true_memory_efficient_loading(
-        accelerator: Accelerator, args: argparse.Namespace, transformer: torch.nn.Module
-    ) -> Optional[int]:
-        """
-        Resume checkpoint using memory-efficient loading.
-
-        Returns:
-            Restored step number or None if no resume occurred
-        """
-        # Handle auto-resume: find latest checkpoint
-        if getattr(args, "auto_resume", False) and not args.resume:
-            logger.info("🔍 Auto-resume: Searching for checkpoints...")
-            latest_checkpoint = CheckpointUtils._find_latest_checkpoint(args)
-            if latest_checkpoint:
-                args.resume = latest_checkpoint
-                logger.info(
-                    f"🔍 Auto-resume: Found latest checkpoint: {latest_checkpoint}"
-                )
-            else:
-                logger.info("🔍 Auto-resume: No existing checkpoints found")
-                return None
-
-        if not args.resume:
-            return None
-
-        checkpoint_path = args.resume
-        logger.info(f"Memory-efficient loading from: {checkpoint_path}")
-
-        try:
-            # Load checkpoint weights directly into the architecture-only model
-            restored_step = CheckpointUtils._load_checkpoint_weights_directly(
-                accelerator, args, transformer, checkpoint_path
-            )
-
-            if restored_step is not None:
-                logger.info(
-                    f"Memory-efficient resume completed at step {restored_step}"
-                )
-            else:
-                logger.warning("⚠️ Checkpoint loading failed")
-
-            return restored_step
-
-        except Exception as e:
-            logger.error(f"❌ Memory-efficient resume failed: {e}")
-            logger.warning("⚠️ Continuing without checkpoint resume")
-            return None
-
-    @staticmethod
-    def _load_checkpoint_weights_directly(
-        accelerator: Accelerator,
-        args: argparse.Namespace,
-        transformer: torch.nn.Module,
-        checkpoint_path: str,
-    ) -> Optional[int]:
-        """
-        Load checkpoint weights directly, minimizing memory usage during the process.
-        This approach loads checkpoint weights and immediately replaces model weights.
-        """
-        try:
-            import os
-
-            # Check if checkpoint exists and contains model weights
-            model_files = [
-                os.path.join(checkpoint_path, "model.safetensors"),
-                os.path.join(checkpoint_path, "pytorch_model.bin"),
-                os.path.join(checkpoint_path, "diffusion_pytorch_model.safetensors"),
-            ]
-
-            model_file = None
-            for candidate in model_files:
-                if os.path.exists(candidate):
-                    model_file = candidate
-                    break
-
-            if not model_file:
-                logger.error("❌ No model weights file found in checkpoint")
-                return None
-
-            logger.info(f"Loading model weights from: {os.path.basename(model_file)}")
-
-            # Load state dict directly to CPU first to minimize GPU memory usage
-            logger.info("Loading checkpoint weights with memory optimization...")
-
-            if model_file.endswith(".safetensors") and load_file is not None:
-                state_dict = load_file(model_file, device="cpu")
-            else:
-                state_dict = torch.load(
-                    model_file, map_location="cpu", weights_only=True
-                )
-
-            # Get model parameters once to avoid repeated state_dict() calls
-            model_state_dict = transformer.state_dict()
-
-            # Optimized weight loading with immediate memory cleanup
-            loaded_keys = []
-            missing_keys = []
-            unexpected_keys = []
-
-            # Process checkpoint weights in smaller batches to reduce peak memory
-            checkpoint_keys = list(state_dict.keys())
-            batch_size = 100  # Process weights in batches
-
-            for i in range(0, len(checkpoint_keys), batch_size):
-                batch_keys = checkpoint_keys[i : i + batch_size]
-
-                for key in batch_keys:
-                    value = state_dict[key]
-
-                    # Clean prefixes more efficiently
-                    clean_key = key
-                    if clean_key.startswith("model.diffusion_model."):
-                        clean_key = clean_key[22:]
-                    elif clean_key.startswith("model."):
-                        clean_key = clean_key[6:]
-
-                    # Load weight directly to model parameter if compatible
-                    if clean_key in model_state_dict:
-                        param = model_state_dict[clean_key]
-                        if param.shape == value.shape:
-                            # Efficient copy with immediate cleanup
-                            param.data.copy_(
-                                value.to(device=param.device, dtype=param.dtype)
-                            )
-                            loaded_keys.append(clean_key)
-                        else:
-                            logger.warning(
-                                f"Shape mismatch for {clean_key}: model={param.shape}, checkpoint={value.shape}"
-                            )
-                            unexpected_keys.append(f"{clean_key} (shape mismatch)")
-                    else:
-                        unexpected_keys.append(clean_key)
-
-                    # Delete weight immediately after processing to free memory
-                    del state_dict[key]
-
-                # Clean up GPU cache after each batch
-                if torch.cuda.is_available() and i % 500 == 0:  # Every 5 batches
-                    torch.cuda.empty_cache()
-
-            # Find missing keys efficiently
-            loaded_keys_set = set(loaded_keys)
-            missing_keys = [
-                key for key in model_state_dict.keys() if key not in loaded_keys_set
-            ]
-
-            # Final cleanup
-            del state_dict, model_state_dict, loaded_keys_set
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-
-            logger.info(
-                f"Successfully loaded {len(loaded_keys)} parameters from checkpoint"
-            )
-
-            # Log any loading issues
-            if missing_keys:
-                logger.warning(
-                    f"⚠️ Missing keys in checkpoint: {len(missing_keys)} keys"
-                )
-                if len(missing_keys) <= 5:
-                    logger.warning(f"Missing keys: {missing_keys}")
-                else:
-                    logger.warning(f"Missing keys sample: {missing_keys[:5]}")
-
-            if unexpected_keys:
-                logger.warning(
-                    f"⚠️ Unexpected keys in checkpoint: {len(unexpected_keys)} keys"
-                )
-                if len(unexpected_keys) <= 5:
-                    logger.warning(f"Unexpected keys: {unexpected_keys}")
-                else:
-                    logger.warning(f"Unexpected keys sample: {unexpected_keys[:5]}")
-
-            # Load optimizer and scheduler state using accelerator's mechanism
-            logger.info("Loading training state (optimizer, scheduler, etc.)...")
-            try:
-                # Use accelerator.load_state for everything except the model weights
-                # Since we loaded model weights manually, accelerator will handle the rest
-                accelerator.load_state(checkpoint_path)
-                logger.info("Training state loaded successfully")
-            except Exception as e:
-                logger.warning(f"⚠️ Failed to load training state: {e}")
-                logger.warning("⚠️ Model weights loaded but training will start fresh")
-
-            # Extract step information from checkpoint
-            step = CheckpointUtils._extract_step_from_checkpoint_path_comprehensive(
-                checkpoint_path
-            )
-            logger.info(f"📊 Restored step: {step}")
-
-            return step
-
-        except Exception as e:
-            logger.error(f"❌ Direct weight loading failed: {e}")
-            import traceback
-
-            logger.error(f"❌ Traceback: {traceback.format_exc()}")
-            return None
-
-    @staticmethod
-    def _extract_step_from_checkpoint_path_comprehensive(checkpoint_path: str) -> int:
-        """Extract step number from checkpoint using multiple strategies."""
-        import os
-        import re
-
-        # Strategy 1: Check for step.txt file
-        step_file = os.path.join(checkpoint_path, "step.txt")
-        if os.path.exists(step_file):
-            try:
-                with open(step_file, "r") as f:
-                    step = int(f.read().strip())
-                logger.info(f"📊 Step from step.txt: {step}")
-                return step
-            except Exception as e:
-                logger.warning(f"⚠️ Failed to read step.txt: {e}")
-
-        # Strategy 2: Extract from directory name
-        checkpoint_name = os.path.basename(checkpoint_path)
-
-        # Pattern: name-step000123 or name-step-000123
-        step_patterns = [
-            r"-step(\d+)",
-            r"-step-(\d+)",
-        ]
-
-        for pattern in step_patterns:
-            match = re.search(pattern, checkpoint_name)
-            if match:
-                step = int(match.group(1))
-                logger.info(f"📊 Step from directory name: {step}")
-                return step
-
-        # Strategy 3: Try to find epoch and estimate step
-        epoch_patterns = [
-            r"-epoch(\d+)",
-            r"-epoch-(\d+)",
-        ]
-
-        for pattern in epoch_patterns:
-            match = re.search(pattern, checkpoint_name)
-            if match:
-                epoch = int(match.group(1))
-                # Rough estimate: assume 1000 steps per epoch
-                estimated_step = epoch * 1000
-                logger.info(f"📊 Step estimated from epoch {epoch}: {estimated_step}")
-                return estimated_step
-
-        # Default to step 0 if we can't determine
-        logger.warning("⚠️ Could not determine step number, defaulting to 0")
         return 0
 
     @staticmethod

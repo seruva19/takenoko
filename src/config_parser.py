@@ -631,10 +631,12 @@ def create_args_from_config(
     args.finetune_text_encoder = config.get("finetune_text_encoder", False)
     args.fused_backward_pass = config.get("fused_backward_pass", False)
     args.mem_eff_save = config.get("mem_eff_save", True)
-    args.memory_efficient_resume = config.get("memory_efficient_resume", False)
     args.verify_weight_dynamics_every_n_steps = config.get(
         "verify_weight_dynamics_every_n_steps", 0
     )
+
+    # Direct checkpoint loading settings
+    args.direct_checkpoint_loading = config.get("direct_checkpoint_loading", True)
 
     # Timestep and flow matching settings
     args.timestep_sampling = config.get("timestep_sampling", "shift")

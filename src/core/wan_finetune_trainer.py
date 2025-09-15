@@ -290,40 +290,8 @@ class WanFinetuneTrainer:
 
             snapshot_gpu_memory("before_transformer_load")
 
-        # Check for memory-efficient resume mode
-        # This handles both explicit resume and auto-resume cases
-        memory_efficient_mode = getattr(args, "memory_efficient_resume", False)
-        will_resume = args.resume or (
-            getattr(args, "auto_resume", False) and not args.resume
-        )
-
-        if memory_efficient_mode and will_resume:
-            return self._prepare_transformer_for_memory_efficient_resume(
-                args, accelerator
-            )
-
         # Standard loading path
         return self._prepare_transformer_standard(args, accelerator)
-
-    def _prepare_transformer_for_memory_efficient_resume(
-        self, args: argparse.Namespace, accelerator: Accelerator
-    ) -> torch.nn.Module:
-        """
-        Memory-efficient transformer preparation using delayed checkpoint loading.
-        This loads the model normally but will replace weights immediately during resume.
-        """
-        logger.info(
-            "Memory-efficient resume: Loading base model, checkpoint weights will override"
-        )
-
-        # Load transformer using standard approach first
-        # This creates a functional model that can be used immediately
-        transformer = self._prepare_transformer_standard(args, accelerator)
-
-        logger.info(
-            "Base model loaded - checkpoint weights will override during resume"
-        )
-        return transformer
 
     def _prepare_transformer_standard(
         self, args: argparse.Namespace, accelerator: Accelerator
@@ -359,13 +327,62 @@ class WanFinetuneTrainer:
         else:
             attn_mode = "torch"  # Default fallback
 
-        # MEMORY OPTIMIZATION: Use direct model loading
+        # Unified checkpoint and model path resolution
         from wan.modules.model import load_wan_model
+        from finetune.checkpoint_utils import CheckpointUtils
 
+        # Step 1: Resolve checkpoint path (auto-resume or explicit)
+        checkpoint_path = None
+        if getattr(args, "auto_resume", False) and not args.resume:
+            logger.info("🔍 Auto-resume: Searching for checkpoints...")
+            latest_checkpoint = CheckpointUtils._find_latest_checkpoint(args)
+            if latest_checkpoint:
+                checkpoint_path = latest_checkpoint
+                args.resume = latest_checkpoint  # Set for later use
+                logger.info(
+                    f"🔍 Auto-resume: Found latest checkpoint: {latest_checkpoint}"
+                )
+            else:
+                logger.info(
+                    "🔍 Auto-resume: No existing checkpoints found, starting fresh training"
+                )
+        elif args.resume:
+            checkpoint_path = args.resume
+
+        # Step 2: Determine model path (base model or checkpoint model)
+        model_path = args.dit  # Default to base model
+        if getattr(args, "direct_checkpoint_loading", False) and checkpoint_path:
+            # Try to use checkpoint's model file instead of base model
+            import os
+
+            checkpoint_model_files = [
+                os.path.join(checkpoint_path, "model.safetensors"),
+                os.path.join(checkpoint_path, "pytorch_model.bin"),
+                os.path.join(checkpoint_path, "diffusion_pytorch_model.safetensors"),
+            ]
+
+            for candidate in checkpoint_model_files:
+                if os.path.exists(candidate):
+                    model_path = candidate
+                    logger.info(f"🔄 Direct checkpoint loading from: {model_path}")
+                    break
+
+            if model_path == args.dit:  # No checkpoint model found
+                logger.warning(
+                    f"⚠️ No model file found in checkpoint: {checkpoint_path}"
+                )
+                logger.info("🔄 Falling back to base model loading")
+        elif getattr(args, "direct_checkpoint_loading", False):
+            logger.warning(
+                "⚠️ Direct checkpoint loading enabled but no checkpoint available"
+            )
+            logger.info("🔄 Using base model loading")
+
+        # Load model (either base model or checkpoint, depending on direct_checkpoint_loading)
         transformer = load_wan_model(
             self.config,
             accelerator.device,
-            args.dit,
+            model_path,
             attn_mode,
             getattr(args, "split_attn", False),
             loading_device,
@@ -418,28 +435,6 @@ class WanFinetuneTrainer:
             snapshot_gpu_memory("after_transformer_prep")
 
         return transformer
-
-    def resume_checkpoint_memory_efficient(
-        self,
-        accelerator: Accelerator,
-        args: argparse.Namespace,
-        transformer: torch.nn.Module,
-    ) -> Optional[int]:
-        """
-        Resume checkpoint using memory-efficient loading.
-        Delegates to CheckpointUtils for proper separation of concerns.
-
-        Returns:
-            Restored step number or None if no resume occurred
-        """
-        from finetune.checkpoint_utils import CheckpointUtils
-
-        logger.info("Starting memory-efficient checkpoint resume")
-
-        # Use the new memory-efficient method from CheckpointUtils
-        return CheckpointUtils.resume_with_true_memory_efficient_loading(
-            accelerator, args, transformer
-        )
 
     def load_t5_encoder(
         self, args: argparse.Namespace, accelerator: Accelerator
@@ -1121,8 +1116,11 @@ class WanFinetuneTrainer:
         # training_model is the transformer itself (full fine-tuning)
         training_model = transformer
 
-        # Initialize weight dynamics analysis baseline
-        self.weight_analyzer.initialize_baseline_statistics(training_model)
+        analysis_frequency = getattr(args, "verify_weight_dynamics_every_n_steps", 0)
+
+        if analysis_frequency > 0:
+            # Initialize weight dynamics analysis baseline
+            self.weight_analyzer.initialize_baseline_statistics(training_model)
 
         # TODO: Initialize enhanced REPA helper if enabled
         repa_helper = None
@@ -1212,11 +1210,12 @@ class WanFinetuneTrainer:
                 pass
 
         # Handle checkpoint resume for FULL MODEL fine-tuning
-        if getattr(args, "memory_efficient_resume", False):
-            # Use memory-efficient direct weight loading
-            restored_step = self.resume_checkpoint_memory_efficient(
-                accelerator, args, transformer
+        if getattr(args, "direct_checkpoint_loading", False):
+            # Checkpoint already loaded directly via load_wan_model, just extract step info
+            logger.info(
+                "Direct checkpoint loading: Model already loaded with checkpoint weights, extracting step info"
             )
+            restored_step = CheckpointUtils._extract_step_from_checkpoint(args.resume)
         else:
             # Use standard checkpoint loading
             restored_step = CheckpointUtils.resume_from_local_if_specified(
@@ -1477,9 +1476,6 @@ class WanFinetuneTrainer:
                     global_step += 1
 
                     # Weight dynamics analysis at configurable intervals
-                    analysis_frequency = getattr(
-                        args, "verify_weight_dynamics_every_n_steps", 0
-                    )
                     if analysis_frequency > 0 and global_step % analysis_frequency == 0:
                         analysis_result = (
                             self.weight_analyzer.analyze_parameter_evolution(
