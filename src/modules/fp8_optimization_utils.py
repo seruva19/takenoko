@@ -10,7 +10,7 @@ from utils.safetensors_utils import MemoryEfficientSafeOpen
 
 logger = get_logger(__name__, level=logging.INFO)
 
-from utils.device_utils import clean_memory_on_device
+from utils.device_utils import clean_memory_on_device, synchronize_device
 
 
 def calculate_fp8_maxval(exp_bits=4, mantissa_bits=3, sign_bits=1):
@@ -224,6 +224,13 @@ def optimize_state_dict_with_fp8(
         logger.info(
             f"Mean FP8 quantization error: {mean_err:.2f}% (min {min_err:.2f}%, max {max_err:.2f}%)"
         )
+    if (
+        enable_non_blocking_transfers
+        and move_to_device
+        and direct_transfer_device is not None
+        and direct_transfer_device.type == "cuda"
+    ):
+        synchronize_device(direct_transfer_device)
     return state_dict
 
 
@@ -237,6 +244,11 @@ def load_safetensors_with_fp8_optimization(
     move_to_device=False,
     weight_hook=None,
     quant_dtype: Optional[torch.dtype] = None,
+    *,
+    enable_memory_mapping: bool = False,
+    enable_zero_copy_loading: bool = False,
+    enable_non_blocking_transfers: bool = False,
+    memory_mapping_threshold: int = 10 * 1024 * 1024,
 ):
     """
     Load weight tensors from safetensors files and merge LoRA weights into the state dict with explicit FP8 optimization.
@@ -254,6 +266,14 @@ def load_safetensors_with_fp8_optimization(
     Returns:
         dict: FP8 optimized state dict
     """
+    calc_device_obj: Optional[torch.device]
+    if calc_device is None:
+        calc_device_obj = None
+    elif isinstance(calc_device, torch.device):
+        calc_device_obj = calc_device
+    else:
+        calc_device_obj = torch.device(calc_device)
+
     if exp_bits == 4 and mantissa_bits == 3:
         fp8_dtype = torch.float8_e4m3fn
     elif exp_bits == 5 and mantissa_bits == 2:
@@ -283,13 +303,24 @@ def load_safetensors_with_fp8_optimization(
 
     # Process each file
     state_dict = {}
+    direct_transfer_device = (
+        calc_device_obj if move_to_device and weight_hook is None else None
+    )
+
     for model_file in model_files:
         with MemoryEfficientSafeOpen(model_file) as f:
             keys = f.keys()
             for key in tqdm(
                 keys, desc=f"Loading {os.path.basename(model_file)}", unit="key"
             ):
-                value = f.get_tensor(key)
+                value = f.get_tensor(
+                    key,
+                    device=direct_transfer_device,
+                    enable_memory_mapping=enable_memory_mapping,
+                    enable_zero_copy_loading=enable_zero_copy_loading,
+                    enable_non_blocking_transfers=enable_non_blocking_transfers,
+                    memory_mapping_threshold=memory_mapping_threshold,
+                )
                 if weight_hook is not None:
                     # Apply weight hook if provided
                     value = weight_hook(key, value)
@@ -302,9 +333,9 @@ def load_safetensors_with_fp8_optimization(
                 original_device = value.device
                 original_dtype = value.dtype
 
-                # Move to calculation device
-                if calc_device is not None:
-                    value = value.to(calc_device)
+                # Move to calculation device when we didn't request a direct transfer
+                if direct_transfer_device is None and calc_device_obj is not None:
+                    value = value.to(calc_device_obj)
 
                 # Optionally upcast for scale computation and quantization for improved accuracy
                 value_q = value.to(quant_dtype) if quant_dtype is not None else value
@@ -363,6 +394,13 @@ def load_safetensors_with_fp8_optimization(
         logger.info(
             f"Mean FP8 quantization error: {mean_err:.2f}% (min {min_err:.2f}%, max {max_err:.2f}%)"
         )
+    if (
+        enable_non_blocking_transfers
+        and move_to_device
+        and direct_transfer_device is not None
+        and direct_transfer_device.type == "cuda"
+    ):
+        synchronize_device(direct_transfer_device)
     return state_dict
 
 

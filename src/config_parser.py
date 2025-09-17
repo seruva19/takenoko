@@ -86,6 +86,17 @@ def create_args_from_config(
     args.fp16_accumulation = config.get("fp16_accumulation", False)
     # Memory tracing (optional)
     args.trace_memory = config.get("trace_memory", True)
+    # Safetensors loading optimisations (gated; default disabled)
+    args.enable_memory_mapping = bool(config.get("enable_memory_mapping", False))
+    args.enable_zero_copy_loading = bool(
+        config.get("enable_zero_copy_loading", False)
+    )
+    args.enable_non_blocking_transfers = bool(
+        config.get("enable_non_blocking_transfers", False)
+    )
+    args.memory_mapping_threshold = int(
+        config.get("memory_mapping_threshold", 10 * 1024 * 1024)
+    )
 
     # TREAD configuration (optional)
     # 1) Native TOML tables: tread_config.routes = [ {selection_ratio=..., start_layer_idx=..., end_layer_idx=...}, ... ]

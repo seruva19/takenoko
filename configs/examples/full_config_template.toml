@@ -791,7 +791,7 @@ contrastive_flow_skip_unconditional = false
 # contrastive_flow_null_class_idx = null
 
 # =============================================================================
-# ⚠️ REPA (Representation Alignment) SETTINGS
+# ⚠️ REPA (REPRESENTATIONAL ALIGNMENT) SETTINGS
 # =============================================================================
 
 # Enable REPA for representational alignment during training
@@ -939,6 +939,30 @@ memory_opt_gc_interval_steps = 100
 # Monitor memory usage every N training steps (default: 50)
 # Controls how often memory statistics are checked and logged
 memory_opt_monitor_interval_steps = 50
+
+# =============================================================================
+# SAFETENSORS LOADING OPTIMIZATIONS
+# =============================================================================
+
+# Use numpy.memmap for large tensors when loading safetensors checkpoints.
+# Improves peak memory usage and throughput for large models but may increase
+# temporary disk I/O. Disabled by default to preserve previous behavior.
+enable_memory_mapping = false
+
+# Use numpy.fromfile for zero-copy loading instead of Python file reads.
+# Reduces Python overhead when streaming weights from disk. Requires
+# enable_memory_mapping for best results but can be toggled independently.
+enable_zero_copy_loading = false
+
+# Perform GPU transfers in a non-blocking manner when loading weights.
+# Can overlap I/O and compute on CUDA devices but requires an explicit device
+# synchronization before tensors are used. Automatically handled by Takenoko
+# when enabled. Disabled by default.
+enable_non_blocking_transfers = false
+
+# Byte threshold controlling when memmap acceleration is considered. Increase
+# to restrict memmap usage to very large tensors.
+# memory_mapping_threshold = 10485760  # 10 MiB default
 
 # =============================================================================
 # MEMORY DIAGNOSTICS

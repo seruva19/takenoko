@@ -1768,6 +1768,10 @@ def load_wan_model(
     compile_args: Optional[list] = None,
     fp8_format: str = "e4m3",
     rope_use_float32: bool = False,
+    enable_memory_mapping: bool = False,
+    enable_zero_copy_loading: bool = False,
+    enable_non_blocking_transfers: bool = False,
+    memory_mapping_threshold: int = 10 * 1024 * 1024,
 ) -> WanModel:
     """
     Load a WAN model from the specified checkpoint.
@@ -1846,9 +1850,15 @@ def load_wan_model(
         fp8_optimization=fp8_scaled,
         calc_device=device,
         move_to_device=(loading_device == device),
+        dit_weight_dtype=dit_weight_dtype,
         target_keys=FP8_OPTIMIZATION_TARGET_KEYS,
         exclude_keys=FP8_OPTIMIZATION_EXCLUDE_KEYS,
         quant_dtype=quant_dtype,
+        fp8_format=fp8_format,
+        enable_memory_mapping=enable_memory_mapping,
+        enable_zero_copy_loading=enable_zero_copy_loading,
+        enable_non_blocking_transfers=enable_non_blocking_transfers,
+        memory_mapping_threshold=memory_mapping_threshold,
     )
 
     # remove "model.diffusion_model." prefix: 1.3B model has this prefix

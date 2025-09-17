@@ -18,6 +18,7 @@ from utils.safetensors_utils import (
     MemoryEfficientSafeOpen,
     load_safetensors,
 )
+from utils.device_utils import synchronize_device
 
 
 def filter_lora_state_dict(
@@ -66,6 +67,13 @@ def load_safetensors_with_lora_and_fp8(
     exclude_keys: Optional[List[str]] = None,
     quant_dtype: Optional[torch.dtype] = None,
     fp8_format: str = "e4m3",
+    fp8_per_channel: bool = False,
+    fp8_percentile: Optional[float] = None,
+    *,
+    enable_memory_mapping: bool = False,
+    enable_zero_copy_loading: bool = False,
+    enable_non_blocking_transfers: bool = False,
+    memory_mapping_threshold: int = 10 * 1024 * 1024,
 ) -> dict[str, torch.Tensor]:
     """
     Merge LoRA weights into the state dict of a model with fp8 optimization if needed.
@@ -222,6 +230,12 @@ def load_safetensors_with_lora_and_fp8(
         weight_hook=weight_hook,
         quant_dtype=quant_dtype,
         fp8_format=fp8_format,
+        fp8_per_channel=fp8_per_channel,
+        fp8_percentile=fp8_percentile,
+        enable_memory_mapping=enable_memory_mapping,
+        enable_zero_copy_loading=enable_zero_copy_loading,
+        enable_non_blocking_transfers=enable_non_blocking_transfers,
+        memory_mapping_threshold=memory_mapping_threshold,
     )
 
     for lora_weight_keys in list_of_lora_weight_keys:
@@ -247,6 +261,13 @@ def load_safetensors_with_fp8_optimization_and_hook(
     weight_hook: callable = None,  # type: ignore
     quant_dtype: Optional[torch.dtype] = None,
     fp8_format: str = "e4m3",
+    fp8_per_channel: bool = False,
+    fp8_percentile: Optional[float] = None,
+    *,
+    enable_memory_mapping: bool = False,
+    enable_zero_copy_loading: bool = False,
+    enable_non_blocking_transfers: bool = False,
+    memory_mapping_threshold: int = 10 * 1024 * 1024,
 ) -> dict[str, torch.Tensor]:
     """
     Load state dict from safetensors files and merge LoRA weights into the state dict with fp8 optimization if needed.
@@ -278,12 +299,17 @@ def load_safetensors_with_fp8_optimization_and_hook(
             move_to_device=move_to_device,
             weight_hook=weight_hook,
             quant_dtype=quant_dtype,
+            enable_memory_mapping=enable_memory_mapping,
+            enable_zero_copy_loading=enable_zero_copy_loading,
+            enable_non_blocking_transfers=enable_non_blocking_transfers,
+            memory_mapping_threshold=memory_mapping_threshold,
         )
     else:
         logger.info(
             f"Loading state dict without FP8 optimization. Hook enabled: {weight_hook is not None}"
         )
         state_dict = {}
+        direct_device = calc_device if move_to_device and weight_hook is None else None
         for model_file in model_files:
             with MemoryEfficientSafeOpen(model_file) as f:
                 for key in tqdm(
@@ -291,16 +317,32 @@ def load_safetensors_with_fp8_optimization_and_hook(
                     desc=f"Loading {os.path.basename(model_file)}",
                     leave=False,
                 ):
-                    value = f.get_tensor(key)
+                    value = f.get_tensor(
+                        key,
+                        device=direct_device,
+                        dtype=dit_weight_dtype if direct_device is not None else None,
+                        enable_memory_mapping=enable_memory_mapping,
+                        enable_zero_copy_loading=enable_zero_copy_loading,
+                        enable_non_blocking_transfers=enable_non_blocking_transfers,
+                        memory_mapping_threshold=memory_mapping_threshold,
+                    )
                     if weight_hook is not None:
                         value = weight_hook(key, value)
-                    if move_to_device:
-                        if dit_weight_dtype is None:
-                            value = value.to(calc_device)
-                        else:
-                            value = value.to(calc_device, dtype=dit_weight_dtype)
-                    elif dit_weight_dtype is not None:
-                        value = value.to(dit_weight_dtype)
+                    if direct_device is None:
+                        if move_to_device:
+                            if dit_weight_dtype is None:
+                                value = value.to(calc_device)
+                            else:
+                                value = value.to(calc_device, dtype=dit_weight_dtype)
+                        elif dit_weight_dtype is not None:
+                            value = value.to(dit_weight_dtype)
                     state_dict[key] = value
+
+        if (
+            enable_non_blocking_transfers
+            and direct_device is not None
+            and direct_device.type == "cuda"
+        ):
+            synchronize_device(direct_device)
 
     return state_dict

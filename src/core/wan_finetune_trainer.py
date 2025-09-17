@@ -388,6 +388,16 @@ class WanFinetuneTrainer:
             loading_device,
             dit_dtype,
             getattr(args, "fp8_scaled", False),
+            enable_memory_mapping=bool(getattr(args, "enable_memory_mapping", False)),
+            enable_zero_copy_loading=bool(
+                getattr(args, "enable_zero_copy_loading", False)
+            ),
+            enable_non_blocking_transfers=bool(
+                getattr(args, "enable_non_blocking_transfers", False)
+            ),
+            memory_mapping_threshold=int(
+                getattr(args, "memory_mapping_threshold", 10 * 1024 * 1024)
+            ),
         )
 
         # Configure TREAD routing if enabled and routes provided

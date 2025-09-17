@@ -32,7 +32,9 @@ uv.lock
 .claude
 
 # Takenoko
-prebuilt
+/prebuilt
+/cache
+/temp
 /logs
 /output
 /configs/*

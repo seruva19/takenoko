@@ -164,6 +164,18 @@ class ModelManager:
                 if hasattr(args, "compile_args") and args.compile_args is not None
                 else None
             ),
+            enable_memory_mapping=bool(
+                getattr(args, "enable_memory_mapping", False)
+            ),
+            enable_zero_copy_loading=bool(
+                getattr(args, "enable_zero_copy_loading", False)
+            ),
+            enable_non_blocking_transfers=bool(
+                getattr(args, "enable_non_blocking_transfers", False)
+            ),
+            memory_mapping_threshold=int(
+                getattr(args, "memory_mapping_threshold", 10 * 1024 * 1024)
+            ),
         )
 
         # Optional: enable lean attention math from config
@@ -252,6 +264,18 @@ class ModelManager:
             ),
             scale_input_tensor=getattr(args, "scale_input_tensor", None),
             rope_use_float32=bool(getattr(args, "rope_use_float32", False)),
+            enable_memory_mapping=bool(
+                getattr(args, "enable_memory_mapping", False)
+            ),
+            enable_zero_copy_loading=bool(
+                getattr(args, "enable_zero_copy_loading", False)
+            ),
+            enable_non_blocking_transfers=bool(
+                getattr(args, "enable_non_blocking_transfers", False)
+            ),
+            memory_mapping_threshold=int(
+                getattr(args, "memory_mapping_threshold", 10 * 1024 * 1024)
+            ),
         )
 
         # Enable block swap for the temporary high-noise model only when not offloading it

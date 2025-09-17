@@ -1,11 +1,22 @@
 import os
 import re
-import torch
 import json
 import struct
 from typing import Dict, Any, Union, Optional
 
+import numpy as np
+import torch
+
 from memory.safetensors_loader import load_file
+from utils.device_utils import synchronize_device
+
+
+def _normalize_device(device: Optional[Union[str, torch.device]]) -> Optional[torch.device]:
+    if device is None:
+        return None
+    if isinstance(device, str):
+        return torch.device(device)
+    return device
 
 
 def mem_eff_save_file(
@@ -94,7 +105,8 @@ def mem_eff_save_file(
 
 
 class MemoryEfficientSafeOpen:
-    # does not support metadata loading
+    """Lightweight safetensors reader that supports optional zero-copy optimisations."""
+
     def __init__(self, filename):
         self.filename = filename
         self.file = open(filename, "rb")
@@ -112,43 +124,103 @@ class MemoryEfficientSafeOpen:
     def metadata(self) -> Dict[str, str]:
         return self.header.get("__metadata__", {})
 
-    def get_tensor(self, key):
+    def get_tensor(
+        self,
+        key: str,
+        device: Optional[Union[str, torch.device]] = None,
+        dtype: Optional[torch.dtype] = None,
+        *,
+        enable_memory_mapping: bool = False,
+        enable_zero_copy_loading: bool = False,
+        enable_non_blocking_transfers: bool = False,
+        memory_mapping_threshold: int = 10 * 1024 * 1024,
+    ) -> torch.Tensor:
+        """Return a tensor by key using optional acceleration strategies.
+
+        All optimisation flags default to ``False`` so existing behaviour is preserved
+        unless explicitly enabled by configuration.
+        """
+
         if key not in self.header:
             raise KeyError(f"Tensor '{key}' not found in the file")
 
         metadata = self.header[key]
         offset_start, offset_end = metadata["data_offsets"]
+        num_bytes = offset_end - offset_start
 
-        if offset_start == offset_end:
-            tensor_bytes = None
+        normalized_device = _normalize_device(device)
+        original_dtype = self._get_torch_dtype(metadata["dtype"])
+        target_dtype = dtype if dtype is not None else original_dtype
+
+        if num_bytes == 0:
+            return torch.empty(metadata["shape"], dtype=target_dtype, device=normalized_device)
+
+        tensor_offset = self.header_size + 8 + offset_start
+        non_blocking = enable_non_blocking_transfers and normalized_device is not None and normalized_device.type == "cuda"
+
+        if (
+            enable_memory_mapping
+            and num_bytes > memory_mapping_threshold
+            and normalized_device is not None
+            and normalized_device.type != "cpu"
+        ):
+            mm = np.memmap(
+                self.filename,
+                mode="c",
+                dtype=np.uint8,
+                offset=tensor_offset,
+                shape=(num_bytes,),
+            )
+            byte_tensor = torch.from_numpy(mm)
+            del mm
+
+            cpu_tensor = self._deserialize_tensor(byte_tensor, metadata)
+            del byte_tensor
+
+            result = cpu_tensor.to(device=normalized_device, dtype=target_dtype, non_blocking=non_blocking)
+            del cpu_tensor
+            return result
+
+        self.file.seek(tensor_offset)
+
+        if enable_zero_copy_loading:
+            numpy_array = np.fromfile(self.file, dtype=np.uint8, count=num_bytes)
+            byte_tensor = torch.from_numpy(numpy_array)
+            del numpy_array
         else:
-            # adjust offset by header size
-            self.file.seek(self.header_size + 8 + offset_start)
-            tensor_bytes = self.file.read(offset_end - offset_start)
+            tensor_bytes = self.file.read(num_bytes)
+            if tensor_bytes is None:
+                byte_tensor = torch.empty(0, dtype=torch.uint8)
+            else:
+                tensor_bytes = bytearray(tensor_bytes)
+                byte_tensor = torch.frombuffer(tensor_bytes, dtype=torch.uint8)
 
-        return self._deserialize_tensor(tensor_bytes, metadata)
+        tensor = self._deserialize_tensor(byte_tensor, metadata)
+        del byte_tensor
+
+        return tensor.to(device=normalized_device, dtype=target_dtype, non_blocking=non_blocking)
 
     def _read_header(self):
         header_size = struct.unpack("<Q", self.file.read(8))[0]
         header_json = self.file.read(header_size).decode("utf-8")
         return json.loads(header_json), header_size
 
-    def _deserialize_tensor(self, tensor_bytes, metadata):
+    def _deserialize_tensor(self, byte_tensor_or_bytes, metadata):
         dtype = self._get_torch_dtype(metadata["dtype"])
         shape = metadata["shape"]
 
-        if tensor_bytes is None:
+        if isinstance(byte_tensor_or_bytes, torch.Tensor):
+            byte_tensor = byte_tensor_or_bytes
+        elif byte_tensor_or_bytes is None:
             byte_tensor = torch.empty(0, dtype=torch.uint8)
         else:
-            tensor_bytes = bytearray(tensor_bytes)  # make it writable
+            tensor_bytes = bytearray(byte_tensor_or_bytes)
             byte_tensor = torch.frombuffer(tensor_bytes, dtype=torch.uint8)
 
-        # process float8 types
         if metadata["dtype"] in ["F8_E5M2", "F8_E4M3"]:
             return self._convert_float8(byte_tensor, metadata["dtype"], shape)
 
-        # convert to the target dtype and reshape
-        return byte_tensor.view(dtype).reshape(shape)  # type: ignore
+        return byte_tensor.view(dtype).reshape(shape)
 
     @staticmethod
     def _get_torch_dtype(dtype_str):
@@ -188,28 +260,50 @@ class MemoryEfficientSafeOpen:
 
 def load_safetensors(
     path: str,
-    device: Union[str, torch.device],
+    device: Optional[Union[str, torch.device]],
     disable_mmap: bool = False,
     dtype: Optional[torch.dtype] = None,
+    *,
+    enable_memory_mapping: bool = False,
+    enable_zero_copy_loading: bool = False,
+    enable_non_blocking_transfers: bool = False,
+    memory_mapping_threshold: int = 10 * 1024 * 1024,
 ) -> dict[str, torch.Tensor]:
+    normalized_device = _normalize_device(device)
+
     if disable_mmap:
-        # return safetensors.torch.load(open(path, "rb").read())
-        # use experimental loader
-        # logger.info(f"Loading without mmap (experimental)")
         state_dict = {}
         with MemoryEfficientSafeOpen(path) as f:
             for key in f.keys():
-                state_dict[key] = f.get_tensor(key).to(device, dtype=dtype)
+                state_dict[key] = f.get_tensor(
+                    key,
+                    device=normalized_device,
+                    dtype=dtype,
+                    enable_memory_mapping=enable_memory_mapping,
+                    enable_zero_copy_loading=enable_zero_copy_loading,
+                    enable_non_blocking_transfers=enable_non_blocking_transfers,
+                    memory_mapping_threshold=memory_mapping_threshold,
+                )
+        if (
+            enable_non_blocking_transfers
+            and normalized_device is not None
+            and normalized_device.type == "cuda"
+        ):
+            synchronize_device(normalized_device)
         return state_dict
-    else:
-        try:
-            state_dict = load_file(path, device=device)  # type: ignore
-        except:
-            state_dict = load_file(path)  # prevent device invalid Error
-        if dtype is not None:
-            for key in state_dict.keys():
-                state_dict[key] = state_dict[key].to(dtype=dtype)
-        return state_dict
+
+    try:
+        state_dict = load_file(
+            path, device=str(normalized_device) if normalized_device is not None else None
+        )
+    except Exception:
+        state_dict = load_file(path)
+
+    if dtype is not None:
+        for key in state_dict.keys():
+            state_dict[key] = state_dict[key].to(dtype=dtype)
+
+    return state_dict
 
 
 def load_split_weights(
