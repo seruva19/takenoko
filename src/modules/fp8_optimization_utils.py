@@ -28,18 +28,14 @@ def calculate_fp8_maxval(exp_bits=4, mantissa_bits=3, sign_bits=1):
     """
     assert exp_bits + mantissa_bits + sign_bits == 8, "Total bits must be 8"
 
-    # Calculate exponent bias
-    bias = 2 ** (exp_bits - 1) - 1
+    if exp_bits == 4 and mantissa_bits == 3 and sign_bits == 1:
+        return torch.finfo(torch.float8_e4m3fn).max
+    if exp_bits == 5 and mantissa_bits == 2 and sign_bits == 1:
+        return torch.finfo(torch.float8_e5m2).max
 
-    # Calculate maximum mantissa value
-    mantissa_max = 1.0
-    for i in range(mantissa_bits - 1):
-        mantissa_max += 2 ** -(i + 1)
-
-    # Calculate maximum value
-    max_value = mantissa_max * (2 ** (2**exp_bits - 1 - bias))
-
-    return max_value
+    raise ValueError(
+        f"Unsupported FP8 format: E{exp_bits}M{mantissa_bits} with sign_bits={sign_bits}"
+    )
 
 
 def quantize_tensor_to_fp8(
@@ -321,17 +317,31 @@ def load_safetensors_with_fp8_optimization(
                     enable_non_blocking_transfers=enable_non_blocking_transfers,
                     memory_mapping_threshold=memory_mapping_threshold,
                 )
+                original_device_pre_hook = value.device
+                original_dtype_pre_hook = value.dtype
+
                 if weight_hook is not None:
                     # Apply weight hook if provided
-                    value = weight_hook(key, value)
+                    value = weight_hook(
+                        key,
+                        value,
+                        keep_on_calc_device=(calc_device_obj is not None),
+                    )
 
                 if not is_target_key(key):
+                    target_device = (
+                        calc_device_obj
+                        if (calc_device_obj is not None and move_to_device)
+                        else original_device_pre_hook
+                    )
+                    if value.device != target_device:
+                        value = value.to(target_device)
                     state_dict[key] = value
                     continue
 
                 # Save original device and dtype
-                original_device = value.device
-                original_dtype = value.dtype
+                original_device = original_device_pre_hook
+                original_dtype = original_dtype_pre_hook
 
                 # Move to calculation device when we didn't request a direct transfer
                 if direct_transfer_device is None and calc_device_obj is not None:

@@ -138,7 +138,7 @@ def load_safetensors_with_lora_and_fp8(
         )
 
         # make hook for LoRA merging
-        def weight_hook_func(model_weight_key, model_weight):
+        def weight_hook_func(model_weight_key, model_weight, keep_on_calc_device=False):
             nonlocal list_of_lora_weight_keys, lora_weights_list, lora_multipliers, calc_device
 
             if not model_weight_key.endswith(".weight"):
@@ -212,9 +212,12 @@ def load_safetensors_with_lora_and_fp8(
                 if alpha_key in lora_weight_keys:
                     lora_weight_keys.remove(alpha_key)
 
-            model_weight = model_weight.to(
-                original_device, original_dtype
-            )  # move back to original device and dtype
+            if keep_on_calc_device:
+                if model_weight.device != calc_device or model_weight.dtype != original_dtype:
+                    model_weight = model_weight.to(device=calc_device, dtype=original_dtype)
+            else:
+                if model_weight.device != original_device or model_weight.dtype != original_dtype:
+                    model_weight = model_weight.to(device=original_device, dtype=original_dtype)
             return model_weight
 
         weight_hook = weight_hook_func
@@ -327,7 +330,11 @@ def load_safetensors_with_fp8_optimization_and_hook(
                         memory_mapping_threshold=memory_mapping_threshold,
                     )
                     if weight_hook is not None:
-                        value = weight_hook(key, value)
+                        value = weight_hook(
+                            key,
+                            value,
+                            keep_on_calc_device=move_to_device,
+                        )
                     if direct_device is None:
                         if move_to_device:
                             if dit_weight_dtype is None:
