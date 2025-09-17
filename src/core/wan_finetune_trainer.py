@@ -809,6 +809,13 @@ class WanFinetuneTrainer:
         log_regularization_info(train_dataset_group)
         validate_regularization_config(args)
 
+        # Setup and run latent quality analysis if enabled
+        from dataset.latent_quality_analyzer import setup_latent_quality_for_trainer, run_dataset_analysis_for_trainer
+        if setup_latent_quality_for_trainer(args):
+            # Only run initial analysis if TensorBoard logging is disabled
+            if not getattr(args, "latent_quality_tensorboard", True):
+                run_dataset_analysis_for_trainer(args, train_dataset_group)
+
         # Handle validation dataset if available
         val_dataset_group = None
         if (
@@ -1325,6 +1332,10 @@ class WanFinetuneTrainer:
                 }
                 accelerator.log(test_logs, step=global_step)
                 logger.info("✅ TensorBoard logging test successful")
+
+                # Run latent quality analysis with TensorBoard logging
+                from dataset.latent_quality_analyzer import run_tensorboard_analysis_for_trainer
+                run_tensorboard_analysis_for_trainer(args, train_dataset_group, accelerator, global_step)
             except Exception as e:
                 logger.warning(f"⚠️  TensorBoard test logging failed: {e}")
 

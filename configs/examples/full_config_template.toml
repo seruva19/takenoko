@@ -1845,6 +1845,31 @@ val_split_namespaces = true
 # Number of steps to defer bias correction for early readability
 # ema_loss_bias_warmup_steps = 100
 
+# Enable latent quality analysis to check training data characteristics
+# Runs once at startup to analyze cached latents and identify potential issues
+latent_quality_analysis = false
+
+# Threshold for acceptable mean deviation from 0.0 (absolute value)
+# Images with |mean| > threshold will be flagged as potentially problematic
+latent_mean_threshold = 0.16
+
+# Threshold for acceptable standard deviation range around 1.0
+# Valid std range: [1.0/threshold, threshold] - values outside trigger warnings
+latent_std_threshold = 1.35
+
+# Show visual analysis of worst latent using OpenCV (requires opencv-python)
+# Displays red/blue heatmap showing positive/negative latent values
+latent_quality_visualizer = false
+
+# Log latent quality statistics to TensorBoard for monitoring
+# Creates charts showing mean/std distributions and quality analysis results
+latent_quality_tensorboard = true
+
+# Enable video-specific temporal analysis (for video training datasets)
+# Analyzes temporal consistency, scene transitions, and motion patterns
+# Provides video-specific quality metrics beyond basic mean/std analysis
+latent_quality_video_analysis = true
+
 # =============================================================================
 # TIMESTEP DISTRIBUTION LOGGING
 # =============================================================================

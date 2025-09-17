@@ -753,9 +753,7 @@ class CheckpointManager:
                 if hasattr(model, "state_dict"):
                     try:
                         state_keys = list(model.state_dict().keys())
-                        logger.info(f"Contains {len(state_keys)} state keys 👇")
-                        if len(state_keys) > 0:
-                            logger.info(f"Sample keys: {state_keys[:3]}")
+                        logger.info(f"Contains {len(state_keys)} state keys")
 
                         # Log control LoRA specific information for network models
                         if hasattr(model, "control_config"):

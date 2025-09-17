@@ -483,6 +483,14 @@ def create_args_from_config(
     args.initial_epoch = config.get("initial_epoch")
     args.skip_until_initial_step = config.get("skip_until_initial_step", False)
 
+    # Latent quality analysis
+    args.latent_quality_analysis = config.get("latent_quality_analysis", False)
+    args.latent_mean_threshold = config.get("latent_mean_threshold", 0.16)
+    args.latent_std_threshold = config.get("latent_std_threshold", 1.35)
+    args.latent_quality_visualizer = config.get("latent_quality_visualizer", False)
+    args.latent_quality_tensorboard = config.get("latent_quality_tensorboard", True)
+    args.latent_quality_video_analysis = config.get("latent_quality_video_analysis", True)
+
     args.save_every_n_epochs = config.get("save_every_n_epochs", None)
     args.save_every_n_steps = config.get("save_every_n_steps", 1000)
     args.save_last_n_epochs = config.get("save_last_n_epochs", None)

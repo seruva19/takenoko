@@ -37,7 +37,7 @@ class SafeMemoryManager:
             logger.info("Safe memory optimization disabled - all sub-features disabled")
         else:
             logger.info(
-                f"🧠✅ Safe memory optimization enabled — loading: {self.optimized_loading_enabled}, monitoring: {self.memory_monitoring_enabled}"
+                f"🧠 Safe memory optimization enabled — loading: {self.optimized_loading_enabled}, monitoring: {self.memory_monitoring_enabled}"
             )
 
         self._step_counter = 0

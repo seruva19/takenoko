@@ -78,3 +78,4 @@ Keep in mind that work on some features is not yet complete due to time and hard
 | [attention-map-diffusers](https://github.com/wooyeolbaek/attention-map-diffusers) | repo | - Cross-attention map visualization | [wooyeolbaek](https://github.com/wooyeolbaek) | MIT |  |
 | [musubi-tuner (fork)](https://github.com/betterftr/musubi-tuner) | repo | - Full model fine-tuning | [betterftr](https://github.com/betterftr) | Apache 2.0 | |
 | [stochastic_round_cuda](https://github.com/ethansmith2000/stochastic_round_cuda) | repo | - Stochastic rounding CUDA implementation | [ethansmith2000](https://github.com/ethansmith2000) | MIT | |
+| [musubi-tuner (pr)](https://github.com/kohya-ss/sd-scripts/pull/2010) | repo | - Latent quality analysis | [araleza](https://github.com/araleza) | Apache 2.0 | |

@@ -1253,6 +1253,7 @@ class TrainingCore:
                         training_model,
                     )
 
+
                     # to avoid calling optimizer_eval_fn() too frequently, we call it only when we need to sample images, validate, or save the model
                     should_sampling = should_sample_images(
                         args, global_step, epoch=epoch + 1

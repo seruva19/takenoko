@@ -448,6 +448,13 @@ class WanNetworkTrainer:
         except Exception as _sc_wrap_err:
             logger.warning(f"Self-correction hybrid setup skipped: {_sc_wrap_err}")
 
+        # Setup latent quality analysis if enabled (actual analysis runs later with TensorBoard or here if TB disabled)
+        from dataset.latent_quality_analyzer import setup_latent_quality_for_trainer, run_dataset_analysis_for_trainer
+        if setup_latent_quality_for_trainer(args):
+            # Only run initial analysis if TensorBoard logging is disabled
+            if not getattr(args, "latent_quality_tensorboard", True):
+                run_dataset_analysis_for_trainer(args, train_dataset_group)
+
         current_epoch = Value("i", 0)
         current_step = Value("i", 0)
         ds_for_collator = (
@@ -881,6 +888,15 @@ class WanNetworkTrainer:
                 )
                 pass
 
+            # Run latent quality analysis with TensorBoard logging after trackers are ready
+            try:
+                from dataset.latent_quality_analyzer import run_tensorboard_analysis_for_trainer
+                run_tensorboard_analysis_for_trainer(args, train_dataset_group, accelerator, 0)
+            except Exception as e:
+                logger.warning(f"❌ Latent quality TensorBoard integration failed: {e}")
+                import traceback
+                logger.debug(f"Full traceback: {traceback.format_exc()}")
+
         # ========== Training Loop Setup ==========
         global_step = restored_step if restored_step is not None else 0
         # Customize tqdm bar format when enhanced progress bar is enabled to avoid
@@ -992,11 +1008,11 @@ class WanNetworkTrainer:
                 except Exception:
                     pass
                 accelerator.log({}, step=0)
+
             except Exception as e:
                 logger.error(f"💥 Accelerator logging failed: {e}")
                 raise
 
-        # ========== Main Training Loop ==========
         logger.info(f"DiT dtype: {transformer.dtype}, device: {transformer.device}")
         clean_memory_on_device(accelerator.device)
 
@@ -1149,8 +1165,6 @@ class WanNetworkTrainer:
                 dual_model_manager=dual_model_manager,
             )
 
-        # ========== Training Completion ==========
-        # Clean up REPA hooks
         if "repa_helper" in locals() and repa_helper is not None:
             repa_helper.remove_hooks()
 
