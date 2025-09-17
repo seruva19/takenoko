@@ -76,6 +76,82 @@ class CheckpointUtils:
             return None
 
     @staticmethod
+    def prepare_enhanced_resume(
+        args: argparse.Namespace,
+        train_dataloader_length: int,
+        num_processes: int,
+        gradient_accumulation_steps: int = 1
+    ) -> tuple[int, int, bool, Optional[int]]:
+        """
+        Prepare enhanced resume functionality with backward compatibility.
+
+        Returns:
+            (initial_step, epoch_to_start, should_skip_data, steps_from_state)
+        """
+        from utils.train_state_utils import TrainStateManager
+
+        # Get loaded train state from checkpoint hooks (if any)
+        loaded_train_state = getattr(args, '_loaded_train_state', None)
+        steps_from_state = loaded_train_state.get('current_step') if loaded_train_state else None
+
+        # Calculate initial step and epoch using enhanced logic
+        initial_step, epoch_to_start = TrainStateManager.calculate_initial_step(
+            args,
+            train_dataloader_length,
+            num_processes,
+            gradient_accumulation_steps,
+            steps_from_state
+        )
+
+        # Determine if we should skip data or just adjust counters
+        should_skip_data = getattr(args, 'skip_until_initial_step', False)
+
+        if initial_step > 0:
+            logger.info(f"🔄 Enhanced resume: Starting from step {initial_step}")
+            if should_skip_data:
+                logger.info("📊 Will use accelerator.skip_first_batches for data skipping")
+            else:
+                logger.info("📊 Will fast-forward step counters without data skipping")
+
+            if getattr(args, 'initial_step', None) is not None or getattr(args, 'initial_epoch', None) is not None:
+                if steps_from_state is not None:
+                    logger.warning("Steps from train_state.json ignored because initial_step/initial_epoch specified")
+
+        return initial_step, epoch_to_start, should_skip_data, steps_from_state
+
+    @staticmethod
+    def create_enhanced_training_loop_wrapper(
+        original_dataloader,
+        accelerator: Accelerator,
+        initial_step: int,
+        should_skip_data: bool,
+        gradient_accumulation_steps: int = 1
+    ):
+        """
+        Create a wrapper for the training dataloader that handles enhanced resume.
+        Works with existing training loops without major modifications.
+        """
+        if initial_step <= 0 or not should_skip_data:
+            return original_dataloader, 0
+
+        # Calculate batches to skip
+        batches_to_skip = initial_step * gradient_accumulation_steps
+        logger.info(f"⏭️  Skipping {batches_to_skip} batches for enhanced resume")
+
+        # Use accelerator's built-in skip functionality
+        wrapped_dataloader = accelerator.skip_first_batches(original_dataloader, batches_to_skip)
+        return wrapped_dataloader, initial_step
+
+    @staticmethod
+    def update_training_state_for_saving(args: argparse.Namespace, current_epoch: int, current_step: int) -> None:
+        """
+        Update training state in args for checkpoint saving hooks.
+        This ensures train_state.json gets saved with correct values.
+        """
+        setattr(args, '_current_epoch', current_epoch)
+        setattr(args, '_current_step', current_step)
+
+    @staticmethod
     def resume_from_local_if_specified(
         accelerator: Accelerator, args: argparse.Namespace
     ) -> Optional[int]:
@@ -756,6 +832,8 @@ class CheckpointUtils:
         Create save hook for full fine-tuning.
         For full fine-tuning, we want to save the complete model state.
         """
+        # Import here to avoid circular imports
+        from utils.train_state_utils import TrainStateManager
 
         def save_model_hook(models, weights, output_dir):
             """Save hook for full fine-tuning - saves all model states."""
@@ -784,6 +862,14 @@ class CheckpointUtils:
                 json.dump(finetune_metadata, f, indent=2)
 
             logger.info(f"💾 Saved fine-tuning metadata to: {finetune_metadata_path}")
+
+            # Save current epoch and step for enhanced resume functionality
+            # These values come from the trainer's current state
+            current_epoch = getattr(args, '_current_epoch', 0)
+            current_step = getattr(args, '_current_step', 0)
+
+            TrainStateManager.save_train_state(output_dir, current_epoch, current_step)
+
             # No model filtering - keep all models for full fine-tuning
 
         return save_model_hook
@@ -797,6 +883,8 @@ class CheckpointUtils:
         Create load hook for full fine-tuning.
         For full fine-tuning, we want to load the complete model state.
         """
+        # Import here to avoid circular imports
+        from utils.train_state_utils import TrainStateManager
 
         def load_model_hook(models, input_dir):
             """Load hook for full fine-tuning - loads all model states."""
@@ -824,6 +912,15 @@ class CheckpointUtils:
                     )
                 except Exception as e:
                     logger.warning(f"⚠️ Failed to load fine-tuning metadata: {e}")
+
+            # Load train state for enhanced resume functionality
+            train_state = TrainStateManager.load_train_state(input_dir)
+            if train_state:
+                # Store the loaded state in args for the trainer to use
+                setattr(args, '_loaded_train_state', train_state)
+                logger.info(f"📊 Loaded train state: epoch {train_state['current_epoch']}, step {train_state['current_step']}")
+            else:
+                logger.info("📊 No train state found, will use standard resume logic")
 
             # For full fine-tuning, we keep all models
             # No model filtering - load everything for complete state restoration

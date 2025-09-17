@@ -754,7 +754,8 @@ class ImageDataset(BaseDataset):
                     )
                     if image_path and os.path.exists(image_path):
                         # Load and resize image
-                        image = Image.open(image_path).convert("RGB")
+                        with Image.open(image_path) as img:
+                            image = img.convert("RGB")
                         content = resize_image_to_bucket(
                             image, bucket_reso
                         )  # returns np.ndarray

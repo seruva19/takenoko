@@ -1279,6 +1279,26 @@ class WanFinetuneTrainer:
                 starting_epoch = 0
                 starting_global_step = 0
 
+        # Enhanced resume functionality - backward compatible with existing logic
+        enhanced_initial_step, enhanced_epoch_to_start, should_skip_data, _ = CheckpointUtils.prepare_enhanced_resume(
+            args,
+            len(train_dataloader),
+            accelerator.num_processes,
+            getattr(args, 'gradient_accumulation_steps', 1)
+        )
+
+        # Override starting values if enhanced resume is active (while preserving existing checkpoint logic)
+        if enhanced_initial_step > 0:
+            # Validate max_train_steps
+            if getattr(args, 'max_train_steps', 0) <= enhanced_initial_step:
+                logger.error(f"❌ max_train_steps ({args.max_train_steps}) must be greater than initial_step ({enhanced_initial_step})")
+                return
+
+            # Use enhanced resume values (overrides existing checkpoint resume)
+            starting_epoch = enhanced_epoch_to_start
+            starting_global_step = enhanced_initial_step
+            logger.info(f"🔄 Enhanced resume overriding checkpoint resume: epoch={starting_epoch}, step={starting_global_step}")
+
         # Main training loop
         logger.info("🚀 Starting WAN full fine-tuning...")
 
@@ -1344,11 +1364,23 @@ class WanFinetuneTrainer:
         # Final debug before entering training loops
         NetworkLoggingUtils.log_training_loop_entry(starting_epoch, max_epochs)
 
+        # Handle enhanced resume dataloader wrapping (minimal integration)
+        active_dataloader, skipped_steps = CheckpointUtils.create_enhanced_training_loop_wrapper(
+            train_dataloader,
+            accelerator,
+            enhanced_initial_step,
+            should_skip_data,
+            getattr(args, 'gradient_accumulation_steps', 1)
+        )
+
         for epoch in range(starting_epoch, max_epochs):
             logger.info(f"🔄 Starting epoch {epoch + 1}/{max_epochs}")
             training_model.train()
 
-            for step, batch in enumerate(train_dataloader):
+            # Update training state for checkpoint saving
+            CheckpointUtils.update_training_state_for_saving(args, epoch + 1, global_step)
+
+            for step, batch in enumerate(active_dataloader):
                 # Initialize timestep distribution and logging (using centralized utility)
                 if not self._timestep_logging_initialized:
                     TimestepDistributionLogger.initialize_and_log_timestep_distribution(
@@ -1484,6 +1516,9 @@ class WanFinetuneTrainer:
                     progress_bar.set_postfix(postfix_data)
 
                     global_step += 1
+
+                    # Update training state for checkpoint saving
+                    CheckpointUtils.update_training_state_for_saving(args, epoch + 1, global_step)
 
                     # Weight dynamics analysis at configurable intervals
                     if analysis_frequency > 0 and global_step % analysis_frequency == 0:

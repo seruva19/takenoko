@@ -906,7 +906,8 @@ class SamplingManager:
                 import torchvision.transforms.functional as TF
 
                 # Fallback to using first frame repeated
-                img = Image.open(control_path).convert("RGB")
+                with Image.open(control_path) as img:
+                    img = img.convert("RGB")
                 control_pixels = (
                     TF.to_tensor(img).unsqueeze(0).unsqueeze(0)
                 )  # CHW -> BFCHW
@@ -945,7 +946,8 @@ class SamplingManager:
                     )
 
                 logger.info(f"Loading control image from: {control_path}")
-                img = Image.open(control_path).convert("RGB")
+                with Image.open(control_path) as img:
+                    img = img.convert("RGB")
                 control_pixels = (
                     TF.to_tensor(img).unsqueeze(0).unsqueeze(0)
                 )  # CHW -> BFCHW

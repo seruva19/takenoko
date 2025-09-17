@@ -1635,6 +1635,19 @@ auto_resume = true
 # saved state to resume training
 # resume = "path/to/resume/state"
 
+# Resume from a specific step number (overrides initial_epoch and train_state.json)
+# Useful for restarting training from an exact point across all epochs
+# initial_step = 1000
+
+# Resume from a specific epoch number (ignored if initial_step is set)
+# Note: lr scheduler starts from step 0 unless --resume is also used
+# initial_epoch = 5
+
+# Skip data loading until reaching the initial step (default: false)
+# When true: Uses accelerator.skip_first_batches for proper data ordering
+# When false: Fast-forwards step counters without data skipping (faster but different data order)
+# skip_until_initial_step = false
+
 # fp16 training including gradients (temporary disabled)
 # full_fp16 = false 
 

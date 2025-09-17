@@ -477,6 +477,12 @@ def create_args_from_config(
     args.resume = config.get("resume")
 
     args.auto_resume = config.get("auto_resume", True)
+
+    # Enhanced resume functionality
+    args.initial_step = config.get("initial_step")
+    args.initial_epoch = config.get("initial_epoch")
+    args.skip_until_initial_step = config.get("skip_until_initial_step", False)
+
     args.save_every_n_epochs = config.get("save_every_n_epochs", None)
     args.save_every_n_steps = config.get("save_every_n_steps", 1000)
     args.save_last_n_epochs = config.get("save_last_n_epochs", None)

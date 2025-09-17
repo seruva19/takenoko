@@ -226,7 +226,8 @@ def load_video(
                     break
 
                 image_file = image_files[i]
-                image = Image.open(image_file).convert("RGB")
+                with Image.open(image_file) as img:
+                    image = img.convert("RGB")
 
                 if bucket_selector is not None and bucket_reso is None:
                     bucket_reso = bucket_selector.get_bucket_resolution(
@@ -296,7 +297,8 @@ def load_video(
                     break
 
                 image_file = image_files[i]
-                image = Image.open(image_file).convert("RGB")
+                with Image.open(image_file) as img:
+                    image = img.convert("RGB")
 
                 if bucket_selector is not None and bucket_reso is None:
                     bucket_reso = bucket_selector.get_bucket_resolution(

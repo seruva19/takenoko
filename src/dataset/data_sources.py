@@ -117,7 +117,8 @@ class ImageDirectoryDatasource(ImageDatasource):
         self, idx: int
     ) -> tuple[str, Image.Image, str, Optional[Image.Image], Optional[Image.Image]]:
         image_path = self.image_paths[idx]
-        image = Image.open(image_path).convert("RGB")
+        with Image.open(image_path) as img:
+            image = img.convert("RGB")
 
         _, caption = self.get_caption(idx)
 
@@ -127,7 +128,8 @@ class ImageDirectoryDatasource(ImageDatasource):
             control_path = self._get_control_path(image_path)
             if os.path.exists(control_path):
                 try:
-                    control_image = Image.open(control_path).convert("RGB")
+                    with Image.open(control_path) as img:
+                        control_image = img.convert("RGB")
                     logger.debug(f"Loaded control image: {control_path}")
                 except Exception as e:
                     logger.warning(f"Failed to load control image {control_path}: {e}")
@@ -140,9 +142,8 @@ class ImageDirectoryDatasource(ImageDatasource):
             mask_path = self._get_mask_path(image_path)
             if os.path.exists(mask_path):
                 try:
-                    mask_image = Image.open(mask_path).convert(
-                        "L"
-                    )  # Convert to grayscale
+                    with Image.open(mask_path) as img:
+                        mask_image = img.convert("L")  # Convert to grayscale
                     logger.debug(f"Loaded mask image: {mask_path}")
                 except Exception as e:
                     logger.warning(f"Failed to load mask image {mask_path}: {e}")
