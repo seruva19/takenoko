@@ -110,6 +110,30 @@ class BucketBatchManager:
 
         logger.info(f"total batches: {len(self)}")
 
+        # Warn of any particularly small buckets compared to the current batch size
+        already_warned_underfilled_bucket = False
+        for bucket_reso in self.bucket_resos:
+            bucket = self.buckets[bucket_reso]
+            if len(bucket) < (self.batch_size / 2):
+
+                if not already_warned_underfilled_bucket:
+                    logger.warning(f"These buckets have too few entries to even half fill the batch_size:")
+                    already_warned_underfilled_bucket = True
+
+                # Get sample filename from the first item in the bucket
+                if len(bucket) > 0:
+                    item_info = bucket[0]
+                    # Use item_key which works for both images and videos
+                    sample_filename = item_info.item_key
+
+                    display_filename_len = 55
+                    if sample_filename and len(sample_filename) > display_filename_len:
+                        sample_filename = f"...{sample_filename[-(display_filename_len - 3):]}"
+
+                    logger.warning(f"  bucket {bucket_reso}: {len(bucket)} items (example: {sample_filename})")
+                else:
+                    logger.warning(f"  bucket {bucket_reso}: {len(bucket)} items (empty bucket)")
+
     def shuffle(self):
         # shuffle each bucket
         for bucket in self.buckets.values():
