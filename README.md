@@ -70,6 +70,7 @@ Keep in mind that work on some features is not yet complete due to time and hard
 | [Context as Memory: Scene-Consistent Interactive Long Video Generation with Memory Retrieval](https://arxiv.org/abs/2506.03141) | paper | - Context-as-Memory integration | Jiwen Yu, Jianhong Bai, Yiran Qin, Quande Liu, Xintao Wang, Pengfei Wan, Di Zhang, Xihui Liu | CC BY 4.0 | |
 | [SingLoRA](https://github.com/kyegomez/SingLoRA) | repo | - SingLoRA implementation | [kyegomez](https://github.com/kyegomez) | MIT | <sub>see also [paper](https://arxiv.org/abs/2507.05566)</sub> |
 | [PEFT-SingLoRA](https://github.com/bghira/PEFT-SingLoRA) | repo | - Enhanced non-square matrix handling | [bghira](https://github.com/bghira) | BSD 2-clause |  |
+| [musubi-tuner (pr)](https://github.com/kohya-ss/sd-scripts/pull/2010) | repo | - Latent quality analysis | [araleza](https://github.com/araleza) | Apache 2.0 | |
 | [Contrastive Flow Matching](https://arxiv.org/abs/2506.05350v1) | paper | - Contrastive loss | George Stoica, Vivek Ramanujan, Xiang Fan, Ali Farhadi, Ranjay Krishna, Judy Hoffman | CC BY 4.0 | |
 | [DeltaFM](https://github.com/gstoica27/DeltaFM) | repo | - Contrastive Flow Matching implementation (class-conditioned sampling, unconditional handling) | [gstoica27](https://github.com/gstoica27) | MIT | <sub>official implementation of CFM paper</sub> |
 | [OneTrainer](https://github.com/Nerogar/OneTrainer) | repo | - Masked training (prior preservation, unmasked weight, random mask removal) | [Nerogar](https://github.com/Nerogar) | AGPL-3.0 | |
@@ -78,4 +79,5 @@ Keep in mind that work on some features is not yet complete due to time and hard
 | [attention-map-diffusers](https://github.com/wooyeolbaek/attention-map-diffusers) | repo | - Cross-attention map visualization | [wooyeolbaek](https://github.com/wooyeolbaek) | MIT |  |
 | [musubi-tuner (fork)](https://github.com/betterftr/musubi-tuner) | repo | - Full model fine-tuning | [betterftr](https://github.com/betterftr) | Apache 2.0 | |
 | [stochastic_round_cuda](https://github.com/ethansmith2000/stochastic_round_cuda) | repo | - Stochastic rounding CUDA implementation | [ethansmith2000](https://github.com/ethansmith2000) | MIT | |
-| [musubi-tuner (pr)](https://github.com/kohya-ss/sd-scripts/pull/2010) | repo | - Latent quality analysis | [araleza](https://github.com/araleza) | Apache 2.0 | |
+| [simplevae](https://huggingface.co/AiArtLab/simplevae) | repo | - VAE training enhancements | [AiArtLab](https://huggingface.co/AiArtLab) |  | |
+

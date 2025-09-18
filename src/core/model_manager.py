@@ -17,6 +17,7 @@ import utils.fluxflow_augmentation as fluxflow_augmentation
 import logging
 from common.logger import get_logger
 from utils import model_utils
+from utils.train_utils import config_key_provided
 from common.model_downloader import download_model_if_needed
 from wan.configs.config import WAN_CONFIGS
 from wan.modules.model import WanModel, detect_wan_sd_dtype, load_wan_model
@@ -399,6 +400,20 @@ class ModelManager:
 
             # Parse VAE-specific arguments
             vae_training_mode = getattr(args, "vae_training_mode", "full")
+
+            if vae_training_mode == "decoder_only":
+                if not config_key_provided(args, "vae_decoder_latent_mean"):
+                    if not getattr(args, "vae_decoder_latent_mean", True):
+                        logger.info(
+                            "Decoder-only mode detected – enabling latent-mean decoding by default."
+                        )
+                        args.vae_decoder_latent_mean = True
+                if not config_key_provided(args, "vae_kl_weight"):
+                    if float(getattr(args, "vae_kl_weight", 1e-6)) != 0.0:
+                        logger.info(
+                            "Decoder-only mode detected – setting KL weight to 0.0."
+                        )
+                        args.vae_kl_weight = 0.0
 
             # Import VAE network module
             import networks.vae_wan as vae_network_module

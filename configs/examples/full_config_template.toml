@@ -1949,6 +1949,27 @@ vae_kl_weight = 1e-6
 # Reconstruction loss type: "mse", "l1", "huber"
 vae_reconstruction_loss = "mse"
 
+# Loss weights default to classic behaviour (MSE + KL). Increase others to blend terms.
+vae_mse_weight = 1.0
+
+# Mean absolute error (L1) reconstruction weight for sharper details.
+vae_mae_weight = 0.0
+
+# Learned perceptual metric weight. Requires `pip install lpips` and adds VRAM overhead.
+vae_lpips_weight = 0.0
+
+# Sobel edge consistency weight to encourage crisp edges.
+vae_edge_weight = 0.0
+
+# Rolling window (in steps) for the optional median loss balancer. 0 disables balancing.
+vae_loss_balancer_window = 0
+
+# Percentile used for robust median estimates when balancing (0-100].
+vae_loss_balancer_percentile = 95
+
+# Use latent mean instead of sampling in decoder-only mode (disables KL term by default).
+vae_decoder_latent_mean = true
+
 # =============================================================================
 # ⚠️ ONLINE SELF-CORRECTION SETTINGS
 # =============================================================================

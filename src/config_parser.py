@@ -227,6 +227,26 @@ def create_args_from_config(
     args.gradient_accumulation_steps = config.get("gradient_accumulation_steps", 1)
     args.mixed_precision = config.get("mixed_precision", "no")
 
+    # VAE training knobs (defaults preserve legacy behaviour)
+    args.vae_training_mode = str(config.get("vae_training_mode", "full"))
+    args.vae_kl_weight = float(config.get("vae_kl_weight", 1e-6))
+    args.vae_reconstruction_loss = str(
+        config.get("vae_reconstruction_loss", "mse")
+    )
+    args.vae_mse_weight = float(config.get("vae_mse_weight", 1.0))
+    args.vae_mae_weight = float(config.get("vae_mae_weight", 0.0))
+    args.vae_lpips_weight = float(config.get("vae_lpips_weight", 0.0))
+    args.vae_edge_weight = float(config.get("vae_edge_weight", 0.0))
+    args.vae_loss_balancer_window = int(config.get("vae_loss_balancer_window", 0))
+    args.vae_loss_balancer_percentile = int(
+        config.get("vae_loss_balancer_percentile", 95)
+    )
+
+    _decoder_mean_default = args.vae_training_mode == "decoder_only"
+    args.vae_decoder_latent_mean = bool(
+        config.get("vae_decoder_latent_mean", _decoder_mean_default)
+    )
+
     # Stochastic rounding for BF16 training stability
     args.use_stochastic_rounding = config.get("use_stochastic_rounding", True)
     args.use_stochastic_rounding_cuda = config.get(

@@ -12,7 +12,8 @@ import math
 import re
 import time
 import json
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
+from functools import lru_cache
 import accelerate
 from packaging.version import Version
 
@@ -105,6 +106,24 @@ def get_sanitized_config_or_none(args: argparse.Namespace):
                 filtered_args[k] = f"{v}"
 
     return filtered_args
+
+
+@lru_cache(maxsize=8)
+def _parsed_config_content(content: str | None) -> Dict[str, Any]:
+    if not content:
+        return {}
+    try:
+        return toml.loads(content)
+    except Exception:
+        return {}
+
+
+def config_key_provided(args: argparse.Namespace, key: str) -> bool:
+    """Check if a top-level config key was explicitly set in the TOML file."""
+
+    content = getattr(args, "config_content", None)
+    config_dict = _parsed_config_content(content)
+    return key in config_dict
 
 
 class LossRecorder:

@@ -6,6 +6,7 @@ and provide helpful warnings/recommendations to users.
 """
 
 import argparse
+import importlib.util
 import logging
 from typing import Dict, Any
 from common.logger import get_logger
@@ -121,6 +122,44 @@ def validate_stochastic_rounding(args: argparse.Namespace) -> None:
         logger.info("   ✅ Improved convergence for large models")
 
 
+def validate_vae_loss_settings(args: argparse.Namespace) -> None:
+    """Validate VAE loss mixing parameters and optional dependencies."""
+
+    if getattr(args, "network_module", "") != "networks.vae_wan":
+        return
+
+    weights = {
+        "vae_mse_weight": float(getattr(args, "vae_mse_weight", 1.0)),
+        "vae_mae_weight": float(getattr(args, "vae_mae_weight", 0.0)),
+        "vae_lpips_weight": float(getattr(args, "vae_lpips_weight", 0.0)),
+        "vae_edge_weight": float(getattr(args, "vae_edge_weight", 0.0)),
+        "vae_kl_weight": float(getattr(args, "vae_kl_weight", 1e-6)),
+    }
+
+    for key, value in weights.items():
+        if value < 0:
+            raise ValueError(f"{key} must be non-negative (got {value})")
+
+    window = int(getattr(args, "vae_loss_balancer_window", 0))
+    if window < 0:
+        raise ValueError(
+            f"vae_loss_balancer_window must be >= 0 (got {window})"
+        )
+
+    percentile = float(getattr(args, "vae_loss_balancer_percentile", 95))
+    if not (0 < percentile <= 100):
+        raise ValueError(
+            "vae_loss_balancer_percentile must be within (0, 100]"
+        )
+
+    if weights["vae_lpips_weight"] > 0.0:
+        if importlib.util.find_spec("lpips") is None:
+            logger.warning(
+                "LPIPS weighting is enabled but the 'lpips' package could not be found. "
+                "Install it with 'pip install lpips' or set vae_lpips_weight = 0."
+            )
+
+
 def validate_training_config(args: argparse.Namespace) -> None:
     """
     Run all training configuration validations.
@@ -131,6 +170,7 @@ def validate_training_config(args: argparse.Namespace) -> None:
     validate_full_finetune_precision(args)
     validate_memory_settings(args)
     validate_stochastic_rounding(args)
+    validate_vae_loss_settings(args)
 
 
 def validate_model_compatibility(args: argparse.Namespace) -> None:

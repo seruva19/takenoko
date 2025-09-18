@@ -18,6 +18,27 @@ def get_default_metric_descriptions() -> Dict[str, str]:
     register_metric_descriptions_non_intrusive.
     """
     return {
+        # VAE loss tracking
+        "vae/loss/total": "Total VAE training loss after combining all weighted components (lower is better).",
+        "vae/loss/average": "Moving average of the VAE training loss (lower is better).",
+        "vae/loss/mse": "Mean-squared reconstruction loss term for VAE training (lower is better).",
+        "vae/loss/mae": "Mean-absolute reconstruction loss term for VAE training (lower is better).",
+        "vae/loss/lpips": "Perceptual LPIPS reconstruction loss for VAE training (lower is better).",
+        "vae/loss/edge": "Sobel edge consistency loss for VAE training (lower is better).",
+        "vae/loss/kl": "KL divergence term during VAE training (lower is better).",
+        "vae/loss/coeff_mse": "Current balancing coefficient applied to the VAE MSE loss (informational).",
+        "vae/loss/coeff_mae": "Current balancing coefficient applied to the VAE MAE loss (informational).",
+        "vae/loss/coeff_lpips": "Current balancing coefficient applied to the VAE LPIPS loss (informational).",
+        "vae/loss/coeff_edge": "Current balancing coefficient applied to the VAE edge loss (informational).",
+        "vae/loss/coeff_kl": "Current balancing coefficient applied to the VAE KL loss (informational).",
+        "vae/loss/median_mse": "Rolling median magnitude of the VAE MSE loss before balancing (informational).",
+        "vae/loss/median_mae": "Rolling median magnitude of the VAE MAE loss before balancing (informational).",
+        "vae/loss/median_lpips": "Rolling median magnitude of the VAE LPIPS loss before balancing (informational).",
+        "vae/loss/median_edge": "Rolling median magnitude of the VAE edge loss before balancing (informational).",
+        "vae/loss/median_kl": "Rolling median magnitude of the VAE KL loss before balancing (informational).",
+        "vae/val_loss": "Validation reconstruction loss for the VAE (lower is better).",
+        "vae/sample_saved": "Indicator metric marking that VAE samples were saved this step (informational).",
+        "vae/sample_lpips": "LPIPS distance between saved VAE samples and reconstructions (lower is better).",
         # Basic loss metrics
         "loss/current": "Current step training loss (lower is better).",
         "loss/average": "Moving average of training loss (lower is better).",
