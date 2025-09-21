@@ -276,6 +276,30 @@ def create_args_from_config(
     args.network_alpha = config.get("network_alpha", 32)
     args.network_weights = config.get("network_weights")
     args.network_dropout = config.get("network_dropout", 0)
+
+    # Slider training configuration (detected by network_module)
+    args.slider_guidance_strength = config.get("slider_guidance_strength", 3.0)
+    args.slider_anchor_strength = config.get("slider_anchor_strength", 1.0)
+
+    # Advanced guidance parameters
+    args.slider_guidance_scale = config.get("slider_guidance_scale", 1.0)
+    args.slider_guidance_embedding_scale = config.get("slider_guidance_embedding_scale", 1.0)
+    args.slider_target_guidance_scale = config.get("slider_target_guidance_scale", 1.0)
+
+    # Prompt configuration
+    args.slider_positive_prompt = config.get("slider_positive_prompt", "")
+    args.slider_negative_prompt = config.get("slider_negative_prompt", "")
+    args.slider_target_class = config.get("slider_target_class", "")
+    args.slider_anchor_class = config.get("slider_anchor_class", None)
+
+    # Training parameters
+    args.slider_learning_rate_multiplier = config.get("slider_learning_rate_multiplier", 1.0)
+    args.slider_cache_embeddings = config.get("slider_cache_embeddings", True)
+
+    # T5 text encoder settings (follows Takenoko's pattern)
+    args.slider_t5_device = config.get("slider_t5_device", "cpu")
+    args.slider_cache_on_init = config.get("slider_t5_cache_on_init", True)
+
     # Normalize network_args to a list of strings
     raw_net_args = config.get("network_args", [])
     if isinstance(raw_net_args, str):

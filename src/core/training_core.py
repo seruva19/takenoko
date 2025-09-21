@@ -19,6 +19,9 @@ logger = get_logger(__name__, level=logging.INFO)
 from enhancements.temporal_consistency.training_integration import (
     enhance_loss_with_temporal_consistency,
 )
+
+# Slider training integration (clean interface)
+from enhancements.slider.slider_integration import compute_slider_loss_if_enabled
 import utils.fluxflow_augmentation as fluxflow_augmentation
 from scheduling.fvdm_manager import create_fvdm_manager
 
@@ -113,6 +116,7 @@ class TrainingCore:
         # EMA loss tracking for smoother TensorBoard visualization
         self.ema_loss: Optional[float] = None
         self.ema_beta: float = 0.98  # Smoothing factor (0.9-0.99 are good choices)
+
         self.ema_step_count: int = 0
         self.ema_bias_warmup_steps: int = (
             100  # defer bias correction for early readability
@@ -182,8 +186,7 @@ class TrainingCore:
         """Initialize adaptive timestep sampling and FVDM manager."""
         self.adaptive_manager = _initialize_adaptive_timestep_sampling(args)
 
-        # Initialize unified FVDM manager (handles all FVDM functionality)
-        # Note: Device will be properly set when accelerator is available
+        # Initialize FVDM manager after adaptive manager is available
         self.fvdm_manager = create_fvdm_manager(
             args,
             device=torch.device("cpu"),  # Temporary device, will be updated
@@ -198,6 +201,7 @@ class TrainingCore:
         ):
             if hasattr(self.timestep_distribution, "set_adaptive_manager"):
                 self.timestep_distribution.set_adaptive_manager(self.adaptive_manager)
+
 
     def initialize_temporal_consistency_enhancement(
         self, args: argparse.Namespace
@@ -956,23 +960,25 @@ class TrainingCore:
                             logger.debug(f"⚠️  Failed to compute per-source losses: {e}")
                             per_source_losses = {}
 
-                    # Centralized training loss computation (includes DOP/REPA/Dispersive/OpticalFlow)
-                    loss_components = self.loss_computer.compute_training_loss(
+                    # Centralized training loss computation (includes DOP/REPA/Dispersive/OpticalFlow/Slider)
+                    loss_components = compute_slider_loss_if_enabled(
+                        loss_computer=self.loss_computer,
+                        transformer=active_transformer,
+                        network=network,
+                        noisy_latents=noisy_model_input,
+                        timesteps=timesteps,
+                        batch=batch,
+                        noise=noise,
+                        noise_scheduler=noise_scheduler,
                         args=args,
                         accelerator=accelerator,
                         latents=latents,
-                        noise=noise,
-                        noisy_model_input=noisy_model_input,
-                        timesteps=timesteps,
                         network_dtype=network_dtype,
                         model_pred=model_pred,
                         target=target,
                         weighting=weighting,
-                        batch=batch,
                         intermediate_z=intermediate_z,
                         vae=vae,
-                        transformer=active_transformer,
-                        network=network,
                         control_signal_processor=control_signal_processor,
                         repa_helper=repa_helper,
                         raft=getattr(self, "raft", None),
@@ -1252,7 +1258,6 @@ class TrainingCore:
                         transformer,
                         training_model,
                     )
-
 
                     # to avoid calling optimizer_eval_fn() too frequently, we call it only when we need to sample images, validate, or save the model
                     should_sampling = should_sample_images(

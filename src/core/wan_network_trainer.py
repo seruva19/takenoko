@@ -149,6 +149,13 @@ class WanNetworkTrainer:
                 f"Failed to initialize temporal consistency enhancement: {e}"
             )
 
+        # Initialize slider training based on network module
+        try:
+            from enhancements.slider.slider_integration import initialize_slider_integration
+            initialize_slider_integration(args)
+        except Exception as e:
+            logger.warning(f"Failed to initialize slider training: {e}")
+
         # Initialize sampling manager now that we have config
         self.sampling_manager = SamplingManager(
             self.config, self.default_guidance_scale
@@ -576,6 +583,7 @@ class WanNetworkTrainer:
 
         transformer.eval()
         transformer.requires_grad_(False)
+
 
         # Configure TREAD routing if enabled and routes provided
         if getattr(args, "enable_tread", False):

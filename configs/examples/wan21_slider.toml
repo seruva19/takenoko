@@ -1,0 +1,223 @@
+# Takenoko WAN21 Slider Training Configuration
+# Optimized configuration for WAN21 T2V 14B model concept editing using slider training
+# This creates a LoRA that can enhance/suppress specific concepts
+
+# =============================================================================
+# TARGET TRAINING
+# =============================================================================
+
+target_model = "wan21"
+
+# =============================================================================
+# CHECKPOINT SETTINGS
+# =============================================================================
+
+dit = "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/diffusion_models/wan2.1_t2v_14B_fp16.safetensors"
+fp8_scaled = true
+fp8_base = true
+vae = "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/vae/wan_2.1_vae.safetensors"
+t5 = "https://huggingface.co/Wan-AI/Wan2.1-T2V-14B/resolve/main/models_t5_umt5-xxl-enc-bf16.pth"
+
+# =============================================================================
+# TRAINING SETTINGS
+# =============================================================================
+
+max_train_steps = 3000  
+max_data_loader_n_workers = 2
+persistent_data_loader_workers = true
+seed = 20250921
+mixed_precision = "fp16"
+
+# =============================================================================
+# OPTIMIZER SETTINGS
+# =============================================================================
+
+optimizer_type = "adamw8bit"
+learning_rate = 1e-4  
+
+# =============================================================================
+# LEARNING RATE SCHEDULER
+# =============================================================================
+
+lr_scheduler = "constant"
+
+# =============================================================================
+# SLIDER NETWORK SETTINGS
+# =============================================================================
+
+network_module = "networks.slider_lora_wan" 
+network_dim = 16  
+network_alpha = 16
+
+# =============================================================================
+# SLIDER TRAINING PARAMETERS
+# =============================================================================
+
+# Core slider parameters
+slider_guidance_strength = 3.0  # Strength of concept enhancement/suppression
+slider_anchor_strength = 1.0    # Strength of anchor class preservation
+
+# Advanced guidance parameters 
+slider_guidance_scale = 1.0
+slider_guidance_embedding_scale = 1.0
+slider_target_guidance_scale = 1.0
+
+# Concept definition 
+# Example: Creating a quality enhancement slider
+slider_positive_prompt = "high details, intricate details, fine details"
+slider_negative_prompt = "simple, dull, plain design, low quality"
+slider_target_class = "detail"  # The concept you want to edit
+slider_anchor_class = "plain white background"  # Optional: helps preserve scene composition
+
+# Training parameters
+slider_learning_rate_multiplier = 1.0
+slider_cache_embeddings = true
+
+# T5 text encoder settings 
+slider_t5_device = "cpu"      # Keep T5 on CPU to save VRAM for WAN21
+slider_cache_on_init = true   # Cache embeddings during initialization
+
+# =============================================================================
+# TIMESTEP AND FLOW MATCHING SETTINGS
+# =============================================================================
+
+timestep_sampling = "shift"
+discrete_flow_shift = 3.0
+sigmoid_scale = 1.0
+weighting_scheme = "none"
+logit_mean = 0.0
+logit_std = 1.0
+mode_scale = 1.29
+
+# =============================================================================
+# OPTIMIZATION SETTINGS
+# =============================================================================
+
+sdpa = true
+
+# =============================================================================
+# VALIDATION SETTINGS
+# =============================================================================
+
+validate_every_n_steps = 500  
+
+# =============================================================================
+# OUTPUT SETTINGS
+# =============================================================================
+
+output_dir = "output/wan21_slider"
+output_name = "wan21_slider"
+save_state = true
+save_every_n_steps = 500  
+auto_resume = true
+
+# =============================================================================
+# METADATA SETTINGS
+# =============================================================================
+
+embed_config_in_metadata = true
+
+# =============================================================================
+# LOGGING SETTINGS
+# =============================================================================
+
+enhanced_progress_bar = true
+log_config = true
+logging_dir = "logs/wan21_slider"
+
+# =============================================================================
+# SAMPLING SETTINGS
+# =============================================================================
+
+sample_every_n_steps = 500
+sample_at_first = true
+
+# =============================================================================
+# SAMPLE PROMPTS SETTINGS
+# =============================================================================
+
+[[sample_prompts]]
+
+text = """
+A beautiful landscape with mountains and a lake, enhancing quality and detail
+"""
+width = 384
+height = 384
+frames = 17  
+seed = 20250921
+step = 20
+cfg_scale = 6.0
+
+[[sample_prompts]]
+
+text = """
+A simple outdoor scene with trees and grass, neutral baseline
+"""
+width = 384
+height = 384
+frames = 17
+seed = 20250922
+step = 20
+cfg_scale = 6.0
+
+[[sample_prompts]]
+
+text = """
+Urban street scene with buildings and cars, testing composition preservation
+"""
+width = 384
+height = 384
+frames = 17
+seed = 20250923
+step = 20
+cfg_scale = 6.0
+
+# =============================================================================
+# LATENT CACHE SETTINGS
+# =============================================================================
+
+[datasets.latent_cache]
+
+vae_cache_cpu = true
+
+# =============================================================================
+# TEXT ENCODER CACHE SETTINGS
+# =============================================================================
+
+[datasets.text_encoder_cache]
+
+batch_size = 8 
+
+# =============================================================================
+# DATASET SETTINGS
+# =============================================================================
+
+[datasets.general]
+
+caption_extension = ".txt"
+enable_bucket = true
+bucket_no_upscale = false
+batch_size = 1
+num_repeats = 1
+
+# =============================================================================
+# TRAINING DATASETS
+# =============================================================================
+
+[[datasets.train]]
+
+image_directory = "path/to/quality/images"
+cache_directory = "path/to/quality/images/cache"
+resolution = [512, 512]
+batch_size = 1
+num_repeats = 5 
+
+# =============================================================================
+# VALIDATION DATASETS
+# =============================================================================
+
+[[datasets.val]]
+
+image_directory = "path/to/val/quality/images"
+cache_directory = "path/to/val/quality/images/cache"
+resolution = [512, 512]

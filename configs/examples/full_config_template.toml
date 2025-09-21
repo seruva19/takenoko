@@ -232,7 +232,8 @@ lr_scheduler_args = ''
 # NETWORK SETTINGS
 # =============================================================================
 
-# Network module to train: "networks.lora_wan", "networks.control_lora_wan", "networks.reward_lora", "networks.vae_wan", "lycoris.kohya", "networks.t_lora", "networks.moc_lora", "networks.singlora_wan", "networks.wan_finetune"
+# Network module to train: "networks.lora_wan", "networks.control_lora_wan", "networks.reward_lora", "networks.vae_wan",
+# "lycoris.kohya", "networks.t_lora", "networks.moc_lora", "networks.singlora_wan", "networks.wan_finetune", "networks.slider_lora_wan"
 # The module defines trainable adapters and is imported dynamically by the trainer.
 network_module = "networks.lora_wan"
 
@@ -355,6 +356,56 @@ network_alpha = 32
 # This applies to regularization datasets (is_reg=true) vs main dataset
 # NOT related to masked training's "masked_prior_preservation_weight"
 prior_loss_weight = 1.0
+
+# =============================================================================
+# ⚠️ SLIDER TRAINING SETTINGS
+# =============================================================================
+
+# Slider training for concept editing - enabled by using network_module = "networks.slider_lora_wan"
+
+# Core slider parameters
+# Strength of concept enhancement/suppression (default: 3.0)
+slider_guidance_strength = 3.0
+
+# Strength of anchor class preservation (default: 1.0)
+slider_anchor_strength = 1.0
+
+# Advanced guidance parameters (for fine-tuning)
+# Base classifier-free guidance scale (default: 1.0)
+slider_guidance_scale = 1.0
+
+# Embedding-level guidance scaling (default: 1.0)
+slider_guidance_embedding_scale = 1.0
+
+# Separate scale for target predictions (default: 1.0)
+slider_target_guidance_scale = 1.0
+
+# Required prompt configuration
+# Positive prompt representing desired concept direction (REQUIRED for slider training)
+slider_positive_prompt = "beautiful, high quality, masterpiece"
+
+# Negative prompt representing undesired concept direction (REQUIRED for slider training)
+slider_negative_prompt = "ugly, low quality, blurry"
+
+# Target class/concept being edited (REQUIRED for slider training)
+slider_target_class = "portrait"
+
+# Optional anchor class for concept preservation (helps prevent unwanted side effects)
+slider_anchor_class = "person"
+
+# Training parameters
+# Learning rate multiplier for slider training (default: 1.0)
+slider_learning_rate_multiplier = 1.0
+
+# Cache text embeddings for efficiency (default: true)
+slider_cache_embeddings = true
+
+# T5 text encoder settings (follows Takenoko's pattern)
+# Device for T5 encoder: "cpu" (saves VRAM) or "cuda" (default: "cpu")
+slider_t5_device = "cpu"
+
+# Cache embeddings during initialization (default: true)
+slider_cache_on_init = true 
 
 # =============================================================================
 # FINE-TUNING SETTINGS
