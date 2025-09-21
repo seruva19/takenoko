@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.10, <3.13"
 dependencies = [
   "accelerate==1.6.0",
+  "adv-optm==1.0.3",
   "av==14.0.1",
   "bitsandbytes>=0.45.5",
   "decord>=0.6.0",
