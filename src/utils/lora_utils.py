@@ -153,6 +153,11 @@ def load_safetensors_with_lora_and_fp8(
                     calc_device
                 )  # to make calculation faster
 
+            # Handle FP8 weights for LoRA merging
+            if original_dtype.itemsize == 1:  # fp8
+                # temporarily convert to float16 for calculation
+                model_weight = model_weight.to(torch.float16)
+
             for lora_weight_keys, lora_sd, multiplier in zip(
                 list_of_lora_weight_keys, lora_weights_list, lora_multipliers  # type: ignore
             ):
@@ -177,6 +182,11 @@ def load_safetensors_with_lora_and_fp8(
 
                 down_weight = down_weight.to(calc_device)
                 up_weight = up_weight.to(calc_device)
+
+                # Convert LoRA weights to float16 if model weight is FP8
+                if original_dtype.itemsize == 1:  # fp8
+                    down_weight = down_weight.to(torch.float16)
+                    up_weight = up_weight.to(torch.float16)
 
                 # W <- W + U * D
                 if len(model_weight.size()) == 2:
@@ -213,6 +223,10 @@ def load_safetensors_with_lora_and_fp8(
                 lora_weight_keys.remove(up_key)
                 if alpha_key in lora_weight_keys:
                     lora_weight_keys.remove(alpha_key)
+
+            # Convert back to original dtype if it was FP8
+            if original_dtype.itemsize == 1:  # fp8
+                model_weight = model_weight.to(original_dtype)
 
             if keep_on_calc_device:
                 if (
