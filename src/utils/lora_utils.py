@@ -69,6 +69,10 @@ def load_safetensors_with_lora_and_fp8(
     fp8_format: str = "e4m3",
     fp8_per_channel: bool = False,
     fp8_percentile: Optional[float] = None,
+    # Enhanced FP8 parameters
+    fp8_quantization_mode: str = "tensor",
+    fp8_block_size: Optional[int] = None,
+    fp8_use_enhanced: bool = False,
     *,
     enable_memory_mapping: bool = False,
     enable_zero_copy_loading: bool = False,
@@ -235,6 +239,10 @@ def load_safetensors_with_lora_and_fp8(
         fp8_format=fp8_format,
         fp8_per_channel=fp8_per_channel,
         fp8_percentile=fp8_percentile,
+        # Enhanced FP8 parameters
+        fp8_quantization_mode=fp8_quantization_mode,
+        fp8_block_size=fp8_block_size,
+        fp8_use_enhanced=fp8_use_enhanced,
         enable_memory_mapping=enable_memory_mapping,
         enable_zero_copy_loading=enable_zero_copy_loading,
         enable_non_blocking_transfers=enable_non_blocking_transfers,
@@ -266,6 +274,10 @@ def load_safetensors_with_fp8_optimization_and_hook(
     fp8_format: str = "e4m3",
     fp8_per_channel: bool = False,
     fp8_percentile: Optional[float] = None,
+    # Enhanced FP8 parameters
+    fp8_quantization_mode: str = "tensor",
+    fp8_block_size: Optional[int] = None,
+    fp8_use_enhanced: bool = False,
     *,
     enable_memory_mapping: bool = False,
     enable_zero_copy_loading: bool = False,
@@ -292,21 +304,57 @@ def load_safetensors_with_fp8_optimization_and_hook(
             )
             exp_bits, mantissa_bits = 4, 3
 
-        state_dict = load_safetensors_with_fp8_optimization(
-            model_files,
-            calc_device,
-            target_keys,
-            exclude_keys,
-            exp_bits=exp_bits,
-            mantissa_bits=mantissa_bits,
-            move_to_device=move_to_device,
-            weight_hook=weight_hook,
-            quant_dtype=quant_dtype,
-            enable_memory_mapping=enable_memory_mapping,
-            enable_zero_copy_loading=enable_zero_copy_loading,
-            enable_non_blocking_transfers=enable_non_blocking_transfers,
-            memory_mapping_threshold=memory_mapping_threshold,
-        )
+        # Choose between enhanced and legacy FP8 optimization
+        if fp8_use_enhanced:
+            logger.info("Using enhanced FP8 optimization")
+            from modules.fp8_optimization_utils import load_safetensors_with_fp8_optimization_enhanced
+
+            # Determine quantization mode
+            if fp8_per_channel:
+                quantization_mode = "channel"
+            else:
+                quantization_mode = fp8_quantization_mode
+
+            # Determine FP8 dtype
+            if fp8_format.lower() == "e4m3":
+                fp8_dtype = torch.float8_e4m3fn
+            elif fp8_format.lower() == "e5m2":
+                fp8_dtype = torch.float8_e5m2
+            else:
+                fp8_dtype = torch.float8_e4m3fn  # default
+
+            state_dict = load_safetensors_with_fp8_optimization_enhanced(
+                model_files,
+                calc_device,
+                target_keys,
+                exclude_keys,
+                exp_bits=exp_bits,
+                mantissa_bits=mantissa_bits,
+                move_to_device=move_to_device,
+                weight_hook=weight_hook,
+                quantization_mode=quantization_mode,
+                block_size=fp8_block_size,
+                percentile=fp8_percentile,
+                fp8_dtype=fp8_dtype,
+            )
+        else:
+            # Use legacy FP8 optimization for backwards compatibility
+            state_dict = load_safetensors_with_fp8_optimization(
+                model_files,
+                calc_device,
+                target_keys,
+                exclude_keys,
+                exp_bits=exp_bits,
+                mantissa_bits=mantissa_bits,
+                move_to_device=move_to_device,
+                weight_hook=weight_hook,
+                quant_dtype=quant_dtype,
+                percentile=fp8_percentile,  # Pass percentile parameter
+                enable_memory_mapping=enable_memory_mapping,
+                enable_zero_copy_loading=enable_zero_copy_loading,
+                enable_non_blocking_transfers=enable_non_blocking_transfers,
+                memory_mapping_threshold=memory_mapping_threshold,
+            )
     else:
         logger.info(
             f"Loading state dict without FP8 optimization. Hook enabled: {weight_hook is not None}"

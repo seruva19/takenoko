@@ -177,6 +177,17 @@ class ModelManager:
             memory_mapping_threshold=int(
                 getattr(args, "memory_mapping_threshold", 10 * 1024 * 1024)
             ),
+            # Enhanced FP8 quantization parameters
+            fp8_quantization_mode=str(getattr(args, "fp8_quantization_mode", "tensor")),
+            fp8_block_size=getattr(args, "fp8_block_size", None),
+            fp8_percentile=getattr(args, "fp8_percentile", None),
+            fp8_exclude_keys=getattr(args, "fp8_exclude_keys", None),
+            fp8_use_enhanced=bool(getattr(args, "fp8_use_enhanced", False)),
+            # TorchAO integration parameters
+            torchao_fp8_enabled=bool(getattr(args, "torchao_fp8_enabled", False)),
+            torchao_fp8_weight_dtype=str(getattr(args, "torchao_fp8_weight_dtype", "e4m3fn")),
+            torchao_fp8_target_modules=getattr(args, "torchao_fp8_target_modules", None),
+            torchao_fp8_exclude_modules=getattr(args, "torchao_fp8_exclude_modules", None),
         )
 
         # Optional: enable lean attention math from config
@@ -277,6 +288,17 @@ class ModelManager:
             memory_mapping_threshold=int(
                 getattr(args, "memory_mapping_threshold", 10 * 1024 * 1024)
             ),
+            # Enhanced FP8 quantization parameters
+            fp8_quantization_mode=str(getattr(args, "fp8_quantization_mode", "tensor")),
+            fp8_block_size=getattr(args, "fp8_block_size", None),
+            fp8_percentile=getattr(args, "fp8_percentile", None),
+            fp8_exclude_keys=getattr(args, "fp8_exclude_keys", None),
+            fp8_use_enhanced=bool(getattr(args, "fp8_use_enhanced", False)),
+            # TorchAO integration parameters
+            torchao_fp8_enabled=bool(getattr(args, "torchao_fp8_enabled", False)),
+            torchao_fp8_weight_dtype=str(getattr(args, "torchao_fp8_weight_dtype", "e4m3fn")),
+            torchao_fp8_target_modules=getattr(args, "torchao_fp8_target_modules", None),
+            torchao_fp8_exclude_modules=getattr(args, "torchao_fp8_exclude_modules", None),
         )
 
         # Enable block swap for the temporary high-noise model only when not offloading it

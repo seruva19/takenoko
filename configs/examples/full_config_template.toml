@@ -26,7 +26,19 @@ fp8_base = true
 # FP8 format for quantization ("e4m3" for E4M3FN or "e5m2" for E5M2)
 # E4M3FN (e4m3): Better precision, requires RTX 40 series or newer (default)
 # E5M2 (e5m2): Compatible with RTX 3000 series, slightly lower precision
-# fp8_format = "e4m3"
+fp8_format = "e4m3"
+
+# Percentile for FP8 scale calculation (works with ALL FP8 modes, default: 0.999)
+# Uses percentile instead of max value to reduce impact of outliers
+# Set to null to use max value (matches pre-patch behavior)
+# Range: 0.0 to 1.0, recommended: 0.99 to 0.9999
+# To disable percentile scaling: fp8_percentile = null
+fp8_percentile = 0.999
+
+# Exclude specific modules from FP8 quantization (works with ALL FP8 modes)
+# Comma-separated list or array of module name patterns to preserve
+# Useful for keeping critical layers in higher precision
+# fp8_exclude_keys = ["norm", "patch_embedding", "text_embedding", "time_embedding", "time_projection", "head", "modulation", "img_emb"]
 
 # Scale input tensor format for scaled_mm ("e4m3" or "e5m2", None disables input scaling)
 # Enables input tensor quantization for additional memory savings, may impact quality, only works with fp8_scaled = true
@@ -76,6 +88,48 @@ t5 = "https://huggingface.co/Wan-AI/Wan2.1-T2V-14B/resolve/main/models_t5_umt5-x
 
 # Enable memory tracing
 trace_memory = true
+
+# =============================================================================
+# ENHANCED FP8 QUANTIZATION
+# =============================================================================
+
+# Enable enhanced FP8 quantization features (default: false)
+# When enabled, provides additional quantization modes and better control
+fp8_use_enhanced = false
+
+# Enhanced FP8 quantization mode (ONLY when fp8_use_enhanced = true)
+# "tensor": Per-tensor quantization (fastest, lowest memory)
+# "channel": Per-channel quantization (balanced accuracy/memory)
+# "block": Block-wise quantization (best compression, configurable)
+fp8_quantization_mode = "tensor"
+
+# Block size for block-wise quantization (ONLY when fp8_quantization_mode = "block")
+# Smaller values = better compression, larger values = faster processing
+# Must be divisible by layer input features, falls back to channel mode if not
+fp8_block_size = 128
+
+# =============================================================================
+# ⚠️ TORCHAO FP8 INTEGRATION
+# =============================================================================
+
+# Enable TorchAO FP8 quantization (requires torchao installation, default: false)
+# Alternative to built-in FP8 quantization, uses TorchAO library
+# Provides per-channel symmetric quantization with automatic scale derivation
+# Note: Takes precedence over fp8_use_enhanced if both are enabled
+torchao_fp8_enabled = false
+
+# TorchAO FP8 weight dtype (only when torchao_fp8_enabled = true)
+# "e4m3fn": E4M3FN format (default, better precision)
+# "e5m2": E5M2 format (broader range, slightly lower precision)
+torchao_fp8_weight_dtype = "e4m3fn"
+
+# Target modules for TorchAO quantization (optional)
+# Only quantize modules matching these patterns, useful for selective quantization
+torchao_fp8_target_modules = ["attn", "mlp", "proj"]
+
+# Exclude modules from TorchAO quantization (optional)
+# Skip quantization for modules matching these patterns
+torchao_fp8_exclude_modules = ["final_layer", "patch_embedding"]
 
 # =============================================================================
 # TRAINING SETTINGS

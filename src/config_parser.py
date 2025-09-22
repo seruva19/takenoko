@@ -69,6 +69,20 @@ def create_args_from_config(
         config.get("exclude_ffn_from_scaled_mm", False)
     )
     args.scale_input_tensor = config.get("scale_input_tensor", None)
+
+    args.fp8_percentile = config.get("fp8_percentile", 0.999)
+    args.fp8_exclude_keys = config.get("fp8_exclude_keys", None)
+
+    # Enhanced FP8 quantization parameters (new features - gated by fp8_use_enhanced)
+    args.fp8_use_enhanced = bool(config.get("fp8_use_enhanced", False))
+    args.fp8_quantization_mode = config.get("fp8_quantization_mode", "tensor")
+    args.fp8_block_size = config.get("fp8_block_size", None)
+
+    # TorchAO FP8 quantization parameters (alternative backend)
+    args.torchao_fp8_enabled = bool(config.get("torchao_fp8_enabled", False))
+    args.torchao_fp8_weight_dtype = config.get("torchao_fp8_weight_dtype", "e4m3fn")
+    args.torchao_fp8_target_modules = config.get("torchao_fp8_target_modules", None)
+    args.torchao_fp8_exclude_modules = config.get("torchao_fp8_exclude_modules", None)
     # Allow loading mixed precision transformer (per-tensor dtypes preserved)
     args.mixed_precision_transformer = bool(
         config.get("mixed_precision_transformer", False)
@@ -88,9 +102,7 @@ def create_args_from_config(
     args.trace_memory = config.get("trace_memory", True)
     # Safetensors loading optimisations (gated; default disabled)
     args.enable_memory_mapping = bool(config.get("enable_memory_mapping", False))
-    args.enable_zero_copy_loading = bool(
-        config.get("enable_zero_copy_loading", False)
-    )
+    args.enable_zero_copy_loading = bool(config.get("enable_zero_copy_loading", False))
     args.enable_non_blocking_transfers = bool(
         config.get("enable_non_blocking_transfers", False)
     )
@@ -230,9 +242,7 @@ def create_args_from_config(
     # VAE training knobs (defaults preserve legacy behaviour)
     args.vae_training_mode = str(config.get("vae_training_mode", "full"))
     args.vae_kl_weight = float(config.get("vae_kl_weight", 1e-6))
-    args.vae_reconstruction_loss = str(
-        config.get("vae_reconstruction_loss", "mse")
-    )
+    args.vae_reconstruction_loss = str(config.get("vae_reconstruction_loss", "mse"))
     args.vae_mse_weight = float(config.get("vae_mse_weight", 1.0))
     args.vae_mae_weight = float(config.get("vae_mae_weight", 0.0))
     args.vae_lpips_weight = float(config.get("vae_lpips_weight", 0.0))
@@ -283,7 +293,9 @@ def create_args_from_config(
 
     # Advanced guidance parameters
     args.slider_guidance_scale = config.get("slider_guidance_scale", 1.0)
-    args.slider_guidance_embedding_scale = config.get("slider_guidance_embedding_scale", 1.0)
+    args.slider_guidance_embedding_scale = config.get(
+        "slider_guidance_embedding_scale", 1.0
+    )
     args.slider_target_guidance_scale = config.get("slider_target_guidance_scale", 1.0)
 
     # Prompt configuration
@@ -293,7 +305,9 @@ def create_args_from_config(
     args.slider_anchor_class = config.get("slider_anchor_class", None)
 
     # Training parameters
-    args.slider_learning_rate_multiplier = config.get("slider_learning_rate_multiplier", 1.0)
+    args.slider_learning_rate_multiplier = config.get(
+        "slider_learning_rate_multiplier", 1.0
+    )
     args.slider_cache_embeddings = config.get("slider_cache_embeddings", True)
 
     # T5 text encoder settings (follows Takenoko's pattern)
@@ -533,7 +547,9 @@ def create_args_from_config(
     args.latent_std_threshold = config.get("latent_std_threshold", 1.35)
     args.latent_quality_visualizer = config.get("latent_quality_visualizer", False)
     args.latent_quality_tensorboard = config.get("latent_quality_tensorboard", True)
-    args.latent_quality_video_analysis = config.get("latent_quality_video_analysis", True)
+    args.latent_quality_video_analysis = config.get(
+        "latent_quality_video_analysis", True
+    )
 
     args.save_every_n_epochs = config.get("save_every_n_epochs", None)
     args.save_every_n_steps = config.get("save_every_n_steps", 1000)
@@ -1188,5 +1204,101 @@ def create_args_from_config(
 
     # Parse memory optimization configuration (delegated to memory module)
     args = parse_memory_optimization_config(args, config)
+
+    # Validate enhanced FP8 configuration
+    if args.fp8_use_enhanced:
+        # Validate quantization mode
+        valid_modes = ["tensor", "channel", "block"]
+        if args.fp8_quantization_mode not in valid_modes:
+            logger.warning(
+                f"⚠️  Invalid fp8_quantization_mode '{args.fp8_quantization_mode}'. "
+                f"Valid options: {valid_modes}. Using 'tensor' as default."
+            )
+            args.fp8_quantization_mode = "tensor"
+
+        # Validate FP8 format
+        valid_formats = ["e4m3", "e5m2"]
+        if args.fp8_format not in valid_formats:
+            logger.warning(
+                f"⚠️  Invalid fp8_format '{args.fp8_format}'. "
+                f"Valid options: {valid_formats}. Using 'e4m3' as default."
+            )
+            args.fp8_format = "e4m3"
+
+        # Validate block size for block quantization
+        if args.fp8_quantization_mode == "block":
+            if args.fp8_block_size is None:
+                args.fp8_block_size = 128
+                logger.info("📋 Using default block size 128 for block quantization")
+            elif not isinstance(args.fp8_block_size, int) or args.fp8_block_size <= 0:
+                logger.warning(
+                    f"⚠️  Invalid fp8_block_size '{args.fp8_block_size}'. Using default 128."
+                )
+                args.fp8_block_size = 128
+
+        # Validate percentile
+        if args.fp8_percentile is not None:
+            if not isinstance(args.fp8_percentile, (int, float)) or not (
+                0.0 < args.fp8_percentile <= 1.0
+            ):
+                logger.warning(
+                    f"⚠️  Invalid fp8_percentile '{args.fp8_percentile}'. "
+                    "Must be between 0.0 and 1.0 or null. Using default 0.999."
+                )
+                args.fp8_percentile = 0.999
+
+        # Convert exclude keys to list if it's a string
+        if args.fp8_exclude_keys is not None:
+            if isinstance(args.fp8_exclude_keys, str):
+                args.fp8_exclude_keys = [
+                    k.strip() for k in args.fp8_exclude_keys.split(",")
+                ]
+            elif not isinstance(args.fp8_exclude_keys, list):
+                logger.warning(
+                    f"⚠️  Invalid fp8_exclude_keys type '{type(args.fp8_exclude_keys)}'. "
+                    "Expected list or comma-separated string. Ignoring."
+                )
+                args.fp8_exclude_keys = None
+
+        logger.info(
+            f"🔧 Enhanced FP8 enabled - Mode: {args.fp8_quantization_mode}, "
+            f"Format: {args.fp8_format}, Block size: {args.fp8_block_size}, "
+            f"Percentile: {args.fp8_percentile}"
+        )
+
+    # Validate TorchAO FP8 configuration
+    if args.torchao_fp8_enabled:
+        # Check for conflicts with other FP8 methods
+        if args.fp8_use_enhanced:
+            logger.warning(
+                "⚠️  Both torchao_fp8_enabled and fp8_use_enhanced are True. "
+                "TorchAO will take precedence over enhanced FP8."
+            )
+
+        # Validate TorchAO weight dtype
+        valid_torchao_dtypes = ["e4m3fn", "e5m2"]
+        if args.torchao_fp8_weight_dtype not in valid_torchao_dtypes:
+            logger.warning(
+                f"⚠️  Invalid torchao_fp8_weight_dtype '{args.torchao_fp8_weight_dtype}'. "
+                f"Valid options: {valid_torchao_dtypes}. Using 'e4m3fn' as default."
+            )
+            args.torchao_fp8_weight_dtype = "e4m3fn"
+
+        # Convert target/exclude modules to lists if strings
+        for attr_name in ["torchao_fp8_target_modules", "torchao_fp8_exclude_modules"]:
+            attr_value = getattr(args, attr_name)
+            if attr_value is not None:
+                if isinstance(attr_value, str):
+                    setattr(args, attr_name, [k.strip() for k in attr_value.split(",")])
+                elif not isinstance(attr_value, list):
+                    logger.warning(
+                        f"⚠️  Invalid {attr_name} type '{type(attr_value)}'. "
+                        "Expected list or comma-separated string. Ignoring."
+                    )
+                    setattr(args, attr_name, None)
+
+        logger.info(
+            f"🚀 TorchAO FP8 enabled - Weight dtype: {args.torchao_fp8_weight_dtype}"
+        )
 
     return args

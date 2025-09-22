@@ -1,5 +1,6 @@
 # Copyright 2024-2025 The Alibaba Wan Team Authors. All rights reserved.
 import math
+import time
 from typing import Dict, List, Optional, Union
 
 import torch
@@ -1011,6 +1012,7 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
     def device(self):
         return self.patch_embedding.weight.device
 
+    # unused
     def fp8_optimization(
         self,
         state_dict: dict[str, torch.Tensor],
@@ -1772,6 +1774,17 @@ def load_wan_model(
     enable_zero_copy_loading: bool = False,
     enable_non_blocking_transfers: bool = False,
     memory_mapping_threshold: int = 10 * 1024 * 1024,
+    # Enhanced FP8 quantization parameters
+    fp8_quantization_mode: str = "tensor",
+    fp8_block_size: Optional[int] = None,
+    fp8_percentile: Optional[float] = None,
+    fp8_exclude_keys: Optional[List[str]] = None,
+    fp8_use_enhanced: bool = False,
+    # TorchAO integration parameters
+    torchao_fp8_enabled: bool = False,
+    torchao_fp8_weight_dtype: str = "e4m3fn",
+    torchao_fp8_target_modules: Optional[List[str]] = None,
+    torchao_fp8_exclude_modules: Optional[List[str]] = None,
 ) -> WanModel:
     """
     Load a WAN model from the specified checkpoint.
@@ -1800,6 +1813,12 @@ def load_wan_model(
 
     device = torch.device(device)
     loading_device = torch.device(loading_device)
+
+    # Performance monitoring - start timing
+    start_time = time.perf_counter()
+    initial_memory = (
+        torch.cuda.memory_allocated(device) / (1024**3) if device.type == "cuda" else 0
+    )
 
     with init_empty_weights():
         logger.info(
@@ -1843,6 +1862,13 @@ def load_wan_model(
     # load model weights with dynamic fp8 optimization and LoRA merging if needed
     logger.info(f"Loading DiT model from {dit_path}, device={loading_device}")
 
+    # Use provided exclude keys or default
+    exclude_keys_to_use = (
+        fp8_exclude_keys
+        if fp8_exclude_keys is not None
+        else FP8_OPTIMIZATION_EXCLUDE_KEYS
+    )
+
     sd = load_safetensors_with_lora_and_fp8(
         model_files=dit_path,
         lora_weights_list=lora_weights_list,
@@ -1852,9 +1878,14 @@ def load_wan_model(
         move_to_device=(loading_device == device),
         dit_weight_dtype=dit_weight_dtype,
         target_keys=FP8_OPTIMIZATION_TARGET_KEYS,
-        exclude_keys=FP8_OPTIMIZATION_EXCLUDE_KEYS,
+        exclude_keys=exclude_keys_to_use,
         quant_dtype=quant_dtype,
         fp8_format=fp8_format,
+        # Enhanced FP8 parameters
+        fp8_quantization_mode=fp8_quantization_mode,
+        fp8_block_size=fp8_block_size,
+        fp8_use_enhanced=fp8_use_enhanced,
+        fp8_percentile=fp8_percentile,
         enable_memory_mapping=enable_memory_mapping,
         enable_zero_copy_loading=enable_zero_copy_loading,
         enable_non_blocking_transfers=enable_non_blocking_transfers,
@@ -1867,16 +1898,23 @@ def load_wan_model(
             sd[key[22:]] = sd.pop(key)
 
     if fp8_scaled:
-        # Apply monkey patch for FP8. Defaults preserve previous behavior
-        apply_fp8_monkey_patch(
-            model,
-            sd,
-            use_scaled_mm=use_scaled_mm,
-            upcast_linear=upcast_linear,
-            quant_dtype=quant_dtype,
-            exclude_ffn_from_scaled_mm=exclude_ffn_from_scaled_mm,
-            scale_input_tensor=scale_input_tensor,
-        )
+        # Apply monkey patch for FP8 - enhanced or legacy
+        if fp8_use_enhanced:
+            from modules.fp8_optimization_utils import apply_fp8_monkey_patch_enhanced
+
+            logger.info("Applying enhanced FP8 monkey patch")
+            apply_fp8_monkey_patch_enhanced(model, sd, use_scaled_mm=use_scaled_mm)
+        else:
+            # Use legacy monkey patch for backwards compatibility
+            apply_fp8_monkey_patch(
+                model,
+                sd,
+                use_scaled_mm=use_scaled_mm,
+                upcast_linear=upcast_linear,
+                quant_dtype=quant_dtype,
+                exclude_ffn_from_scaled_mm=exclude_ffn_from_scaled_mm,
+                scale_input_tensor=scale_input_tensor,
+            )
 
         if loading_device.type != "cpu":
             # make sure all the model weights are on the loading_device
@@ -1891,6 +1929,76 @@ def load_wan_model(
         model = model.to(dit_weight_dtype)
 
     logger.info(f"Loaded DiT model from {dit_path}, info={info}")
+
+    # Performance monitoring - end timing and memory tracking
+    end_time = time.perf_counter()
+    loading_time = end_time - start_time
+    final_memory = (
+        torch.cuda.memory_allocated(device) / (1024**3) if device.type == "cuda" else 0
+    )
+    memory_used = final_memory - initial_memory
+
+    # Log performance metrics
+    logger.info(f"⏱️  Model loading completed in {loading_time:.2f} seconds")
+    if device.type == "cuda":
+        logger.info(
+            f"📊 Memory usage: {memory_used:.2f} GB (Initial: {initial_memory:.2f} GB, Final: {final_memory:.2f} GB)"
+        )
+
+        # Log FP8 specific metrics if enabled
+        if fp8_scaled:
+            estimated_fp16_memory = memory_used * 2  # Rough estimate
+            memory_savings = estimated_fp16_memory - memory_used
+            savings_percent = (
+                (memory_savings / estimated_fp16_memory) * 100
+                if estimated_fp16_memory > 0
+                else 0
+            )
+            logger.info(
+                f"💾 Estimated FP8 memory savings: {memory_savings:.2f} GB ({savings_percent:.1f}%)"
+            )
+
+            if fp8_use_enhanced:
+                logger.info(
+                    f"🔧 Enhanced FP8 mode: {fp8_quantization_mode} quantization"
+                )
+
+    # Apply TorchAO FP8 quantization if enabled (post-loading quantization)
+    if torchao_fp8_enabled:
+        try:
+            from modules.torchao_fp8_utils import (
+                TorchAOFP8Config,
+                apply_torchao_fp8_quantization,
+            )
+
+            # Create TorchAO configuration
+            torchao_config = TorchAOFP8Config(
+                enabled=True,
+                weight_dtype=torchao_fp8_weight_dtype,
+                target_modules=torchao_fp8_target_modules,
+                exclude_modules=torchao_fp8_exclude_modules,
+            )
+
+            logger.info("🧮 TorchAO FP8 quantization starting...")
+            torchao_start_time = time.perf_counter()
+
+            # Apply TorchAO quantization
+            model = apply_torchao_fp8_quantization(
+                model=model,
+                config=torchao_config,
+                device=device,
+            )
+
+            torchao_end_time = time.perf_counter()
+            torchao_time = torchao_end_time - torchao_start_time
+            logger.info(
+                f"🧮 TorchAO FP8 post-quantization completed in {torchao_time:.2f} seconds"
+            )
+
+        except ImportError as e:
+            logger.error(f"❌ TorchAO FP8 quantization failed: {e}")
+            logger.error("💡 Please install torchao or disable torchao_fp8_enabled")
+            raise
 
     return model
 

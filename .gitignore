@@ -30,6 +30,7 @@ uv.lock
 # AI IDE
 .qodo
 .claude
+.kiro
 
 # Takenoko
 /prebuilt
