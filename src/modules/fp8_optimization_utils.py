@@ -38,6 +38,7 @@ def calculate_fp8_maxval(exp_bits=4, mantissa_bits=3, sign_bits=1):
     )
 
 
+# unused
 def quantize_tensor_to_fp8(
     tensor,
     scale,
@@ -48,7 +49,7 @@ def quantize_tensor_to_fp8(
     min_value=None,
 ):
     """
-    Quantize a tensor to FP8 format.
+    Quantize a tensor to FP8 format (legacy implementation).
 
     Args:
         tensor (torch.Tensor): Tensor to quantize
@@ -97,15 +98,147 @@ def quantize_tensor_to_fp8(
     return quantized, scale
 
 
+def quantize_fp8(tensor, scale, fp8_dtype, max_value, min_value):
+    """
+    Quantize a tensor to FP8 format using PyTorch's native FP8 dtype support.
+
+    Args:
+        tensor (torch.Tensor): Tensor to quantize
+        scale (float or torch.Tensor): Scale factor
+        fp8_dtype (torch.dtype): Target FP8 dtype (torch.float8_e4m3fn or torch.float8_e5m2)
+        max_value (float): Maximum representable value in FP8
+        min_value (float): Minimum representable value in FP8
+
+    Returns:
+        torch.Tensor: Quantized tensor in FP8 format
+    """
+    tensor = tensor.to(torch.float32)  # ensure tensor is in float32 for division
+
+    # Create scaled tensor with NaN handling
+    tensor = torch.div(tensor, scale).nan_to_num_(0.0)  # handle NaN values
+
+    # Clamp tensor to range
+    tensor = tensor.clamp_(min=min_value, max=max_value)
+
+    # Convert to FP8 dtype
+    tensor = tensor.to(fp8_dtype)
+
+    return tensor
+
+
+def quantize_weight(
+    key: str,
+    tensor: torch.Tensor,
+    fp8_dtype: torch.dtype,
+    max_value: float,
+    min_value: float,
+    quantization_mode: str = "block",
+    block_size: int = 64,
+    percentile: Optional[float] = None,
+):
+    """
+    Quantize a weight tensor using block-wise, channel-wise, or tensor-wise scaling.
+
+    Args:
+        key (str): Layer key for logging
+        tensor (torch.Tensor): Weight tensor to quantize
+        fp8_dtype (torch.dtype): Target FP8 dtype
+        max_value (float): Maximum representable value in FP8
+        min_value (float): Minimum representable value in FP8
+        quantization_mode (str): "tensor", "channel", or "block"
+        block_size (int): Block size for block-wise quantization
+        percentile (Optional[float]): Percentile for scale calculation (None for max value)
+
+    Returns:
+        tuple: (quantized_weight, scale_tensor)
+    """
+    original_shape = tensor.shape
+
+    # Determine quantization mode
+    if quantization_mode == "block":
+        if tensor.ndim != 2:
+            quantization_mode = "tensor"  # fallback to per-tensor
+        else:
+            out_features, in_features = tensor.shape
+            if in_features % block_size != 0:
+                quantization_mode = "channel"  # fallback to per-channel
+                logger.warning(
+                    f"Layer {key} with shape {tensor.shape} is not divisible by block_size {block_size}, fallback to per-channel quantization."
+                )
+            else:
+                num_blocks = in_features // block_size
+                tensor = tensor.contiguous().view(
+                    out_features, num_blocks, block_size
+                )  # [out, num_blocks, block_size]
+    elif quantization_mode == "channel":
+        if tensor.ndim != 2:
+            quantization_mode = "tensor"  # fallback to per-tensor
+
+    # Calculate scale factor (per-tensor or per-output-channel with percentile or max)
+    # value shape is expected to be [out_features, in_features] for Linear weights
+    if quantization_mode == "channel" or quantization_mode == "block":
+        # row-wise scaling to avoid being dominated by outliers
+        # result shape: [out_features, 1] or [out_features, num_blocks, 1]
+        scale_dim = 1 if quantization_mode == "channel" else 2
+        abs_w = torch.abs(tensor)
+
+        if percentile is None:
+            # Use max value (original behavior)
+            row_scale_val = torch.max(abs_w, dim=scale_dim, keepdim=True).values
+        else:
+            # Use percentile-based scaling
+            row_scale_val = torch.quantile(
+                abs_w.to(torch.float32), q=percentile, dim=scale_dim, keepdim=True
+            )
+        scale = row_scale_val / max_value
+
+    else:
+        # per-tensor
+        if percentile is None:
+            tensor_scale_val = torch.max(torch.abs(tensor).view(-1))
+        else:
+            abs_tensor = torch.abs(tensor).view(-1).to(torch.float32)
+            # For very large tensors, use chunked processing to avoid memory issues
+            if abs_tensor.numel() > 8192 * 4096:
+                num_chunks = (abs_tensor.numel() + 8192 * 4096 - 1) // (8192 * 4096)
+                chunked_abs = torch.chunk(abs_tensor, num_chunks)
+                chunked_q = [
+                    torch.quantile(chunk, q=percentile) for chunk in chunked_abs
+                ]
+                tensor_scale_val = torch.max(torch.stack(chunked_q, dim=0))
+            else:
+                tensor_scale_val = torch.quantile(abs_tensor, q=percentile)
+
+        scale = tensor_scale_val / max_value
+
+    # numerical safety - apply after mode-specific calculation
+    scale = torch.clamp(scale, min=1e-8)
+    scale = scale.to(torch.float32)  # ensure scale is in float32 for division
+
+    # Quantize weight to FP8 (scale can be scalar or [out,1], broadcasting works)
+    quantized_weight = quantize_fp8(tensor, scale, fp8_dtype, max_value, min_value)
+
+    # If block-wise, restore original shape
+    if quantization_mode == "block":
+        quantized_weight = quantized_weight.view(
+            original_shape
+        )  # restore to original shape [out, in]
+
+    return quantized_weight, scale
+
+
 def optimize_state_dict_with_fp8(
-    state_dict,
-    calc_device,
-    target_layer_keys=None,
-    exclude_layer_keys=None,
-    exp_bits=4,
-    mantissa_bits=3,
-    move_to_device=False,
+    state_dict: dict,
+    calc_device: Union[str, torch.device],
+    target_layer_keys: Optional[list[str]] = None,
+    exclude_layer_keys: Optional[list[str]] = None,
+    exp_bits: int = 4,
+    mantissa_bits: int = 3,
+    move_to_device: bool = False,
+    quantization_mode: str = "block",
+    block_size: Optional[int] = 64,
     quant_dtype: Optional[torch.dtype] = None,
+    percentile: Optional[float] = None,
 ):
     """
     Optimize Linear layer weights in a model's state dict to FP8 format.
@@ -168,23 +301,35 @@ def optimize_state_dict_with_fp8(
         # Optionally upcast for scale computation and quantization for improved accuracy
         value_q = value.to(quant_dtype) if quant_dtype is not None else value
 
-        # Calculate scale factor
-        scale = torch.max(torch.abs(value_q.flatten())) / max_value
-        # print(f"Optimizing {key} with scale: {scale}")
-
-        # Quantize weight to FP8
-        quantized_weight, _ = quantize_tensor_to_fp8(
-            value_q, scale, exp_bits, mantissa_bits, 1, max_value, min_value
+        # Quantize weight to FP8 using new function
+        quantized_weight, scale_tensor = quantize_weight(
+            key,
+            value_q,
+            fp8_dtype,
+            max_value,
+            min_value,
+            quantization_mode,
+            block_size,
+            percentile,
         )
 
         # Compute per-tensor mean relative error (%) before moving tensors
         try:
-            reconstructed = quantized_weight.to(value_q.dtype) * scale
+            q_w = quantized_weight.to(value_q.dtype)
+            if getattr(scale_tensor, "ndim", 0) >= 3:
+                # Block-wise scale: reshape to [out_features, num_blocks, block_size] for correct broadcasting
+                out_features, num_blocks, _ = scale_tensor.shape
+                q_w = q_w.contiguous().view(out_features, num_blocks, -1)
+                q_w = q_w * scale_tensor.to(q_w.dtype)
+                reconstructed = q_w.view_as(value_q)
+            else:
+                # Per-tensor or per-channel scales broadcast directly
+                reconstructed = q_w * scale_tensor.to(q_w.dtype)
             denom = torch.mean(torch.abs(value_q)) + 1e-8
             q_err = (torch.mean(torch.abs(value_q - reconstructed)) / denom) * 100.0
             per_tensor_quantization_error.append(float(q_err.item()))
         except Exception:
-            # Best-effort; skip error calc if any unexpected dtype/device issue
+            # Best-effort; skip error calc if any unexpected dtype/device/device issue
             pass
 
         # Add to state dict using original key for weight and new key for scale
@@ -196,10 +341,9 @@ def optimize_state_dict_with_fp8(
         if not move_to_device:
             quantized_weight = quantized_weight.to(original_device)
 
-        scale_tensor = torch.tensor(
-            [scale],
-            dtype=(quant_dtype or original_dtype),
-            device=quantized_weight.device,
+        # Keep scale shape: [1] or [out,1] or [out, num_blocks, 1]. We can determine the quantization mode from the shape of scale_weight in the patched model.
+        scale_tensor = scale_tensor.to(
+            dtype=(quant_dtype or original_dtype), device=quantized_weight.device
         )
 
         state_dict[fp8_key] = quantized_weight
@@ -212,8 +356,11 @@ def optimize_state_dict_with_fp8(
             clean_memory_on_device(calc_device)
 
     if optimized_count > 0:
+        mode_info = f"{quantization_mode} mode"
+        if quantization_mode == "block" and block_size:
+            mode_info += f" (block_size={block_size})"
         logger.info(
-            f"🧮 FP8 optimization completed: {optimized_count} layers quantized (tensor mode)"
+            f"🧮 FP8 optimization completed: {optimized_count} layers quantized ({mode_info})"
         )
         if len(per_tensor_quantization_error) > 0:
             errs = torch.tensor(per_tensor_quantization_error)
@@ -225,13 +372,6 @@ def optimize_state_dict_with_fp8(
             )
     else:
         logger.info("🧮 FP8 optimization: No layers quantized")
-    if (
-        enable_non_blocking_transfers
-        and move_to_device
-        and direct_transfer_device is not None
-        and direct_transfer_device.type == "cuda"
-    ):
-        synchronize_device(direct_transfer_device)
     return state_dict
 
 
@@ -244,14 +384,16 @@ def load_safetensors_with_fp8_optimization(
     mantissa_bits=3,
     move_to_device=False,
     weight_hook=None,
+    quantization_mode: str = "block",
+    block_size: Optional[int] = 64,
     quant_dtype: Optional[torch.dtype] = None,
-    percentile=0.999,
+    percentile: Optional[float] = None,
     *,
     enable_memory_mapping: bool = False,
     enable_zero_copy_loading: bool = False,
     enable_non_blocking_transfers: bool = False,
     memory_mapping_threshold: int = 10 * 1024 * 1024,
-):
+) -> dict:
     """
     Load weight tensors from safetensors files and merge LoRA weights into the state dict with explicit FP8 optimization.
 
@@ -356,41 +498,30 @@ def load_safetensors_with_fp8_optimization(
                 # Optionally upcast for scale computation and quantization for improved accuracy
                 value_q = value.to(quant_dtype) if quant_dtype is not None else value
 
-                # Calculate scale factor (use percentile)
-                if percentile is not None:
-                    # Safe tensor size handling for quantile computation
-                    abs_tensor = torch.abs(value_q).view(-1).to(torch.float32)
-                    if abs_tensor.numel() <= 8192 * 4096 // value.dtype.itemsize:
-                        tensor_q = torch.quantile(abs_tensor, q=percentile)
-                    else:
-                        # Chunked processing for large tensors
-                        num_chunks = 1
-                        while (
-                            abs_tensor.numel() / num_chunks
-                            > 8192 * 4096 // value.dtype.itemsize
-                        ):
-                            num_chunks *= 2
-                        chunked_abs = torch.chunk(abs_tensor, num_chunks)
-                        chunked_q = [
-                            torch.quantile(chunk, q=percentile) for chunk in chunked_abs
-                        ]
-                        tensor_q = torch.max(torch.stack(chunked_q, dim=0))
-                    scale = tensor_q / max_value
-                else:
-                    scale = torch.max(torch.abs(value_q.flatten())) / max_value
-
-                # Numerical safety
-                scale = torch.clamp(scale, min=1e-8)
-                scale = scale.to(torch.float32)
-
-                # Quantize weight to FP8 using enhanced function
-                quantized_weight = quantize_fp8_enhanced(
-                    value_q, scale, fp8_dtype, max_value, min_value
+                # Quantize weight to FP8 using new function
+                quantized_weight, scale_tensor = quantize_weight(
+                    key,
+                    value_q,
+                    fp8_dtype,
+                    max_value,
+                    min_value,
+                    quantization_mode,
+                    block_size,
+                    percentile,
                 )
 
                 # Compute per-tensor mean relative error (%) before moving tensors
                 try:
-                    reconstructed = quantized_weight.to(value_q.dtype) * scale
+                    q_w = quantized_weight.to(value_q.dtype)
+                    if getattr(scale_tensor, "ndim", 0) >= 3:
+                        # Block-wise scale: reshape to [out_features, num_blocks, block_size] for correct broadcasting
+                        out_features, num_blocks, _ = scale_tensor.shape
+                        q_w = q_w.contiguous().view(out_features, num_blocks, -1)
+                        q_w = q_w * scale_tensor.to(q_w.dtype)
+                        reconstructed = q_w.view_as(value_q)
+                    else:
+                        # Per-tensor or per-channel scales broadcast directly
+                        reconstructed = q_w * scale_tensor.to(q_w.dtype)
                     denom = torch.mean(torch.abs(value_q)) + 1e-8
                     q_err = (
                         torch.mean(torch.abs(value_q - reconstructed)) / denom
@@ -407,8 +538,8 @@ def load_safetensors_with_fp8_optimization(
                 if not move_to_device:
                     quantized_weight = quantized_weight.to(original_device)
 
-                # Keep scale shape
-                scale_tensor = scale.to(
+                # Keep scale shape: [1] or [out,1] or [out, num_blocks, 1]. We can determine the quantization mode from the shape of scale_weight in the patched model.
+                scale_tensor = scale_tensor.to(
                     dtype=(quant_dtype or original_dtype),
                     device=quantized_weight.device,
                 )
@@ -423,8 +554,11 @@ def load_safetensors_with_fp8_optimization(
                     clean_memory_on_device(calc_device)
 
     if optimized_count > 0:
+        mode_info = f"{quantization_mode} mode"
+        if quantization_mode == "block" and block_size:
+            mode_info += f" (block_size={block_size})"
         logger.info(
-            f"🧮 FP8 optimization completed: {optimized_count} layers quantized (tensor mode)"
+            f"🧮 FP8 optimization completed: {optimized_count} layers quantized ({mode_info})"
         )
         if len(per_tensor_quantization_error) > 0:
             errs = torch.tensor(per_tensor_quantization_error)
@@ -460,16 +594,18 @@ def fp8_linear_forward_patch(self: nn.Linear, x, use_scaled_mm=False, max_value=
         torch.Tensor: Result of linear transformation
     """
     if use_scaled_mm:
+        # **not tested**
+        # _scaled_mm only works for per-tensor scale for now (per-channel scale does not work in certain cases)
+        if self.scale_weight.ndim != 1:
+            raise ValueError("scaled_mm only supports per-tensor scale_weight for now.")
+
         input_dtype = x.dtype
         original_weight_dtype = getattr(
             self, "original_dtype_enum", self.scale_weight.dtype
         )
         weight_dtype = self.weight.dtype
-        target_dtype = torch.float8_e5m2
-        assert (
-            weight_dtype == torch.float8_e4m3fn
-        ), "Only FP8 E4M3FN format is supported"
-        assert x.ndim == 3, "Input tensor must be 3D (batch_size, seq_len, hidden_dim)"
+        target_dtype = self.weight.dtype
+        # assert x.ndim == 3, "Input tensor must be 3D (batch_size, seq_len, hidden_dim)"
 
         if max_value is None:
             # no input quantization
@@ -479,20 +615,22 @@ def fp8_linear_forward_patch(self: nn.Linear, x, use_scaled_mm=False, max_value=
             scale_x = (torch.max(torch.abs(x.flatten())) / max_value).to(torch.float32)
 
             # quantize input tensor to FP8: this seems to consume a lot of memory
-            x, _ = quantize_tensor_to_fp8(x, scale_x, 5, 2, 1, max_value, -max_value)
+            fp8_max_value = torch.finfo(target_dtype).max
+            fp8_min_value = torch.finfo(target_dtype).min
+            x = quantize_fp8(x, scale_x, target_dtype, fp8_max_value, fp8_min_value)
 
         original_shape = x.shape
-        x = x.reshape(-1, x.shape[2]).to(target_dtype)
+        x = x.reshape(-1, x.shape[-1]).to(target_dtype)
 
         weight = self.weight.t()
         scale_weight = self.scale_weight.to(torch.float32)
 
         if self.bias is not None:
-            # out_dtype should reflect original weight dtype per reference
+            # Use input_dtype consistently for both bias/no-bias cases
             o = torch._scaled_mm(
                 x,
                 weight,
-                out_dtype=original_weight_dtype,  # type: ignore
+                out_dtype=input_dtype,  # type: ignore
                 bias=self.bias,
                 scale_a=scale_x,
                 scale_b=scale_weight,  # type: ignore
@@ -502,11 +640,12 @@ def fp8_linear_forward_patch(self: nn.Linear, x, use_scaled_mm=False, max_value=
                 x, weight, out_dtype=input_dtype, scale_a=scale_x, scale_b=scale_weight  # type: ignore
             )
 
-        reshaped = o.reshape(original_shape[0], original_shape[1], -1)
-        target_dtype = getattr(self, "original_dtype_enum", None)
-        if isinstance(target_dtype, torch.dtype):
-            return reshaped.to(target_dtype)
-        return reshaped
+        o = (
+            o.reshape(original_shape[0], original_shape[1], -1)
+            if len(original_shape) == 3
+            else o.reshape(original_shape[0], -1)
+        )
+        return o.to(input_dtype)
 
     else:
         # Dequantize the weight
@@ -514,12 +653,37 @@ def fp8_linear_forward_patch(self: nn.Linear, x, use_scaled_mm=False, max_value=
 
         # Optional upcast of the linear matmul for accuracy (ignored in scaled_mm path)
         do_upcast = bool(getattr(self, "upcast_linear", False))
-        if do_upcast:
-            x_cast = x.to(torch.float32)
-            dequantized_weight = self.weight.to(torch.float32) * self.scale_weight.to(torch.float32)  # type: ignore
+
+        # Handle different scale tensor shapes for block-wise quantization
+        if self.scale_weight.ndim < 3:
+            # Per-tensor or per-channel quantization, we can broadcast
+            if do_upcast:
+                x_cast = x.to(torch.float32)
+                dequantized_weight = self.weight.to(torch.float32) * self.scale_weight.to(torch.float32)  # type: ignore
+            else:
+                x_cast = x
+                dequantized_weight = self.weight.to(original_dtype) * self.scale_weight  # type: ignore
         else:
-            x_cast = x
-            dequantized_weight = self.weight.to(original_dtype) * self.scale_weight  # type: ignore
+            # Block-wise quantization, need to reshape weight to match scale shape for broadcasting
+            out_features, num_blocks, _ = self.scale_weight.shape
+            if do_upcast:
+                x_cast = x.to(torch.float32)
+                dequantized_weight = (
+                    self.weight.to(torch.float32)
+                    .contiguous()
+                    .view(out_features, num_blocks, -1)
+                )
+                dequantized_weight = dequantized_weight * self.scale_weight.to(torch.float32)  # type: ignore
+                dequantized_weight = dequantized_weight.view(self.weight.shape)
+            else:
+                x_cast = x
+                dequantized_weight = (
+                    self.weight.to(original_dtype)
+                    .contiguous()
+                    .view(out_features, num_blocks, -1)
+                )
+                dequantized_weight = dequantized_weight * self.scale_weight  # type: ignore
+                dequantized_weight = dequantized_weight.view(self.weight.shape)
 
         # Perform linear transformation
         if self.bias is not None:
@@ -651,417 +815,3 @@ def _is_ffn_layer(layer_name: str) -> bool:
     ffn_patterns = ["ffn", "feed_forward", "mlp", "fc", "feedforward"]
     layer_name_lower = layer_name.lower()
     return any(pattern in layer_name_lower for pattern in ffn_patterns)
-
-
-# Enhanced FP8 Quantization Features - New Implementation
-def quantize_fp8_enhanced(tensor, scale, fp8_dtype, max_value, min_value):
-    """
-    Quantize a tensor to FP8 format using PyTorch's native FP8 dtype support.
-    Enhanced version with better numerical stability.
-
-    Args:
-        tensor (torch.Tensor): Tensor to quantize
-        scale (float or torch.Tensor): Scale factor
-        fp8_dtype (torch.dtype): Target FP8 dtype (torch.float8_e4m3fn or torch.float8_e5m2)
-        max_value (float): Maximum representable value in FP8
-        min_value (float): Minimum representable value in FP8
-
-    Returns:
-        torch.Tensor: Quantized tensor in FP8 format
-    """
-    tensor = tensor.to(torch.float32)  # ensure tensor is in float32 for division
-
-    # Create scaled tensor with NaN handling
-    tensor = torch.div(tensor, scale).nan_to_num_(0.0)
-
-    # Clamp tensor to range
-    tensor = tensor.clamp_(min=min_value, max=max_value)
-
-    # Convert to FP8 dtype
-    tensor = tensor.to(fp8_dtype)
-
-    return tensor
-
-
-def load_safetensors_with_fp8_optimization_enhanced(
-    model_files,
-    calc_device,
-    target_keys=None,
-    exclude_keys=None,
-    exp_bits=4,
-    mantissa_bits=3,
-    move_to_device=False,
-    weight_hook=None,
-    quantization_mode: str = "tensor",  # "tensor", "channel", "block"
-    block_size: Optional[int] = None,  # used only when quantization_mode is "block"
-    percentile: Optional[float] = 0.999,
-    fp8_dtype: Optional[torch.dtype] = None,  # explicit dtype override
-):
-    """
-    Enhanced version of FP8 optimization with support for different quantization modes.
-
-    Args:
-        model_files: Path to model files
-        calc_device: Device for calculations
-        target_keys: Keys to target for optimization
-        exclude_keys: Keys to exclude from optimization
-        exp_bits: Number of exponent bits
-        mantissa_bits: Number of mantissa bits
-        move_to_device: Move optimized tensors to calculating device
-        weight_hook: Function to apply to each weight tensor before optimization
-        quantization_mode: "tensor" (per-tensor), "channel" (per-output-channel), "block" (block-wise)
-        block_size: Block size for block-wise quantization (default 128)
-        percentile: Percentile for scale calculation (None for max value)
-        fp8_dtype: Explicit FP8 dtype override
-
-    Returns:
-        dict: FP8 optimized state dict
-    """
-    # Determine FP8 dtype
-    if fp8_dtype is None:
-        if exp_bits == 4 and mantissa_bits == 3:
-            fp8_dtype = torch.float8_e4m3fn
-        elif exp_bits == 5 and mantissa_bits == 2:
-            fp8_dtype = torch.float8_e5m2
-        else:
-            raise ValueError(f"Unsupported FP8 format: E{exp_bits}M{mantissa_bits}")
-
-    if block_size is None and quantization_mode == "block":
-        block_size = 128  # default block size
-
-    mode_info = f"{quantization_mode} mode"
-    if quantization_mode == "block" and block_size:
-        mode_info += f" (block_size={block_size})"
-    logger.info(
-        f"🧮 Enhanced FP8 starting - {fp8_dtype} format, {mode_info}, percentile: {percentile}"
-    )
-
-    # Calculate FP8 max value
-    max_value = calculate_fp8_maxval(exp_bits, mantissa_bits)
-    min_value = -max_value
-
-    def is_target_key(key):
-        if target_keys is not None and not any(p in key for p in target_keys):
-            return False
-        if exclude_keys is not None and any(p in key for p in exclude_keys):
-            return False
-        return True
-
-    optimized_count = 0
-    state_dict = {}
-
-    # Load files efficiently
-    if isinstance(model_files, str):
-        model_files = [model_files]
-
-    for model_file in model_files:
-        logger.info(f"Loading and optimizing: {model_file}")
-
-        with MemoryEfficientSafeOpen(model_file) as f:
-            for key in tqdm(f.keys(), desc="Optimizing weights"):
-                value = f.get_tensor(key)
-
-                if weight_hook is not None:
-                    value = weight_hook(key, value, keep_on_calc_device=True)
-
-                # Check if this key should be optimized
-                if not (key.endswith(".weight") and is_target_key(key)):
-                    state_dict[key] = value
-                    continue
-
-                # Determine quantization mode for this layer
-                original_shape = value.shape
-                current_quantization_mode = quantization_mode
-
-                if quantization_mode == "block":
-                    if value.ndim != 2:
-                        current_quantization_mode = "tensor"  # fallback
-                    else:
-                        out_features, in_features = value.shape
-                        if in_features % block_size != 0:
-                            current_quantization_mode = "channel"  # fallback
-                            logger.warning(
-                                f"Layer {key} with shape {value.shape} not divisible by block_size {block_size}, "
-                                f"falling back to per-channel quantization"
-                            )
-                        else:
-                            num_blocks = in_features // block_size
-                            value = value.contiguous().view(
-                                out_features, num_blocks, block_size
-                            )
-
-                elif quantization_mode == "channel":
-                    if value.ndim != 2:
-                        current_quantization_mode = "tensor"  # fallback
-
-                # Save original dtype and device
-                original_dtype = value.dtype
-                original_device = value.device
-
-                # Move to calc device if needed
-                if calc_device is not None:
-                    value = value.to(calc_device)
-
-                # Calculate scale factor based on quantization mode
-                if (
-                    current_quantization_mode == "channel"
-                    or current_quantization_mode == "block"
-                ):
-                    scale_dim = 1 if current_quantization_mode == "channel" else 2
-                    abs_w = torch.abs(value)
-
-                    if percentile is None:
-                        scale = (
-                            torch.max(abs_w, dim=scale_dim, keepdim=True).values
-                            / max_value
-                        )
-                    else:
-                        # Per-channel/block percentile calculation
-                        row_q = torch.quantile(
-                            abs_w.to(torch.float32),
-                            q=percentile,
-                            dim=scale_dim,
-                            keepdim=True,
-                        )
-                        scale = row_q / max_value
-                else:
-                    # Per-tensor quantization
-                    if percentile is None:
-                        tensor_max = torch.max(torch.abs(value).view(-1))
-                        scale = tensor_max / max_value
-                    else:
-                        if value.numel() <= 8192 * 4096 // value.dtype.itemsize:
-                            tensor_q = torch.quantile(
-                                torch.abs(value).view(-1).to(torch.float32),
-                                q=percentile,
-                            )
-                        else:
-                            # Chunked processing for large tensors
-                            abs_w = torch.abs(value).view(-1).to(torch.float32)
-                            num_chunks = 1
-                            while (
-                                abs_w.numel() / num_chunks
-                                > 8192 * 4096 // value.dtype.itemsize
-                            ):
-                                num_chunks *= 2
-                            chunked_abs = torch.chunk(abs_w, num_chunks)
-                            chunked_q = [
-                                torch.quantile(chunk, q=percentile)
-                                for chunk in chunked_abs
-                            ]
-                            tensor_q = torch.max(torch.stack(chunked_q, dim=0))
-                        scale = tensor_q / max_value
-
-                # Numerical safety
-                scale = torch.clamp(scale, min=1e-8)
-                scale = scale.to(torch.float32)
-
-                # Quantize weight to FP8
-                quantized_weight = quantize_fp8_enhanced(
-                    value, scale, fp8_dtype, max_value, min_value
-                )
-
-                # Restore original shape if block-wise
-                if current_quantization_mode == "block":
-                    quantized_weight = quantized_weight.view(original_shape)
-
-                # Add to state dict
-                fp8_key = key
-                scale_key = key.replace(".weight", ".scale_weight")
-                assert fp8_key != scale_key, "FP8 key and scale key must be different"
-
-                if not move_to_device:
-                    quantized_weight = quantized_weight.to(original_device)
-
-                scale_tensor = scale.to(
-                    dtype=original_dtype, device=quantized_weight.device
-                )
-
-                state_dict[fp8_key] = quantized_weight
-                state_dict[scale_key] = scale_tensor
-
-                optimized_count += 1
-
-    if optimized_count > 0:
-        mode_display = f"{quantization_mode} mode"
-        if quantization_mode == "block" and block_size:
-            mode_display += f" (block_size={block_size})"
-        logger.info(
-            f"🧮 Enhanced FP8 optimization completed: {optimized_count} layers quantized ({mode_display})"
-        )
-    else:
-        logger.info("🧮 Enhanced FP8 optimization: No layers quantized")
-    return state_dict
-
-
-def fp8_linear_forward_patch_enhanced(
-    self: nn.Linear, x, use_scaled_mm=False, max_value=None
-):
-    """
-    Enhanced FP8 linear forward patch with support for different quantization modes.
-
-    Args:
-        self: Linear layer with FP8 weights
-        x: Input tensor
-        use_scaled_mm: Whether to use scaled matrix multiplication (deprecated)
-        max_value: Maximum value for scaling (not used in current implementation)
-
-    Returns:
-        torch.Tensor: Result of linear transformation
-    """
-    if use_scaled_mm:
-        # Scaled MM is disabled due to accuracy issues
-        raise NotImplementedError(
-            "use_scaled_mm is not supported in enhanced FP8 implementation"
-        )
-
-    # Dequantize the weight based on scale tensor shape
-    original_dtype = self.scale_weight.dtype
-
-    if self.scale_weight.ndim < 3:
-        # Per-tensor or per-channel quantization
-        dequantized_weight = self.weight.to(original_dtype) * self.scale_weight
-    else:
-        # Block-wise quantization - need to reshape for broadcasting
-        out_features, num_blocks, _ = self.scale_weight.shape
-        dequantized_weight = (
-            self.weight.to(original_dtype)
-            .contiguous()
-            .view(out_features, num_blocks, -1)
-        )
-        dequantized_weight = dequantized_weight * self.scale_weight
-        dequantized_weight = dequantized_weight.view(self.weight.shape)
-
-    # Perform linear transformation
-    if self.bias is not None:
-        return F.linear(x, dequantized_weight, self.bias)
-    else:
-        return F.linear(x, dequantized_weight)
-
-
-def apply_fp8_monkey_patch_enhanced(model, optimized_state_dict, use_scaled_mm=False):
-    """
-    Enhanced version of FP8 monkey patch with support for different quantization modes.
-
-    Args:
-        model: Model to patch
-        optimized_state_dict: State dict with FP8 weights and scales
-        use_scaled_mm: Whether to use scaled matrix multiplication (deprecated)
-    """
-    # Find all scale keys
-    scale_keys = [
-        key for key in optimized_state_dict.keys() if key.endswith(".scale_weight")
-    ]
-
-    if not scale_keys:
-        logger.warning("No FP8 scale keys found, skipping monkey patch")
-        return
-
-    # Store scale shape information for each module
-    patched_module_paths = set()
-    scale_shape_info = {}
-
-    for scale_key in scale_keys:
-        module_path = scale_key.rsplit(".scale_weight", 1)[0]
-        patched_module_paths.add(module_path)
-        scale_shape_info[module_path] = optimized_state_dict[scale_key].shape
-
-    patched_count = 0
-
-    # Apply monkey patch to each layer with FP8 weights
-    for name, module in model.named_modules():
-        has_scale = name in patched_module_paths
-
-        if isinstance(module, nn.Linear) and has_scale:
-            # Register the scale_weight buffer with correct shape
-            scale_shape = scale_shape_info[name]
-            module.register_buffer(
-                "scale_weight", torch.ones(scale_shape, dtype=module.weight.dtype)
-            )
-
-            # Create enhanced forward method
-            def new_forward(self, x):
-                return fp8_linear_forward_patch_enhanced(self, x, use_scaled_mm, None)
-
-            # Replace forward method
-            module.forward = new_forward.__get__(module, module.__class__)
-            patched_count += 1
-
-    if patched_count > 0:
-        logger.info(f"🔧 Enhanced FP8 monkey patch applied to {patched_count} layers")
-    else:
-        logger.info("🔧 Enhanced FP8 monkey patch: No layers patched")
-
-
-# Configuration class for FP8 quantization
-class FP8QuantizationConfig:
-    """Configuration for FP8 quantization settings."""
-
-    def __init__(
-        self,
-        enabled: bool = False,
-        quantization_mode: str = "tensor",
-        block_size: Optional[int] = None,
-        percentile: Optional[float] = 0.999,
-        fp8_dtype: str = "e4m3fn",
-        exclude_modules: Optional[List[str]] = None,
-        use_torchao: bool = False,
-    ):
-        self.enabled = enabled
-        self.quantization_mode = quantization_mode
-        self.block_size = block_size or (128 if quantization_mode == "block" else None)
-        self.percentile = percentile
-        self.fp8_dtype = fp8_dtype
-        self.exclude_modules = exclude_modules or []
-        self.use_torchao = use_torchao
-
-        # Validate settings
-        self._validate()
-
-    def _validate(self):
-        """Validate configuration parameters."""
-        valid_modes = ["tensor", "channel", "block"]
-        if self.quantization_mode not in valid_modes:
-            raise ValueError(f"quantization_mode must be one of {valid_modes}")
-
-        valid_dtypes = ["e4m3fn", "e5m2"]
-        if self.fp8_dtype not in valid_dtypes:
-            raise ValueError(f"fp8_dtype must be one of {valid_dtypes}")
-
-        if self.quantization_mode == "block" and self.block_size is None:
-            self.block_size = 128
-
-    def get_torch_dtype(self) -> torch.dtype:
-        """Get the PyTorch dtype for the FP8 format."""
-        if self.fp8_dtype == "e4m3fn":
-            return torch.float8_e4m3fn
-        elif self.fp8_dtype == "e5m2":
-            return torch.float8_e5m2
-        else:
-            raise ValueError(f"Unsupported fp8_dtype: {self.fp8_dtype}")
-
-    def get_exp_mantissa_bits(self) -> tuple[int, int]:
-        """Get exponent and mantissa bits for the FP8 format."""
-        if self.fp8_dtype == "e4m3fn":
-            return 4, 3
-        elif self.fp8_dtype == "e5m2":
-            return 5, 2
-        else:
-            raise ValueError(f"Unsupported fp8_dtype: {self.fp8_dtype}")
-
-    def to_dict(self) -> dict:
-        """Convert config to dictionary."""
-        return {
-            "enabled": self.enabled,
-            "quantization_mode": self.quantization_mode,
-            "block_size": self.block_size,
-            "percentile": self.percentile,
-            "fp8_dtype": self.fp8_dtype,
-            "exclude_modules": self.exclude_modules,
-            "use_torchao": self.use_torchao,
-        }
-
-    @classmethod
-    def from_dict(cls, config_dict: dict) -> "FP8QuantizationConfig":
-        """Create config from dictionary."""
-        return cls(**config_dict)

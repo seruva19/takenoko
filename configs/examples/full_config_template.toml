@@ -28,21 +28,19 @@ fp8_base = true
 # E5M2 (e5m2): Compatible with RTX 3000 series, slightly lower precision
 fp8_format = "e4m3"
 
-# Percentile for FP8 scale calculation (works with ALL FP8 modes, default: 0.999)
+# Percentile for FP8 scale calculation
 # Uses percentile instead of max value to reduce impact of outliers
-# Set to null to use max value (matches pre-patch behavior)
 # Range: 0.0 to 1.0, recommended: 0.99 to 0.9999
-# To disable percentile scaling: fp8_percentile = null
-fp8_percentile = 0.999
+# fp8_percentile = 0.999
 
 # Exclude specific modules from FP8 quantization (works with ALL FP8 modes)
 # Comma-separated list or array of module name patterns to preserve
 # Useful for keeping critical layers in higher precision
-# fp8_exclude_keys = ["norm", "patch_embedding", "text_embedding", "time_embedding", "time_projection", "head", "modulation", "img_emb"]
+# fp8_exclude_keys = ["norm", "patch_embedding", "text_embedding", "time_embedding", "time_projection", "head", "img_emb"]
 
 # Scale input tensor format for scaled_mm ("e4m3" or "e5m2", None disables input scaling)
 # Enables input tensor quantization for additional memory savings, may impact quality, only works with fp8_scaled = true
-# scale_input_tensor = null
+# scale_input_tensor = "e4m3"
 
 # Upcast quantization to float32 when computing scales and FP8 weights (improves accuracy, small VRAM cost during optimization)
 # Only works with fp8_scaled = true
@@ -59,7 +57,7 @@ exclude_ffn_from_scaled_mm = true
 # Optional: force a uniform cast of DiT weights ("fp16" or "bf16").
 # When null, preserves default behavior (checkpoint dtype or fp8 paths).
 # Ignored when fp8_scaled = true or mixed_precision_transformer = true.
-# dit_cast_dtype = null
+# dit_cast_dtype = "fp16"
 
 # Use mixed precision for transformer (preserves per-tensor dtypes from checkpoint)
 # true for better dtype precision when using fp8_scaled
@@ -95,18 +93,22 @@ trace_memory = true
 
 # Enable enhanced FP8 quantization features (default: false)
 # When enabled, provides additional quantization modes and better control
-fp8_use_enhanced = false
+fp8_use_enhanced = true
 
 # Enhanced FP8 quantization mode (ONLY when fp8_use_enhanced = true)
 # "tensor": Per-tensor quantization (fastest, lowest memory)
 # "channel": Per-channel quantization (balanced accuracy/memory)
 # "block": Block-wise quantization (best compression, configurable)
-fp8_quantization_mode = "tensor"
+fp8_quantization_mode = "block"
 
 # Block size for block-wise quantization (ONLY when fp8_quantization_mode = "block")
 # Smaller values = better compression, larger values = faster processing
 # Must be divisible by layer input features, falls back to channel mode if not
-fp8_block_size = 128
+fp8_block_size = 64
+
+# Whether to fallback to channel quantization if block-wise fails
+# (e.g., when tensor dimensions are not divisible by block size)
+fp8_block_wise_fallback_to_channel = true
 
 # =============================================================================
 # ⚠️ TORCHAO FP8 INTEGRATION
@@ -893,10 +895,10 @@ contrastive_flow_skip_unconditional = false
 
 # Class index representing unconditional/null samples (required if skip_unconditional is true)
 # Set this to the index used for unconditional generation in your dataset
-# contrastive_flow_null_class_idx = null
+# contrastive_flow_null_class_idx = 0
 
 # =============================================================================
-# ⚠️ REPA (REPRESENTATIONAL ALIGNMENT) SETTINGS
+# ⚠️ REPRESENTATIONAL ALIGNMENT (REPA) SETTINGS
 # =============================================================================
 
 # Enable REPA for representational alignment during training
@@ -2017,7 +2019,7 @@ log_timestep_distribution_pmf = true
 # =============================================================================
 
 # DDP timeout (min, None for default of accelerate)
-# ddp_timeout = null 
+# ddp_timeout = 1 
 
 # Enable gradient_as_bucket_view for DDP
 # ddp_gradient_as_bucket_view = false # Enable gradient_as_bucket_view for DDP
@@ -2186,10 +2188,10 @@ vae_dtype = "float16"
 device = "cuda"
 
 # batch size, override dataset config if dataset batch size > this
-# batch_size = null 
+# batch_size = 4 
 
 # number of workers for dataset, default is cpu count-1
-# num_workers = null 
+# num_workers = 4 
 
 # skip existing cache files
 skip_existing = false
@@ -2228,7 +2230,7 @@ device = "cuda"
 batch_size = 16
 
 # number of workers for dataset, default is cpu count-1
-# num_workers = null 
+# num_workers = 4 
 
 # skip existing cache files
 skip_existing = false

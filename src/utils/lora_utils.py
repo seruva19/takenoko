@@ -6,7 +6,6 @@ import torch
 import logging
 from modules.fp8_optimization_utils import (
     load_safetensors_with_fp8_optimization,
-    optimize_state_dict_with_fp8,
 )
 from common.logger import get_logger
 
@@ -16,7 +15,6 @@ from tqdm import tqdm
 
 from utils.safetensors_utils import (
     MemoryEfficientSafeOpen,
-    load_safetensors,
 )
 from utils.device_utils import synchronize_device
 
@@ -217,11 +215,21 @@ def load_safetensors_with_lora_and_fp8(
                     lora_weight_keys.remove(alpha_key)
 
             if keep_on_calc_device:
-                if model_weight.device != calc_device or model_weight.dtype != original_dtype:
-                    model_weight = model_weight.to(device=calc_device, dtype=original_dtype)
+                if (
+                    model_weight.device != calc_device
+                    or model_weight.dtype != original_dtype
+                ):
+                    model_weight = model_weight.to(
+                        device=calc_device, dtype=original_dtype
+                    )
             else:
-                if model_weight.device != original_device or model_weight.dtype != original_dtype:
-                    model_weight = model_weight.to(device=original_device, dtype=original_dtype)
+                if (
+                    model_weight.device != original_device
+                    or model_weight.dtype != original_dtype
+                ):
+                    model_weight = model_weight.to(
+                        device=original_device, dtype=original_dtype
+                    )
             return model_weight
 
         weight_hook = weight_hook_func
@@ -271,7 +279,7 @@ def load_safetensors_with_fp8_optimization_and_hook(
     exclude_keys: Optional[List[str]] = None,
     weight_hook: callable = None,  # type: ignore
     quant_dtype: Optional[torch.dtype] = None,
-    fp8_format: str = "e4m3",
+    fp8_format: str = "e4m3",  # deprecated: use fp8_use_enhanced instead
     fp8_per_channel: bool = False,
     fp8_percentile: Optional[float] = None,
     # Enhanced FP8 parameters
@@ -307,7 +315,9 @@ def load_safetensors_with_fp8_optimization_and_hook(
         # Choose between enhanced and legacy FP8 optimization
         if fp8_use_enhanced:
             logger.info("Using enhanced FP8 optimization")
-            from modules.fp8_optimization_utils import load_safetensors_with_fp8_optimization_enhanced
+            from modules.fp8_optimization_utils import (
+                load_safetensors_with_fp8_optimization,
+            )
 
             # Determine quantization mode
             if fp8_per_channel:
@@ -323,7 +333,7 @@ def load_safetensors_with_fp8_optimization_and_hook(
             else:
                 fp8_dtype = torch.float8_e4m3fn  # default
 
-            state_dict = load_safetensors_with_fp8_optimization_enhanced(
+            state_dict = load_safetensors_with_fp8_optimization(
                 model_files,
                 calc_device,
                 target_keys,
@@ -335,7 +345,6 @@ def load_safetensors_with_fp8_optimization_and_hook(
                 quantization_mode=quantization_mode,
                 block_size=fp8_block_size,
                 percentile=fp8_percentile,
-                fp8_dtype=fp8_dtype,
             )
         else:
             # Use legacy FP8 optimization for backwards compatibility

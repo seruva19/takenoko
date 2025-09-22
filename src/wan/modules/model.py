@@ -782,7 +782,8 @@ FP8_OPTIMIZATION_EXCLUDE_KEYS = [
     "time_embedding",
     "time_projection",
     "head",
-    "modulation",
+    # "modulation",
+    # modulation layers are large and benefit from block-wise scaling; allow FP8 by default
     "img_emb",
 ]
 
@@ -1044,6 +1045,8 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
             FP8_OPTIMIZATION_EXCLUDE_KEYS,
             move_to_device=move_to_device,
             quant_dtype=quant_dtype,
+            quantization_mode="block",
+            block_size=64,
         )
 
         # apply monkey patching
@@ -1900,10 +1903,10 @@ def load_wan_model(
     if fp8_scaled:
         # Apply monkey patch for FP8 - enhanced or legacy
         if fp8_use_enhanced:
-            from modules.fp8_optimization_utils import apply_fp8_monkey_patch_enhanced
+            from modules.fp8_optimization_utils import apply_fp8_monkey_patch
 
             logger.info("Applying enhanced FP8 monkey patch")
-            apply_fp8_monkey_patch_enhanced(model, sd, use_scaled_mm=use_scaled_mm)
+            apply_fp8_monkey_patch(model, sd, use_scaled_mm=use_scaled_mm)
         else:
             # Use legacy monkey patch for backwards compatibility
             apply_fp8_monkey_patch(

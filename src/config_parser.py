@@ -70,13 +70,16 @@ def create_args_from_config(
     )
     args.scale_input_tensor = config.get("scale_input_tensor", None)
 
-    args.fp8_percentile = config.get("fp8_percentile", 0.999)
+    args.fp8_percentile = config.get("fp8_percentile", None)
     args.fp8_exclude_keys = config.get("fp8_exclude_keys", None)
 
     # Enhanced FP8 quantization parameters (new features - gated by fp8_use_enhanced)
-    args.fp8_use_enhanced = bool(config.get("fp8_use_enhanced", False))
-    args.fp8_quantization_mode = config.get("fp8_quantization_mode", "tensor")
-    args.fp8_block_size = config.get("fp8_block_size", None)
+    args.fp8_use_enhanced = bool(config.get("fp8_use_enhanced", True))
+    args.fp8_quantization_mode = config.get("fp8_quantization_mode", "block")
+    args.fp8_block_size = config.get("fp8_block_size", 64)
+    args.fp8_block_wise_fallback_to_channel = bool(
+        config.get("fp8_block_wise_fallback_to_channel", True)
+    )
 
     # TorchAO FP8 quantization parameters (alternative backend)
     args.torchao_fp8_enabled = bool(config.get("torchao_fp8_enabled", False))
@@ -694,7 +697,7 @@ def create_args_from_config(
     args.split_attn = config.get("split_attn", False)
 
     # DDP settings
-    args.ddp_timeout = config.get("ddp_timeout")
+    args.ddp_timeout = config.get("ddp_timeout", 1)
     args.ddp_gradient_as_bucket_view = config.get("ddp_gradient_as_bucket_view", False)
     args.ddp_static_graph = config.get("ddp_static_graph", False)
 
@@ -1263,7 +1266,8 @@ def create_args_from_config(
         logger.info(
             f"🔧 Enhanced FP8 enabled - Mode: {args.fp8_quantization_mode}, "
             f"Format: {args.fp8_format}, Block size: {args.fp8_block_size}, "
-            f"Percentile: {args.fp8_percentile}"
+            f"Percentile: {args.fp8_percentile}, "
+            f"Fallback to channel: {args.fp8_block_wise_fallback_to_channel}"
         )
 
     # Validate TorchAO FP8 configuration
