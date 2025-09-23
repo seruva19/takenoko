@@ -949,6 +949,10 @@ def create_args_from_config(
     # Huber loss parameters (for pure_huber loss type)
     args.huber_delta = config.get("huber_delta", 1.0)
 
+    # Stepped loss parameters
+    args.stepped_step_size = config.get("stepped_step_size", 50)
+    args.stepped_multiplier = config.get("stepped_multiplier", 10.0)
+
     # Fourier loss parameters
     args.fourier_weight = config.get("fourier_weight", 0.05)
     args.fourier_mode = config.get(

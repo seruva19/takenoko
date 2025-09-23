@@ -53,6 +53,9 @@ def _get_loss_kwargs(args):
         "huber_delta": getattr(args, "huber_delta", 1.0),
         # EW loss parameters
         "ew_boundary_shift": getattr(args, "ew_boundary_shift", 0.0),
+        # Stepped loss parameters
+        "stepped_step_size": getattr(args, "stepped_step_size", 50),
+        "stepped_multiplier": getattr(args, "stepped_multiplier", 10.0),
     }
 
 
@@ -282,6 +285,7 @@ class TrainingLossComputer:
         raft: Optional[Any] = None,
         warp_fn: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
         adaptive_manager: Optional[Any] = None,
+        noise_scheduler: Optional[Any] = None,
     ) -> LossComponents:
         """Compute the full training loss and its components.
 
@@ -362,6 +366,9 @@ class TrainingLossComputer:
                         reduction="none",
                         timesteps=timesteps,
                         noise=noise,
+                        noisy_latents=noisy_model_input,
+                        clean_latents=latents,
+                        noise_scheduler=noise_scheduler,
                         **loss_kwargs,
                     )
 
@@ -413,6 +420,9 @@ class TrainingLossComputer:
                     reduction="none",
                     timesteps=timesteps,
                     noise=noise,
+                    noisy_latents=noisy_model_input,
+                    clean_latents=latents,
+                    noise_scheduler=noise_scheduler,
                     **loss_kwargs,
                 )
                 loss_contrastive = conditional_loss_with_pseudo_huber(
@@ -428,6 +438,9 @@ class TrainingLossComputer:
                     reduction="none",
                     timesteps=timesteps,
                     noise=noise,
+                    noisy_latents=noisy_model_input,
+                    clean_latents=latents,
+                    noise_scheduler=noise_scheduler,
                     **loss_kwargs,
                 )
 
@@ -456,6 +469,9 @@ class TrainingLossComputer:
                 reduction="none",
                 timesteps=timesteps,
                 noise=noise,
+                noisy_latents=noisy_model_input,
+                clean_latents=latents,
+                noise_scheduler=noise_scheduler,
                 **_get_loss_kwargs(args),
             )
 

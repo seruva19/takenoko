@@ -135,6 +135,7 @@ class SliderIntegration:
                 raft=kwargs.get("raft"),
                 warp_fn=kwargs.get("warp_fn"),
                 adaptive_manager=kwargs.get("adaptive_manager"),
+                noise_scheduler=noise_scheduler,
             )
 
     def is_enabled(self) -> bool:
