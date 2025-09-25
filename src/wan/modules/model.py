@@ -5,6 +5,7 @@ from typing import Dict, List, Optional, Union
 
 import torch
 import torch.nn as nn
+from modules.ramtorch_linear_factory import make_linear, is_linear_like
 from torch.utils.checkpoint import checkpoint
 from accelerate import init_empty_weights
 from torch.distributed.tensor.parallel import (
@@ -256,10 +257,10 @@ class WanSelfAttention(nn.Module):
         self.rope_on_the_fly = rope_on_the_fly
 
         # layers
-        self.q = nn.Linear(dim, dim)
-        self.k = nn.Linear(dim, dim)
-        self.v = nn.Linear(dim, dim)
-        self.o = nn.Linear(dim, dim)
+        self.q = make_linear(dim, dim, True, tag="q")
+        self.k = make_linear(dim, dim, True, tag="k")
+        self.v = make_linear(dim, dim, True, tag="v")
+        self.o = make_linear(dim, dim, True, tag="o")
         self.norm_q = WanRMSNorm(dim, eps=eps) if qk_norm else nn.Identity()
         self.norm_k = WanRMSNorm(dim, eps=eps) if qk_norm else nn.Identity()
 
@@ -513,9 +514,9 @@ class WanAttentionBlock(nn.Module):
         )
         self.norm2 = WanLayerNorm(dim, eps)
         self.ffn = nn.Sequential(
-            nn.Linear(dim, ffn_dim),
+            make_linear(dim, ffn_dim, True, tag="ffn_in"),
             nn.GELU(approximate="tanh"),
-            nn.Linear(ffn_dim, dim),
+            make_linear(ffn_dim, dim, True, tag="ffn_out"),
         )
 
         # modulation
@@ -731,7 +732,7 @@ class Head(nn.Module):
         # layers
         out_dim = math.prod(patch_size) * out_dim
         self.norm = WanLayerNorm(dim, eps)
-        self.head = nn.Linear(dim, out_dim)
+        self.head = make_linear(dim, out_dim, True, tag="head")
 
         # modulation
         self.modulation = nn.Parameter(torch.randn(1, 2, dim) / dim**0.5)
@@ -919,16 +920,22 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
             in_dim, dim, kernel_size=patch_size, stride=patch_size
         )
         self.text_embedding = nn.Sequential(
-            nn.Linear(text_dim, dim), nn.GELU(approximate="tanh"), nn.Linear(dim, dim)
+            make_linear(text_dim, dim, True, tag="text_in"),
+            nn.GELU(approximate="tanh"),
+            make_linear(dim, dim, True, tag="text_out"),
         )
 
         # Optional RoPE variant flag (comfy), configured via loader
         self.rope_func = "default"
 
         self.time_embedding = nn.Sequential(
-            nn.Linear(freq_dim, dim), nn.SiLU(), nn.Linear(dim, dim)
+            make_linear(freq_dim, dim, True, tag="time_in"),
+            nn.SiLU(),
+            make_linear(dim, dim, True, tag="time_out"),
         )
-        self.time_projection = nn.Sequential(nn.SiLU(), nn.Linear(dim, dim * 6))
+        self.time_projection = nn.Sequential(
+            nn.SiLU(), make_linear(dim, dim * 6, True, tag="time_proj")
+        )
 
         # blocks
         cross_attn_type = "t2v_cross_attn"
@@ -1710,19 +1717,25 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
 
         # basic init
         for m in self.modules():
-            if isinstance(m, nn.Linear):
+            if is_linear_like(m):
                 nn.init.xavier_uniform_(m.weight)
-                if m.bias is not None:
+                if getattr(m, "bias", None) is not None:
                     nn.init.zeros_(m.bias)
 
         # init embeddings
         nn.init.xavier_uniform_(self.patch_embedding.weight.flatten(1))
         for m in self.text_embedding.modules():
-            if isinstance(m, nn.Linear):
-                nn.init.normal_(m.weight, std=0.02)
+            if is_linear_like(m):
+                try:
+                    nn.init.normal_(m.weight, std=0.02)
+                except Exception:
+                    pass
         for m in self.time_embedding.modules():
-            if isinstance(m, nn.Linear):
-                nn.init.normal_(m.weight, std=0.02)
+            if is_linear_like(m):
+                try:
+                    nn.init.normal_(m.weight, std=0.02)
+                except Exception:
+                    pass
 
         # init output layer
         nn.init.zeros_(self.head.head.weight)
@@ -1921,9 +1934,23 @@ def load_wan_model(
 
         if loading_device.type != "cpu":
             # make sure all the model weights are on the loading_device
-            logger.info(f"Moving weights to {loading_device}")
+            logger.info(f"☄️ INFO: Moving weights to {loading_device}")
             for key in sd.keys():  # type: ignore
                 sd[key] = sd[key].to(loading_device)
+
+    # If RamTorch Linear is enabled, and fp8_scaled is off, strip *.scale_weight buffers
+    try:
+        from modules.ramtorch_linear_factory import ramtorch_enabled  # type: ignore
+
+        if ramtorch_enabled() and not fp8_scaled:
+            has_scale_keys = any(k.endswith(".scale_weight") for k in sd.keys())
+            if has_scale_keys:
+                sd = {k: v for k, v in sd.items() if not k.endswith(".scale_weight")}
+                logger.info(
+                    "🌲 Stripped *.scale_weight keys from state_dict (RamTorch compatibility)"
+                )
+    except Exception:
+        pass
 
     info = model.load_state_dict(sd, strict=True, assign=True)
     if dit_weight_dtype is not None:

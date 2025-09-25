@@ -13,6 +13,7 @@ from transformers import CLIPTextModel
 import numpy as np
 import torch
 import torch.nn as nn
+from modules.ramtorch_linear_factory import is_linear_like
 
 import logging
 from common.logger import get_logger
@@ -55,8 +56,13 @@ class LoRAModule(torch.nn.Module):
             in_dim = org_module.in_channels
             out_dim = org_module.out_channels
         else:
-            in_dim = org_module.in_features
-            out_dim = org_module.out_features
+            # Support torch.nn.Linear and RamTorch Linear via duck typing
+            in_dim = getattr(org_module, "in_features", None)
+            out_dim = getattr(org_module, "out_features", None)
+            if in_dim is None or out_dim is None:
+                raise RuntimeError(
+                    "LoRA: Unsupported module type for linear-like replacement"
+                )
 
         self.lora_dim = lora_dim
         self.split_dims = split_dims
@@ -83,9 +89,9 @@ class LoRAModule(torch.nn.Module):
             assert (
                 sum(split_dims) == out_dim
             ), "sum of split_dims must be equal to out_dim"
-            assert (
-                org_module.__class__.__name__ == "Linear"
-            ), "split_dims is only supported for Linear"
+            assert is_linear_like(
+                org_module
+            ), "split_dims is only supported for Linear-like modules"
             # print(f"split_dims: {split_dims}")
             self.lora_down = torch.nn.ModuleList(
                 [
@@ -722,7 +728,9 @@ class LoRANetwork(torch.nn.Module):
                         module = root_module  # search all modules
 
                     for child_name, child_module in module.named_modules():
-                        is_linear = child_module.__class__.__name__ == "Linear"
+                        is_linear = is_linear_like(child_module) or (
+                            child_module.__class__.__name__ == "Linear"
+                        )
                         is_conv2d = child_module.__class__.__name__ == "Conv2d"
                         is_conv2d_1x1 = is_conv2d and child_module.kernel_size == (1, 1)
 

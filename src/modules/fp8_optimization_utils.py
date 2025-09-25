@@ -7,6 +7,7 @@ import logging
 from tqdm import tqdm
 from common.logger import get_logger
 from utils.safetensors_utils import MemoryEfficientSafeOpen
+from modules.ramtorch_linear_factory import is_linear_like
 
 logger = get_logger(__name__, level=logging.INFO)
 
@@ -580,7 +581,7 @@ def load_safetensors_with_fp8_optimization(
     return state_dict
 
 
-def fp8_linear_forward_patch(self: nn.Linear, x, use_scaled_mm=False, max_value=None):
+def fp8_linear_forward_patch(self: nn.Module, x, use_scaled_mm=False, max_value=None):
     """
     Patched forward method for Linear layers with FP8 weights.
 
@@ -764,8 +765,8 @@ def apply_fp8_monkey_patch(
         # Check if this module has a corresponding scale_weight
         has_scale = name in patched_module_paths
 
-        # Apply patch if it's a Linear layer with FP8 scale
-        if isinstance(module, nn.Linear) and has_scale:
+        # Apply patch if it's Linear-like with FP8 scale (supports RamTorch Linear as well)
+        if is_linear_like(module) and has_scale:
             # Register the scale_weight as a buffer to load the state_dict
             setattr(
                 module, "original_dtype_enum", module.weight.dtype
@@ -780,6 +781,9 @@ def apply_fp8_monkey_patch(
             # Determine if this layer should use scaled_mm (with FFN exclusion support)
             really_use_scaled_mm = use_scaled_mm
             if exclude_ffn_from_scaled_mm and _is_ffn_layer(name):
+                really_use_scaled_mm = False
+            # For non-torch.nn.Linear modules (e.g., RamTorch Linear), disable scaled_mm path
+            if not isinstance(module, nn.Linear):
                 really_use_scaled_mm = False
 
             # Create a new forward method with the patched version.

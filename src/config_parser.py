@@ -113,6 +113,14 @@ def create_args_from_config(
         config.get("memory_mapping_threshold", 10 * 1024 * 1024)
     )
 
+    # RamTorch linear replacement
+    args.use_ramtorch_linear = bool(config.get("use_ramtorch_linear", False))
+    args.ramtorch_device = config.get("ramtorch_device", None)
+    args.ramtorch_strength = float(config.get("ramtorch_strength", 1.0))
+    args.ramtorch_min_features = int(config.get("ramtorch_min_features", 0))
+    args.ramtorch_verbose = bool(config.get("ramtorch_verbose", False))
+    args.ramtorch_fp32_io = bool(config.get("ramtorch_fp32_io", True))
+
     # TREAD configuration (optional)
     # 1) Native TOML tables: tread_config.routes = [ {selection_ratio=..., start_layer_idx=..., end_layer_idx=...}, ... ]
     # 2) Shorthand strings: tread_config_route1 = "selection_ratio=0.2; start_layer_idx=2; end_layer_idx=-2"

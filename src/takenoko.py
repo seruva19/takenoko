@@ -58,6 +58,9 @@ from utils.memory_utils import configure_cuda_from_config
 from common.vram_estimator import (
     estimate_and_log_vram,
 )
+from modules.ramtorch_linear_factory import (
+    configure_ramtorch_from_args,
+)
 
 # Import memory tracking manager
 try:
@@ -365,6 +368,12 @@ class UnifiedTrainer:
 
         # Initialize memory tracking if enabled
         initialize_memory_tracking(self.args) if MEMORY_TRACKING_AVAILABLE else None
+
+        # Configure RamTorch Linear replacement from root TOML
+        try:
+            configure_ramtorch_from_args(self.args)
+        except Exception as e:
+            logger.debug(f"RamTorch Linear configuration skipped: {e}")
 
     def show_memory_diagnostics(self) -> None:
         """Display comprehensive memory diagnostics."""

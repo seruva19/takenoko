@@ -976,22 +976,46 @@ nabla_sparse_algo = "nabla-0.9_sta-11-24-24"
 sdpa = true
 
 # Use FlashAttention for CrossAttention, requires FlashAttention (uv pip install your-flash-attn.whl)
-# flash_attn = true 
+# flash_attn = true
 
 # Use SageAttention, requires SageAttention
-# sage_attn = true 
+# sage_attn = true
 
 # Use xformers for CrossAttention, requires xformers
-# xformers = true 
+# xformers = true
 
 # Use FlashAttention 3 for CrossAttention
-# flash3 = true 
+# flash3 = true
 
 # Use split attention for attention calculation (split batch size=1, affects memory usage and speed)
-# split_attn = true 
+# split_attn = false
 
 # Number of blocks to swap in the model, max XXX
 # blocks_to_swap = 20 
+
+# Enable RamTorch Linear replacement (drop-in for selected Linear layers)
+# When true, certain Linear layers are replaced with CPU-stored params that are
+# transferred to GPU on-demand to reduce VRAM. See ramtorch_strength/min_features.
+use_ramtorch_linear = false
+
+# Device to use for RamTorch compute (e.g., "cuda" or "cuda:0").
+# If unset, RamTorch will default to its internal device selection.
+# ramtorch_device = "cuda"
+
+# Fraction (0.0–1.0) of eligible Linear layers to replace with RamTorch.
+# Useful for partial rollout and benchmarking. Deterministic selection per layer tag.
+ramtorch_strength = 1.0
+
+# Minimum parameter count (in_features * out_features) for a Linear to be eligible.
+# Increase to target only large matrices (e.g., 1<<20 = 1048576 params).
+ramtorch_min_features = 0
+
+# Log every RamTorch replacement (verbose); default logs only the first
+ramtorch_verbose = false
+
+# Force RamTorch to run in float32 I/O passthrough for stability with mixed precision
+# (keeps outputs in float32; recommended when training with fp16/bf16)
+ramtorch_fp32_io = true
 
 # =============================================================================
 # CUDA ENVIRONMENT & RUNTIME SETTINGS

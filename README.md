@@ -80,4 +80,5 @@ Keep in mind that work on some features is not yet complete due to time and hard
 | [musubi-tuner (fork)](https://github.com/betterftr/musubi-tuner) | repo | - Full model fine-tuning | [betterftr](https://github.com/betterftr) | Apache 2.0 | |
 | [stochastic_round_cuda](https://github.com/ethansmith2000/stochastic_round_cuda) | repo | - Stochastic rounding CUDA implementation | [ethansmith2000](https://github.com/ethansmith2000) | MIT | |
 | [simplevae](https://huggingface.co/AiArtLab/simplevae) | repo | - VAE training enhancements | [AiArtLab](https://huggingface.co/AiArtLab) |  | |
+| [RamTorch](https://github.com/lodestone-rock/RamTorch) | repo | - RamTorch CPU-bouncing linear layers | [lodestone-rock](https://github.com/lodestone-rock) | Apache 2.0 | |
 
