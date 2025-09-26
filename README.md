@@ -77,7 +77,7 @@ Keep in mind that work on some features is not yet complete due to time and hard
 | [Ouroboros-Diffusion: Exploring Consistent Content Generation in Tuning-free Long Video Diffusion](https://arxiv.org/abs/2501.09019) | paper | - Frequency-domain temporal consistency | Jingyuan Chen, Fuchen Long, Jie An, Zhaofan Qiu, Ting Yao, Jiebo Luo, Tao Mei | CC BY-SA 4.0 | |
 | [mmgp](https://github.com/deepbeepmeep/mmgp) | repo | - Memory-mapped safetensors loading | [deepbeepmeep](https://github.com/deepbeepmeep) | GNU GPL |  |
 | [attention-map-diffusers](https://github.com/wooyeolbaek/attention-map-diffusers) | repo | - Cross-attention map visualization | [wooyeolbaek](https://github.com/wooyeolbaek) | MIT |  |
-| [musubi-tuner (fork)](https://github.com/betterftr/musubi-tuner) | repo | - Full model fine-tuning | [betterftr](https://github.com/betterftr) | Apache 2.0 | |
+| [musubi-tuner (fork)](https://github.com/betterftr/musubi-tuner) | repo | - Full model fine-tuning<br>- Row-based TREAD | [betterftr](https://github.com/betterftr) | Apache 2.0 | |
 | [stochastic_round_cuda](https://github.com/ethansmith2000/stochastic_round_cuda) | repo | - Stochastic rounding CUDA implementation | [ethansmith2000](https://github.com/ethansmith2000) | MIT | |
 | [simplevae](https://huggingface.co/AiArtLab/simplevae) | repo | - VAE training enhancements | [AiArtLab](https://huggingface.co/AiArtLab) |  | |
 | [RamTorch](https://github.com/lodestone-rock/RamTorch) | repo | - RamTorch CPU-bouncing linear layers | [lodestone-rock](https://github.com/lodestone-rock) | Apache 2.0 | |

@@ -16,7 +16,7 @@ from torch.distributed.tensor.parallel import (
 from torch.distributed._tensor import Replicate, Shard  # type: ignore
 
 from utils.lora_utils import load_safetensors_with_lora_and_fp8
-from utils.safetensors_utils import MemoryEfficientSafeOpen, load_safetensors
+from utils.safetensors_utils import MemoryEfficientSafeOpen
 from utils.model_utils import create_cpu_offloading_wrapper
 
 import logging
@@ -25,15 +25,12 @@ from common.logger import get_logger
 
 logger = get_logger(__name__, level=logging.INFO)
 
-from utils.tread_frame import (
-    FrameRouteState,
-    pack_frame_routed_tokens,
-    reconstruct_frame_routed_tokens,
+from utils.tread.tread_routing_handlers import (
+    TREADRoutingState,
+    handle_routing_start,
+    handle_routing_end,
 )
-from utils.tread_token import (
-    build_batched_rotary_from_freqs,
-    slice_e0_for_token_route,
-    restore_e0_after_route,
+from utils.tread.tread_token import (
     normalize_routes_with_neg_indices,
 )
 from wan.modules.attention import flash_attention
@@ -44,13 +41,10 @@ from modules.fp8_optimization_utils import (
     optimize_state_dict_with_fp8,
 )
 
-from .attention import local_patching, local_merge, nablaT, sta, sta_nabla
+from .attention import local_patching, local_merge, nablaT, sta
 from utils.advanced_rope import apply_rope_comfy
 
-from utils.tread import (
-    TREADRouter,
-    MaskInfo,
-)
+from utils.tread.tread_router import TREADRouter
 from wan.modules.lean_attention import forward_wan22_lean_block
 from wan.utils.compile_utils import compile_optimize as wan_compile_optimize
 from torch.nn.attention.flex_attention import flex_attention
@@ -1414,18 +1408,11 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
         router = self._tread_router
         use_routing = self.training and torch.is_grad_enabled() and len(routes) > 0
         route_ptr = 0
-        routing_now = False
-        tread_mask_info: MaskInfo | None = None
-        saved_tokens = None
-        # Alternate frame-based state (only when _tread_mode startswith 'frame_')
-        frame_state: FrameRouteState | None = None
-        orig_freqs_list: list[torch.Tensor] | None = None
-        e0_full_saved: torch.Tensor | None = None
+        tread_state = TREADRoutingState()
 
         # Normalize negative indices in routes
         if use_routing and routes:
             total_layers = len(self.blocks)  # type: ignore
-
             routes = normalize_routes_with_neg_indices(routes, total_layers)
 
         # Normalize control states container to a list for indexing
@@ -1446,135 +1433,35 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
             if self.blocks_to_swap and not is_block_skipped:
                 self.offloader.wait_for_block(block_idx)  # type: ignore
 
-            # TREAD: START route at configured layer index
+            # ═══════════════════════════════════════════════════════════════════════════════
+            # TREAD ROUTING START: Begin token routing at configured layer index
+            # ═══════════════════════════════════════════════════════════════════════════════
             if (
                 use_routing
                 and route_ptr < len(routes)
                 and block_idx == int(routes[route_ptr]["start_layer_idx"])  # type: ignore
             ):
                 assert router is not None
-                mask_ratio = float(routes[route_ptr]["selection_ratio"])  # type: ignore
-
-                tread_mode = str(getattr(self, "_tread_mode", "full"))
-                if tread_mode.startswith("frame_"):
-                    # Alternate frame-based routing: reduce x/seq_lens/grid_sizes by frames
-                    keep_ratio = max(0.0, min(1.0, 1.0 - mask_ratio))
-                    mode = (
-                        "contiguous" if tread_mode == "frame_contiguous" else "stride"
-                    )
-                    x_proc, frame_state = pack_frame_routed_tokens(
-                        x, kwargs["seq_lens"], kwargs["grid_sizes"], keep_ratio, mode
-                    )
-                    # Swap to processed stream tensors
-                    x = x_proc
-                    kwargs["seq_lens"] = frame_state.seq_lens_proc
-                    kwargs["grid_sizes"] = frame_state.grid_sizes_proc
-                    # Recompute per-sample rotary freqs for reduced grid sizes (only when not on-the-fly)
-                    if not self.rope_on_the_fly:
-                        orig_freqs_list = kwargs.get("freqs")  # type: ignore[assignment]
-                        freqs_list_proc: list[torch.Tensor] = []
-                        for fhw_tensor in frame_state.grid_sizes_proc:
-                            fhw = tuple(int(v) for v in fhw_tensor.tolist())
-                            if fhw not in self.freqs_fhw:
-                                c = self.dim // self.num_heads // 2
-                                self.freqs_fhw[fhw] = calculate_freqs_i(
-                                    fhw, c, self.freqs
-                                )
-                            freqs_list_proc.append(self.freqs_fhw[fhw])
-                        kwargs["freqs"] = freqs_list_proc
-
-                    # For model version 2.2, e parameter is per-token [B, L, 6, C].
-                    # Slice it to kept tokens to match reduced x length unless broadcasting is enabled.
-                    e_param = kwargs.get("e")
-                    if (
-                        isinstance(e_param, torch.Tensor)
-                        and e_param.dim() == 4
-                        and not self.broadcast_time_embed
-                    ):
-                        if self.strict_e_slicing_checks:
-                            assert e_param.dtype == torch.float32
-                            assert e_param.size(2) == 6
-                            # Validate indices are within bounds
-                            max_proc = (
-                                torch.where(
-                                    frame_state.idx_proc_pad >= 0,
-                                    frame_state.idx_proc_pad,
-                                    frame_state.idx_proc_pad.new_zeros(()).expand_as(
-                                        frame_state.idx_proc_pad
-                                    ),
-                                )
-                                .max()
-                                .item()
-                            )
-                            max_rout = (
-                                torch.where(
-                                    frame_state.idx_rout_pad >= 0,
-                                    frame_state.idx_rout_pad,
-                                    frame_state.idx_rout_pad.new_zeros(()).expand_as(
-                                        frame_state.idx_rout_pad
-                                    ),
-                                )
-                                .max()
-                                .item()
-                            )
-                            assert max(max_proc, max_rout) < e_param.size(1)
-
-                        e0_full_saved = e_param
-                        B = e_param.size(0)
-                        Lpmax = int(frame_state.idx_proc_pad.size(1))
-                        C6 = e_param.size(2)
-                        C = e_param.size(3)
-                        e_proc = e_param.new_zeros(
-                            (B, Lpmax, C6, C), dtype=e_param.dtype
-                        )
-                        for b in range(B):
-                            mask = frame_state.idx_proc_pad[b] >= 0
-                            idx = frame_state.idx_proc_pad[b, mask]
-                            Lpi = int(idx.numel())
-                            if Lpi > 0:
-                                e_proc[b, :Lpi, :, :] = e_param[b, idx, :, :]
-                        kwargs["e"] = e_proc
-                    routing_now = True
-                    # Standard per-sample freqs_list already matches new grid sizes
-                else:
-                    # Only route video tokens (x). Text/context stays full
-                    tread_mask_info = router.get_mask(
-                        x, mask_ratio=mask_ratio, force_keep=force_keep_mask  # type: ignore
-                    )
-                    saved_tokens = x
-                    x = router.start_route(x, tread_mask_info)
-                    routing_now = True
-
-                    # Build a batched rotary tensor for routed tokens
-                    B = x.size(0)
-                    S_keep = x.size(1)
-                    shuf = build_batched_rotary_from_freqs(
-                        freqs_list, tread_mask_info.ids_shuffle
-                    )
-                    batched_rotary = shuf[:, :S_keep, :]
-                    kwargs["batched_rotary"] = batched_rotary
-
-                    # Slice per-token e to kept tokens (Wan 2.2 path) unless broadcasting is enabled
-                    e_arg = kwargs.get("e")
-                    saved_e, e_proc = slice_e0_for_token_route(
-                        e_arg if isinstance(e_arg, torch.Tensor) else torch.tensor([]),
-                        tread_mask_info.ids_shuffle,
-                        S_keep,
-                        self.broadcast_time_embed,
-                        self.strict_e_slicing_checks,
-                    )
-                    if saved_e is not None:
-                        e0_full_saved = saved_e
-                        kwargs["e"] = e_proc
+                route_config = routes[route_ptr]
+                x = handle_routing_start(
+                    self,
+                    x,
+                    kwargs,
+                    tread_state,
+                    route_config,
+                    router,
+                    force_keep_mask,
+                    freqs_list,
+                )
 
             if not is_block_skipped:
                 # Switch attention to use batched_rotary when routing
                 tread_mode_mid = str(getattr(self, "_tread_mode", "full"))
-                if routing_now and tread_mode_mid.startswith("frame_"):
+                if tread_state.routing_now and tread_mode_mid.startswith("frame_"):
                     # Frame-based path uses standard freqs (already aligned by new grid)
                     x = block(x, **kwargs)
                 elif (
-                    routing_now
+                    tread_state.routing_now
                     and "batched_rotary" in kwargs
                     and tread_mode_mid == "full"
                 ):
@@ -1627,40 +1514,11 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
                     # x shape is (B, L, C). Keep as-is for downstream flattening.
                     intermediate_z = x
 
-            # TREAD: END route
-            if routing_now and route_ptr < len(routes) and block_idx == int(routes[route_ptr]["end_layer_idx"]):  # type: ignore
-                tread_mode_end = str(getattr(self, "_tread_mode", "full"))
-                if tread_mode_end.startswith("frame_"):
-                    assert frame_state is not None
-                    x = reconstruct_frame_routed_tokens(x, frame_state)
-                    # Restore original seq/grid sizes
-                    kwargs["seq_lens"] = frame_state.seq_lens_orig
-                    kwargs["grid_sizes"] = frame_state.grid_sizes_orig
-                    # Restore original rotary freqs
-                    if not self.rope_on_the_fly and orig_freqs_list is not None:
-                        kwargs["freqs"] = orig_freqs_list
-                    orig_freqs_list = None
-                    # Restore original per-token e0 if it was sliced
-                    if e0_full_saved is not None:
-                        kwargs["e"] = e0_full_saved
-                    e0_full_saved = None
-                    frame_state = None
-                else:
-                    assert tread_mask_info is not None and saved_tokens is not None
-                    x = router.end_route(x, tread_mask_info, original_x=saved_tokens)  # type: ignore
-                    kwargs.pop("batched_rotary", None)
-                    # restore full rotary embeddings when not on-the-fly
-                    if not self.rope_on_the_fly:
-                        kwargs["freqs"] = freqs_list
-                    # restore original per-token e0 if it was sliced in token-routing path
-                    if e0_full_saved is not None:
-                        kwargs["e"] = e0_full_saved
-                        e0_full_saved = None
-                    # release references early to help GC
-                    saved_tokens = None
-                    tread_mask_info = None
-
-                routing_now = False
+            # ═══════════════════════════════════════════════════════════════════════════════
+            # TREAD ROUTING END: Reconstruct full tensors at configured layer index
+            # ═══════════════════════════════════════════════════════════════════════════════
+            if tread_state.routing_now and route_ptr < len(routes) and block_idx == int(routes[route_ptr]["end_layer_idx"]):  # type: ignore
+                x = handle_routing_end(self, x, kwargs, tread_state, freqs_list)
                 route_ptr += 1
 
             if self.blocks_to_swap:
@@ -1678,6 +1536,9 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
             x = x.reshape(1, T, (H * W) // (P * P), P * P, -1)  # type: ignore
             x = local_merge(x, H, W, P)
             x = x.reshape(1, T * H * W, -1)  # type: ignore
+
+        # Final cleanup of all TREAD routing state
+        tread_state.cleanup_all()
 
         # unpatchify
         x = self.unpatchify(x, grid_sizes)

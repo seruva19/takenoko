@@ -524,7 +524,6 @@ def _generate_timesteps_from_distribution(
         t = torch.randn(batch_size, device=device)
         t = torch.sigmoid((t + sigmoid_bias) * sigmoid_scale)
 
-    # https://github.com/kohya-ss/musubi-tuner/pull/407
     elif args.timestep_sampling == "logsnr":
         # https://arxiv.org/abs/2411.14793v3
         logsnr = torch.normal(

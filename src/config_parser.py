@@ -127,9 +127,42 @@ def create_args_from_config(
     # 3) Simplified frame-based block: tread = { start_layer=2, end_layer=28, keep_ratio=0.5 }
     # Enable flag gates activation
     args.enable_tread = config.get("enable_tread", False)
-    args.tread_mode = config.get(
-        "tread_mode", "full"
-    )  # "full" | "frame_contiguous" | "frame_stride"
+    # Enhanced TREAD mode validation with spatial routing support
+    specified_tread_mode = config.get("tread_mode", "full")
+    valid_modes = {
+        "full",              # Content-aware routing (existing)
+        "frame_contiguous",  # Frame-based routing (existing)
+        "frame_stride",      # Frame-based routing (existing)
+        "row_contiguous",    # Row-based routing (new)
+        "row_stride",        # Row-based routing (new)
+        "row_random",        # Row-based routing (new)
+        "spatial_auto"       # Auto-detection: F=1→rows, F>1→frames (new)
+    }
+
+    if specified_tread_mode not in valid_modes:
+        logger.warning(
+            f"Invalid tread_mode '{specified_tread_mode}'. Supported modes: {sorted(valid_modes)}. "
+            f"Falling back to 'full'."
+        )
+        specified_tread_mode = "full"
+
+    args.tread_mode = specified_tread_mode
+
+    # Fallback control for row-based TREAD with mixed datasets
+    args.row_tread_auto_fallback = config.get("row_tread_auto_fallback", True)
+
+    # Add descriptive logging for new modes
+    if args.enable_tread and specified_tread_mode.startswith("row_"):
+        logger.info(f"Row-based TREAD enabled: mode='{specified_tread_mode}' (spatial routing for images)")
+        if args.row_tread_auto_fallback:
+            logger.info("Auto-fallback enabled: video content will use frame routing")
+    elif args.enable_tread and specified_tread_mode == "spatial_auto":
+        logger.info("Spatial auto TREAD enabled: F=1→rows, F>1→frames (hybrid mode)")
+
+    # Validate fallback setting
+    if args.row_tread_auto_fallback and not isinstance(args.row_tread_auto_fallback, bool):
+        logger.warning("row_tread_auto_fallback must be boolean, defaulting to True")
+        args.row_tread_auto_fallback = True
 
     def _parse_route_kv_string(s: str) -> Dict[str, Any]:
         route: Dict[str, Any] = {}

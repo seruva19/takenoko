@@ -1730,9 +1730,11 @@ frame_consistency_mode = "adjacent"
 # Enable TREAD routing for training
 enable_tread = false
 
-# TREAD mode: "full", "frame_contiguous", "frame_stride"
+# TREAD mode: "full", "frame_contiguous", "frame_stride", "row_contiguous", "row_stride", "row_random", "spatial_auto"
 # 'full' is used with tread_config_route parameters
-# 'frame_contiguous'/'frame_stride' are used with 'tread' parameter
+# 'frame_contiguous'/'frame_stride' are used with 'tread' parameter for temporal routing
+# 'row_contiguous'/'row_stride'/'row_random' are used with 'tread' parameter for spatial routing
+# 'spatial_auto' automatically detects F=1 (rows) vs F>1 (frames) - hybrid mode like original patch
 tread_mode = "full"
 
 # Each route is a semicolon-separated string of key=value pairs. Keys: selection_ratio (0-1), start_layer_idx, end_layer_idx (negative allowed)
@@ -1743,10 +1745,30 @@ tread_config_route1 = "selection_ratio=0.1; start_layer_idx=2; end_layer_idx=-2"
 # tread_config_route5 = "selection_ratio=0.25; start_layer_idx=16; end_layer_idx=23"
 # tread_config_route6 = "selection_ratio=0.1; start_layer_idx=24; end_layer_idx=-2"
 
-# Simplified frame routing block:
-# Use tread_mode to select frame_contiguous or frame_stride
-# keep_ratio: fraction of frames to keep within the routed band
+# Simplified routing blocks:
+# For temporal routing: Use tread_mode = "frame_contiguous" or "frame_stride"
+# For spatial routing: Use tread_mode = "row_contiguous", "row_stride", or "row_random"
+# keep_ratio: fraction of frames/rows to keep within the routed band
 # tread = { start_layer = 2, end_layer = 36, keep_ratio = 0.6 }
+
+# Examples:
+# Temporal routing (video frames):
+# tread_mode = "frame_contiguous"
+# tread = { start_layer = 2, end_layer = 36, keep_ratio = 0.7 }
+
+# Spatial routing (image rows):
+# tread_mode = "row_contiguous"     # Keep center rows
+# tread_mode = "row_stride"         # Keep evenly spaced rows
+# tread_mode = "row_random"         # Keep randomly selected rows
+# tread = { start_layer = 2, end_layer = 36, keep_ratio = 0.8 }
+
+# Hybrid auto-detection mode (original patch behavior):
+# tread_mode = "spatial_auto"       # F=1→rows, F>1→frames
+# tread = { start_layer = 2, end_layer = 36, keep_ratio = 0.7 }
+
+# Auto-fallback for mixed datasets (when using row modes with video content)
+# row_tread_auto_fallback = true   # Default: true (safe for mixed datasets)
+row_tread_auto_fallback = true
 
 # Enable strict sanity checks when slicing per-token time projections during
 # frame-based routing (verifies index bounds, shapes, and dtypes). Off by default.

@@ -30,7 +30,7 @@ from utils.train_utils import (
 )
 from utils import model_utils
 from wan.configs.config import WAN_CONFIGS
-from utils.tread import TREADRouter
+from utils.tread.tread_router import TREADRouter
 
 from core.trainer_config import TrainerConfig
 from core.optimizer_manager import OptimizerManager
