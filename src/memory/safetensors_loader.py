@@ -71,7 +71,6 @@ class TorchModule:
     def load_file(
         path: Union[str, Path], device: Optional[str] = None
     ) -> Dict[str, torch.Tensor]:
-        """Replacement for safetensors.torch.load_file"""
         return load_file(path, device)
 
     @staticmethod
@@ -80,8 +79,14 @@ class TorchModule:
         filename: Union[str, Path],
         metadata: Optional[Dict[str, str]] = None,
     ) -> None:
-        """Passthrough to safetensors.torch.save_file - no optimization needed for saving"""
         return safetensors.torch.save_file(tensors, filename, metadata)
+
+    @staticmethod
+    def save(
+        tensors: Dict[str, torch.Tensor],
+        metadata: Optional[Dict[str, str]] = None,
+    ) -> bytes:
+        return safetensors.torch.save(tensors, metadata)
 
 
 torch = TorchModule()
