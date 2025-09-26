@@ -20,8 +20,9 @@ class SafeGlobalsManager:
         """Add custom optimizer classes to PyTorch's safe globals list for state loading."""
         try:
             # Import Fira classes that need to be in the safe globals list
-            from fira.gradient_projection import GradientProjector
-            from fira import FiraAdamW
+            # Use vendored implementation
+            from vendor.fira.gradient_projection import GradientProjector
+            from vendor.fira.fira_adamw import FiraAdamW
 
             # Import custom classes from other optimizers
             from optimizers.optimizer_utils import Auto8bitTensor

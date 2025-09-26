@@ -2,7 +2,7 @@
 REM Set number of CPU threads per process for PyTorch/NumPy/Accelerate
 set OMP_NUM_THREADS=1
 set MKL_NUM_THREADS=1
-REM Cursor: Windows script to run Takenoko with unified operations menu
+REM Windows script to run Takenoko with unified operations menu
 REM This script detects all config files and presents them as a menu
 
 setlocal enabledelayedexpansion

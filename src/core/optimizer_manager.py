@@ -212,7 +212,7 @@ class OptimizerManager:
             logger.info(f"using Fira optimizer | {optimizer_kwargs}")
 
             from optimizers.fira_optimizer import FiraOptimizerManager
-            from fira import FiraAdamW
+            from vendor.fira.fira_adamw import FiraAdamW
 
             optimizer_class = FiraAdamW
             optimizer, functions = FiraOptimizerManager.create_fira_optimizer(
@@ -735,3 +735,4 @@ class OptimizerManager:
             num_decay_steps=num_decay_steps,
             **lr_scheduler_kwargs,
         )
+

@@ -1,5 +1,5 @@
 @echo off
-REM Cursor: Windows installation script for Takenoko
+REM Windows installation script for Takenoko
 REM This script installs all dependencies using uv package manager
 
 echo ========================================

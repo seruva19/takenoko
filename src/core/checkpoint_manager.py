@@ -170,6 +170,10 @@ class CheckpointManager:
             SafeGlobalsManager.add_custom_optimizer_safe_globals()
 
             accelerator.load_state(args.resume)
+
+            # Fix device mismatch issues in optimizer state after loading
+            self._fix_optimizer_device_mismatch(accelerator, args)
+
             logger.info(f"Successfully loaded state from: {args.resume}")
             # Try to read step from step.txt
             from utils.train_utils import read_step_from_state_dir
@@ -583,7 +587,9 @@ class CheckpointManager:
                     # Load the patch embedding weights
                     try:
                         # Load tensors and metadata
-                        patch_embedding_tensors = safetensors_torch.load_file(patch_embedding_path)
+                        patch_embedding_tensors = safetensors_torch.load_file(
+                            patch_embedding_path
+                        )
 
                         # Get metadata from the file
                         with safe_open(
@@ -862,3 +868,141 @@ class CheckpointManager:
 
         accelerator.register_save_state_pre_hook(save_hook)
         accelerator.register_load_state_pre_hook(load_hook)
+
+    def _fix_optimizer_device_mismatch(
+        self,
+        accelerator: Accelerator,
+        args: argparse.Namespace,
+        optimizer: Optional[Any] = None,
+    ) -> None:
+        """Fix device mismatch issues in optimizer state after checkpoint loading."""
+        try:
+            # If optimizer is provided directly, use it
+            if optimizer is None:
+                # Try to get optimizer from accelerator - check different possible attributes
+                optimizer = None
+                for attr_name in [
+                    "_optimizers",
+                    "optimizers",
+                    "_optimizer",
+                    "optimizer",
+                ]:
+                    if hasattr(accelerator, attr_name):
+                        attr_value = getattr(accelerator, attr_name)
+                        if attr_value:
+                            if isinstance(attr_value, list) and len(attr_value) > 0:
+                                optimizer = attr_value[0]
+                                break
+                            elif not isinstance(attr_value, list):
+                                optimizer = attr_value
+                                break
+
+                if optimizer is None:
+                    logger.debug(
+                        "No optimizer found in accelerator, skipping device fix"
+                    )
+                    return
+
+            # Get the target device from model parameters
+            target_device = None
+            # Try different ways to access models from accelerator
+            models = []
+            for attr_name in ["models", "_models", "wrapped_model", "model"]:
+                if hasattr(accelerator, attr_name):
+                    attr_value = getattr(accelerator, attr_name)
+                    if attr_value:
+                        if isinstance(attr_value, list):
+                            models = attr_value
+                            break
+                        else:
+                            models = [attr_value]
+                            break
+
+            if not models:
+                logger.warning(
+                    "No models found in accelerator, cannot determine target device"
+                )
+                return
+
+            # Find first CUDA device from model parameters
+            for model in models:
+                unwrapped_model = accelerator.unwrap_model(model)
+                for param in unwrapped_model.parameters():
+                    if param.is_cuda:
+                        target_device = param.device
+                        break
+                if target_device is not None:
+                    break
+
+            if target_device is None:
+                logger.warning(
+                    "No CUDA device found in model parameters, skipping device fix"
+                )
+                return
+
+            logger.info(
+                f"Fixing optimizer device mismatch - moving tensors to {target_device}"
+            )
+
+            # Fix optimizer state device mismatch
+            if hasattr(optimizer, "state_dict") and hasattr(
+                optimizer, "load_state_dict"
+            ):
+                state_dict = optimizer.state_dict()
+
+                # Move all state tensors to the target device
+                modified = False
+                for param_id, state in state_dict.get("state", {}).items():
+                    for state_key, state_tensor in state.items():
+                        if (
+                            isinstance(state_tensor, torch.Tensor)
+                            and state_tensor.device != target_device
+                        ):
+                            state[state_key] = state_tensor.to(target_device)
+                            modified = True
+                            logger.debug(
+                                f"Moved optimizer state tensor {param_id}.{state_key} from {state_tensor.device} to {target_device}"
+                            )
+
+                # Also fix parameter group tensors if any
+                for param_group in state_dict.get("param_groups", []):
+                    for key, value in param_group.items():
+                        if (
+                            isinstance(value, torch.Tensor)
+                            and value.device != target_device
+                        ):
+                            param_group[key] = value.to(target_device)
+                            modified = True
+                            logger.debug(
+                                f"Moved param group tensor {key} from {value.device} to {target_device}"
+                            )
+
+                if modified:
+                    # Load the fixed state dict back
+                    optimizer.load_state_dict(state_dict)
+                    logger.info("✅ Fixed optimizer device mismatch")
+
+                    # Apply optimizer-specific device fixes
+                    self._apply_optimizer_specific_device_fix(
+                        optimizer, target_device, args
+                    )
+
+        except Exception as e:
+            logger.warning(f"Failed to fix optimizer device mismatch: {e}")
+            logger.warning(
+                "This may cause device mismatch errors during optimizer step"
+            )
+
+    def _apply_optimizer_specific_device_fix(
+        self, optimizer: Any, target_device: torch.device, args: argparse.Namespace
+    ) -> None:
+        """Apply optimizer-specific device synchronization fixes."""
+        try:
+            if args.optimizer_type.lower() == "fira":
+                from optimizers.fira_optimizer import FiraOptimizerManager
+
+                logger.info("🔄 Applying FIRA-specific device synchronization...")
+                FiraOptimizerManager.fix_fira_device_state(optimizer, target_device)
+                logger.info("✅ FIRA device synchronization complete")
+        except Exception as e:
+            logger.warning(f"Failed to apply optimizer-specific device fixes: {e}")
