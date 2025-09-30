@@ -335,6 +335,23 @@ class TimestepDistribution:
             sigmoid_scale = getattr(args, "sigmoid_scale", 1.0)
             sigmoid_bias = getattr(args, "sigmoid_bias", 0.0)
             t = torch.sigmoid((t + sigmoid_bias) * sigmoid_scale)
+        elif args.timestep_sampling == "mode_shift":
+            # Mode sampling with time shift (paper formula)
+            mode_scale = getattr(args, "mode_scale", 1.29)
+            u_mode = (
+                1
+                - quantiles
+                - mode_scale * (torch.cos(math.pi * quantiles / 2) ** 2 - 1 + quantiles)
+            )
+
+            # Apply time shift transformation exactly as defined
+            shift_mu = getattr(args, "time_shift_mu", 1.0)
+            shift_sigma = getattr(args, "time_shift_sigma", 1.0)
+            import math
+
+            t = torch.exp(torch.tensor(shift_mu)) / (
+                torch.exp(torch.tensor(shift_mu)) + (1 / u_mode - 1) ** shift_sigma
+            )
         else:
             # Uniform distribution for "uniform" and other methods
             t = quantiles

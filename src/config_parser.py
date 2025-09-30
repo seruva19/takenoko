@@ -130,13 +130,13 @@ def create_args_from_config(
     # Enhanced TREAD mode validation with spatial routing support
     specified_tread_mode = config.get("tread_mode", "full")
     valid_modes = {
-        "full",              # Content-aware routing (existing)
+        "full",  # Content-aware routing (existing)
         "frame_contiguous",  # Frame-based routing (existing)
-        "frame_stride",      # Frame-based routing (existing)
-        "row_contiguous",    # Row-based routing (new)
-        "row_stride",        # Row-based routing (new)
-        "row_random",        # Row-based routing (new)
-        "spatial_auto"       # Auto-detection: F=1→rows, F>1→frames (new)
+        "frame_stride",  # Frame-based routing (existing)
+        "row_contiguous",  # Row-based routing (new)
+        "row_stride",  # Row-based routing (new)
+        "row_random",  # Row-based routing (new)
+        "spatial_auto",  # Auto-detection: F=1→rows, F>1→frames (new)
     }
 
     if specified_tread_mode not in valid_modes:
@@ -153,14 +153,18 @@ def create_args_from_config(
 
     # Add descriptive logging for new modes
     if args.enable_tread and specified_tread_mode.startswith("row_"):
-        logger.info(f"Row-based TREAD enabled: mode='{specified_tread_mode}' (spatial routing for images)")
+        logger.info(
+            f"Row-based TREAD enabled: mode='{specified_tread_mode}' (spatial routing for images)"
+        )
         if args.row_tread_auto_fallback:
             logger.info("Auto-fallback enabled: video content will use frame routing")
     elif args.enable_tread and specified_tread_mode == "spatial_auto":
         logger.info("Spatial auto TREAD enabled: F=1→rows, F>1→frames (hybrid mode)")
 
     # Validate fallback setting
-    if args.row_tread_auto_fallback and not isinstance(args.row_tread_auto_fallback, bool):
+    if args.row_tread_auto_fallback and not isinstance(
+        args.row_tread_auto_fallback, bool
+    ):
         logger.warning("row_tread_auto_fallback must be boolean, defaulting to True")
         args.row_tread_auto_fallback = True
 
@@ -793,6 +797,9 @@ def create_args_from_config(
     args.logit_mean = config.get("logit_mean", 0.0)
     args.logit_std = config.get("logit_std", 1.0)
     args.mode_scale = config.get("mode_scale", 1.29)
+    # Mode shift parameters
+    args.time_shift_mu = config.get("time_shift_mu", 1.0)
+    args.time_shift_sigma = config.get("time_shift_sigma", 1.0)
     args.min_timestep = config.get("min_timestep", 0)
     args.max_timestep = config.get("max_timestep", 1000)
     args.skip_extra_timestep_constraint = config.get(

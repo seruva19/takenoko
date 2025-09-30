@@ -538,7 +538,7 @@ use_stochastic_rounding_cuda = false
 
 # Method to sample timesteps
 # Available methods: sigma, uniform, sigmoid, shift, flux_shift, logsnr, qwen_shift, qinglong_flux, qinglong_qwen, logit_normal,
-# bell_shaped, half_bell, lognorm_blend, lognorm_continuous_blend, enhanced_sigmoid, fopp, content, style, content_style_blend
+# bell_shaped, half_bell, lognorm_blend, lognorm_continuous_blend, enhanced_sigmoid, fopp, content, style, content_style_blend, mode_shift
 timestep_sampling = "shift"
 
 # Shift amount for discrete timestep sampling (used with 'shift' timestep_sampling)
@@ -585,6 +585,13 @@ logit_std = 1.0
 
 # Scale of mode weighting scheme. Only effective when using the `'mode'` as the `weighting_scheme`
 mode_scale = 1.29
+
+# Time shift parameters for mode_shift timestep sampling
+# time_shift_mu: shift parameter (usually >0, default 1.0)
+time_shift_mu = 1.0
+
+# time_shift_sigma: exponent parameter (default 1.0)
+time_shift_sigma = 1.0
 
 # set minimum time step for training (0~999, default is 0)
 min_timestep = 0

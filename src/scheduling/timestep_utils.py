@@ -343,6 +343,17 @@ def map_uniform_to_sampling(
             out[mask2] = torch.sigmoid(-logsnr2 / 2.0)
         return out
 
+    if method == "mode_shift":
+        # Mode sampling with time shift
+        u = t_uniform
+        mode_scale = float(getattr(args, "mode_scale", 1.29))
+        u_mode = 1 - u - mode_scale * (torch.cos(math.pi * u / 2) ** 2 - 1 + u)
+
+        # Apply time shift transformation
+        shift_mu = float(getattr(args, "time_shift_mu", 1.0))
+        shift_sigma = float(getattr(args, "time_shift_sigma", 1.0))
+        return time_shift(shift_mu, shift_sigma, u_mode)
+
     # Default fallback: return uniform
     return t_uniform
 
@@ -588,6 +599,18 @@ def _generate_timesteps_from_distribution(
 
             t[logsnr_mask2] = t_logsnr2
 
+    elif args.timestep_sampling == "mode_shift":
+        # Mode sampling with time shift (combines mode distribution with sigma shift)
+        # First generate mode distribution
+        u = torch.rand(batch_size, device=device)
+        mode_scale = getattr(args, "mode_scale", 1.29)
+        u_mode = 1 - u - mode_scale * (torch.cos(math.pi * u / 2) ** 2 - 1 + u)
+
+        # Apply time shift transformation
+        shift_mu = getattr(args, "time_shift_mu", 1.0)
+        shift_sigma = getattr(args, "time_shift_sigma", 1.0)
+        t = time_shift(shift_mu, shift_sigma, u_mode)
+
     else:
         raise ValueError(f"Unknown timestep sampling method: {args.timestep_sampling}")
 
@@ -637,6 +660,7 @@ def _sample_standard_timesteps(
             "content",
             "style",
             "content_style_blend",
+            "mode_shift",
         ]:
             t = timestep_distribution.sample(batch_size, device)
         else:
@@ -899,6 +923,7 @@ def get_noisy_model_input_and_timesteps(
             or args.timestep_sampling == "content"
             or args.timestep_sampling == "style"
             or args.timestep_sampling == "content_style_blend"
+            or args.timestep_sampling == "mode_shift"
         ):
             # Sample timesteps using standard methods
             if presampled_uniform is not None and not should_use_precomputed_timesteps(
