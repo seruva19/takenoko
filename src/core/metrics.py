@@ -439,7 +439,7 @@ def generate_step_logs(
 
         if (
             args.optimizer_type.lower().startswith("DAdapt".lower())
-            or args.optimizer_type.lower() == "Prodigy".lower()
+            or args.optimizer_type.lower().startswith("Prodigy".lower())
         ):
             try:
                 if actual_optimizer is not None:
@@ -473,7 +473,7 @@ def generate_step_logs(
             logs[f"lr/group{i}"] = float(lrs[i])
             if (
                 args.optimizer_type.lower().startswith("DAdapt".lower())
-                or args.optimizer_type.lower() == "Prodigy".lower()
+                or args.optimizer_type.lower().startswith("Prodigy".lower())
             ):
                 try:
                     if actual_optimizer is not None:
