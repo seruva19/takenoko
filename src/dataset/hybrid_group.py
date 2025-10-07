@@ -60,6 +60,12 @@ class HybridDatasetGroup(torch.utils.data.Dataset):
 
     # Forwarders for Takenoko dataset lifecycle hooks
     def set_current_epoch(self, epoch, force_shuffle=None, reason=None):
+        """
+        Set current epoch for all datasets in the hybrid group.
+
+        Note: With shared_epoch approach, actual shuffling happens in __getitem__.
+        Parameters forwarded for backward compatibility.
+        """
         for ds in (self.main_group, self.correction_group):
             try:
                 ds.set_current_epoch(epoch, force_shuffle=force_shuffle, reason=reason)  # type: ignore[attr-defined]

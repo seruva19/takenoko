@@ -4,7 +4,10 @@ import os
 import json
 import random
 import time
-from typing import Any, Optional, Sequence, Tuple, Union
+from typing import Any, Optional, Sequence, Tuple, Union, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from multiprocessing.sharedctypes import Synchronized
 import logging
 import numpy as np
 import torch
@@ -84,6 +87,9 @@ class BaseDataset(torch.utils.data.Dataset):
         self.is_reg = is_reg
         self.seed = None
         self.current_epoch = 0
+        self.shared_epoch: Optional["Synchronized[int]"] = (
+            None  # Shared epoch counter for multiprocessing
+        )
         self.dataset_index: Optional[int] = None  # Set by DatasetGroup when applicable
 
         # Get dynamic cache postfixes based on target model
@@ -197,155 +203,38 @@ class BaseDataset(torch.utils.data.Dataset):
     def retrieve_text_encoder_output_cache_batches(self, num_workers: int):
         raise NotImplementedError
 
-    def set_seed(self, seed: int):
+    def set_seed(self, seed: int, shared_epoch: Optional["Synchronized[int]"] = None):
         self.seed = seed
+        self.shared_epoch = shared_epoch
 
     def set_current_epoch(self, epoch, force_shuffle=None, reason=None):
         """
-        Set the current epoch for the dataset with conservative shuffling logic.
+        Set the current epoch for validation/assertion purposes.
 
-        Conservative Shuffling Philosophy:
-        - Shuffling should be the EXCEPTION, not the rule
-        - Only shuffle for true sequential epoch progression in training datasets
-        - Never shuffle validation datasets automatically
-        - Be conservative about all sync operations, checkpoint resumes, etc.
+        With shared_epoch approach, actual shuffling happens in __getitem__.
+        This method is now primarily for validation and legacy compatibility.
 
         Args:
             epoch: Target epoch number
-            force_shuffle: If True, force bucket shuffling regardless of logic
-                         If False, explicitly disable shuffling
-                         If None, use conservative logic (default)
-            reason: Optional string describing why epoch is being set (for better logging)
+            force_shuffle: DEPRECATED - Kept for backward compatibility, ignored
+            reason: DEPRECATED - Kept for backward compatibility, ignored
+
+        Note:
+            With shared_epoch approach, actual shuffling happens in __getitem__.
+            These parameters are kept to avoid breaking existing code but are no longer used.
         """
-        if self.current_epoch == epoch:
-            return  # No change needed
-
-        # Get dataset identifier for enhanced logging
         dataset_id = self.get_dataset_identifier()
-        dataset_details = self.get_dataset_details()
 
-        # Build context for logging
-        context = f"[{dataset_id}{dataset_details}] (current_epoch: {self.current_epoch}, epoch: {epoch})"
-        if reason:
-            context += f" - {reason}"
-
-        # Handle explicit shuffle control
-        if force_shuffle is True:
-            logger.info(f"Force shuffling buckets {context}")
-            self.current_epoch = epoch
-            self.shuffle_buckets()
-            return
-
-        if force_shuffle is False:
-            logger.debug(f"Shuffling explicitly disabled {context}")
-            self.current_epoch = epoch
-            return
-
-        # Conservative shuffling logic - shuffling should be rare and intentional
-        is_sequential_increment = epoch == self.current_epoch + 1
-        is_initialization = self.current_epoch == 0 and epoch > 0
-
-        # CRITICAL: Validation datasets should NEVER shuffle automatically
-        if self.is_val:
-            logger.debug(
-                f"Validation dataset epoch update {context} - no shuffle (validation datasets never shuffle)"
-            )
-            self.current_epoch = epoch
-            return
-
-        # CONSERVATIVE: Only shuffle in very specific training scenarios
-
-        # 1. Normal sequential training progression (most common case)
-        if is_sequential_increment:
-            # Only shuffle if this appears to be genuine training progression
-            if reason and any(
-                keyword in reason.lower()
-                for keyword in [
-                    "sync",
-                    "validation",
-                    "collator",
-                    "worker",
-                    "dataloader",
-                    "checkpoint",
-                    "resume",
-                ]
-            ):
-                # This is likely a sync operation, not genuine training progression
-                logger.debug(
-                    f"Sequential increment but sync operation detected {context} - no shuffle"
+        if self.shared_epoch is not None:
+            # Validate that shared_epoch matches (for debugging)
+            if self.shared_epoch.value != epoch:
+                logger.warning(
+                    f"[{dataset_id}] Epoch mismatch: shared_epoch={self.shared_epoch.value}, "
+                    f"requested epoch={epoch}. This may indicate a synchronization issue."
                 )
-                self.current_epoch = epoch
-            else:
-                # Genuine training epoch progression
-                logger.info(f"Training epoch progression {context} - shuffling")
-                self.current_epoch = epoch
-                self.shuffle_buckets()
-            return
 
-        # 2. Initialization (first epoch)
-        if is_initialization:
-            # Only shuffle if this appears to be genuine training start
-            if reason and any(
-                keyword in reason.lower()
-                for keyword in [
-                    "sync",
-                    "validation",
-                    "collator",
-                    "worker",
-                    "dataloader",
-                ]
-            ):
-                logger.debug(
-                    f"Initialization but sync operation detected {context} - no shuffle"
-                )
-                self.current_epoch = epoch
-            else:
-                logger.info(f"Training initialization {context} - shuffling")
-                self.current_epoch = epoch
-                self.shuffle_buckets()
-            return
-
-        # 3. ALL OTHER SCENARIOS: Default to NO shuffling (conservative approach)
-
-        # Classify the scenario for appropriate logging
-        if epoch > self.current_epoch:
-            if epoch - self.current_epoch > 1:
-                # Large forward jump
-                if reason and any(
-                    keyword in reason.lower()
-                    for keyword in ["resume", "checkpoint", "restore", "load"]
-                ):
-                    logger.info(
-                        f"Checkpoint resume detected {context} - no shuffle (preserving reproducibility)"
-                    )
-                elif reason and any(
-                    keyword in reason.lower()
-                    for keyword in [
-                        "validation",
-                        "sync",
-                        "collator",
-                        "worker",
-                        "dataloader",
-                    ]
-                ):
-                    logger.debug(f"Sync operation large jump {context} - no shuffle")
-                else:
-                    logger.warning(
-                        f"Large epoch jump {context} - no shuffle (use force_shuffle=True if needed)"
-                    )
-            else:
-                # Small forward jump (shouldn't happen with good logic above, but handle gracefully)
-                logger.debug(f"Small forward jump {context} - no shuffle")
-        elif epoch < self.current_epoch:
-            # Backward jump
-            logger.warning(
-                f"Backward epoch change {context} - no shuffle (unusual scenario)"
-            )
-        else:
-            # Same epoch (already handled above, but defensive programming)
-            logger.debug(f"Same epoch update {context} - no shuffle")
-
-        # In all cases above, just update epoch without shuffling
+        # Simply update internal epoch tracking
+        # Shuffling now happens in __getitem__ when shared_epoch changes
         self.current_epoch = epoch
 
     def set_current_step(self, step):
@@ -357,6 +246,59 @@ class BaseDataset(torch.utils.data.Dataset):
         dataset_id = self.get_dataset_identifier()
         logger.debug(f"[{dataset_id}] Setting max train steps: {max_train_steps}")
         self.max_train_steps = max_train_steps
+
+    def _check_and_shuffle_on_epoch_change(self):
+        """
+        Check if epoch has changed via shared_epoch and shuffle buckets if needed.
+
+        This method is called from __getitem__ to detect epoch transitions.
+        Shuffling happens exactly once when epoch changes, before returning first batch.
+        """
+        if self.shared_epoch is None:
+            return  # No shared epoch tracking
+
+        epoch = self.shared_epoch.value
+
+        # No change, nothing to do
+        if epoch == self.current_epoch:
+            return
+
+        dataset_id = self.get_dataset_identifier()
+
+        # Epoch increased - this is the normal case
+        if epoch > self.current_epoch:
+            # CRITICAL: Never shuffle validation datasets
+            if self.is_val:
+                logger.debug(
+                    f"[{dataset_id}] Validation dataset epoch change: {self.current_epoch} → {epoch} (no shuffle)"
+                )
+                self.current_epoch = epoch
+                return
+
+            # Optimization: For large jumps (resume from checkpoint),
+            # shuffle only once with final epoch seed instead of N times
+            if epoch - self.current_epoch > 1:
+                logger.info(
+                    f"[{dataset_id}] Large epoch jump detected (resume?): {self.current_epoch} → {epoch}"
+                )
+                # Jump directly to target epoch and shuffle once
+                self.current_epoch = epoch
+                self.shuffle_buckets()
+            else:
+                # Normal sequential progression: increment and shuffle
+                logger.info(
+                    f"[{dataset_id}] Epoch incremented: {self.current_epoch} → {epoch}, shuffling buckets"
+                )
+                self.current_epoch = epoch
+                self.shuffle_buckets()
+
+        # Epoch decreased - shouldn't happen but handle gracefully
+        elif epoch < self.current_epoch:
+            logger.warning(
+                f"[{dataset_id}] Epoch decreased: {self.current_epoch} → {epoch}. "
+                "This is unexpected and may indicate a bug."
+            )
+            self.current_epoch = epoch
 
     def shuffle_buckets(self):
         raise NotImplementedError
@@ -838,7 +780,7 @@ class ImageDataset(BaseDataset):
         dataset_id = self.get_dataset_identifier()
         # set random seed for this epoch
         random.seed(self.seed + self.current_epoch)  # type: ignore
-        logger.debug(
+        logger.info(
             f"[{dataset_id}] Shuffling buckets with seed={self.seed + self.current_epoch}"  # type: ignore
         )
         self.batch_manager.shuffle()  # type: ignore
@@ -849,6 +791,10 @@ class ImageDataset(BaseDataset):
         return len(self.batch_manager)
 
     def __getitem__(self, idx):
+        # Check for epoch changes and shuffle if needed
+        if self.shared_epoch is not None:
+            self._check_and_shuffle_on_epoch_change()
+
         return self.batch_manager[idx]  # type: ignore
 
     def _get_original_image_path_from_cache(
@@ -1427,7 +1373,7 @@ class VideoDataset(BaseDataset):
         dataset_id = self.get_dataset_identifier()
         # set random seed for this epoch
         random.seed(self.seed + self.current_epoch)  # type: ignore
-        logger.debug(
+        logger.info(
             f"[{dataset_id}] Shuffling buckets with seed={self.seed + self.current_epoch}"  # type: ignore
         )
         self.batch_manager.shuffle()  # type: ignore
@@ -1438,6 +1384,10 @@ class VideoDataset(BaseDataset):
         return len(self.batch_manager)
 
     def __getitem__(self, idx):
+        # Check for epoch changes and shuffle if needed
+        if self.shared_epoch is not None:
+            self._check_and_shuffle_on_epoch_change()
+
         return self.batch_manager[idx]  # type: ignore
 
     def _get_original_video_path_from_cache(
@@ -1578,13 +1528,24 @@ class DatasetGroup(torch.utils.data.ConcatDataset):
         return f"DatasetGroup({len(self.datasets)} datasets)"
 
     def set_current_epoch(self, epoch, force_shuffle=None, reason=None):
-        """Set current epoch for all datasets in the group."""
+        """
+        Set current epoch for all datasets in the group.
+
+        Args:
+            epoch: Target epoch number
+            force_shuffle: DEPRECATED - Kept for backward compatibility, forwarded but ignored
+            reason: DEPRECATED - Kept for backward compatibility, forwarded but ignored
+
+        Note: With shared_epoch approach, actual shuffling happens in __getitem__.
+        """
         group_id = self.get_dataset_identifier()
         logger.debug(
             f"[{group_id}] Setting epoch {epoch} for all datasets"
             + (f" - {reason}" if reason else "")
         )
 
+        # Simply forward to all child datasets
+        # With shared_epoch approach, actual shuffling happens in __getitem__
         for i, dataset in enumerate(self.datasets):
             dataset.set_current_epoch(epoch, force_shuffle=force_shuffle, reason=reason)
 

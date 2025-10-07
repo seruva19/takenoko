@@ -452,17 +452,18 @@ class collator_class:
             dataset = self.dataset
             context_reason = "main_process"
 
-        # Conservative epoch setting with explicit shuffle control
+        # Epoch tracking: With shared_epoch approach, actual shuffling happens in __getitem__.
+        # This collator call serves as validation/synchronization checkpoint.
         try:
             # Build reason string for better logging context
             reason = f"collator_{context_reason}"
 
-            # CRITICAL: Always disable shuffling for collator calls
-            # Collator calls are synchronization operations, not training progression
-            # Shuffling should only happen during genuine epoch progression in training loops
+            # NOTE: Shuffling is now handled in __getitem__ via shared_epoch
+            # This call ensures dataset's internal epoch tracking stays in sync
+            # The force_shuffle parameter is deprecated but kept for backward compatibility
             dataset.set_current_epoch(  # type: ignore
                 self.current_epoch.value,
-                force_shuffle=False,  # Explicitly disable shuffling for all collator calls
+                force_shuffle=False,  # Deprecated: Shuffling happens in __getitem__, not here
                 reason=reason,
             )
         except (AttributeError, TypeError) as e:

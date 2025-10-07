@@ -776,6 +776,11 @@ class WanFinetuneTrainer:
                 f"Failed to initialize temporal consistency enhancement: {e}"
             )
 
+        # Create shared epoch/step counters BEFORE dataset creation
+        # These are used for multiprocessing-safe epoch tracking and bucket shuffling
+        current_epoch = Value("i", 0)
+        current_step = Value("i", 0)
+
         # Load dataset configuration
         blueprint_generator = BlueprintGenerator(ConfigSanitizer())
         logger.info(f"Load dataset config from {args.dataset_config}")
@@ -798,6 +803,7 @@ class WanFinetuneTrainer:
                 if getattr(args, "use_precomputed_timesteps", False)
                 else getattr(args, "num_timestep_buckets", None)
             ),
+            shared_epoch=current_epoch,  # NEW: Pass shared epoch counter
         )
 
         if train_dataset_group.num_train_items == 0:
@@ -813,7 +819,11 @@ class WanFinetuneTrainer:
         validate_regularization_config(args)
 
         # Setup and run latent quality analysis if enabled
-        from dataset.latent_quality_analyzer import setup_latent_quality_for_trainer, run_dataset_analysis_for_trainer
+        from dataset.latent_quality_analyzer import (
+            setup_latent_quality_for_trainer,
+            run_dataset_analysis_for_trainer,
+        )
+
         if setup_latent_quality_for_trainer(args):
             # Only run initial analysis if TensorBoard logging is disabled
             if not getattr(args, "latent_quality_tensorboard", True):
@@ -821,12 +831,18 @@ class WanFinetuneTrainer:
 
         # Handle validation dataset if available
         val_dataset_group = None
+        val_current_epoch = None
+        val_current_step = None
         if (
             hasattr(blueprint, "val_dataset_group")
             and blueprint.val_dataset_group is not None
             and len(blueprint.val_dataset_group.datasets) > 0
         ):
             logger.info("Loading validation dataset")
+            # Create separate epoch/step tracking for validation to prevent cross-contamination
+            val_current_epoch = Value("i", 0)
+            val_current_step = Value("i", 0)
+
             val_enable_control_lora = bool(getattr(args, "enable_control_lora", False))
             if bool(getattr(args, "load_val_pixels", False)):
                 val_enable_control_lora = True
@@ -841,15 +857,14 @@ class WanFinetuneTrainer:
                     if getattr(args, "use_precomputed_timesteps", False)
                     else getattr(args, "num_timestep_buckets", None)
                 ),
+                shared_epoch=val_current_epoch,  # NEW: Use separate shared_epoch for validation
             )
 
         # Create validation dataloader if validation dataset exists
         val_dataloader = None
         val_epoch_step_sync = None
         if val_dataset_group is not None:
-            # Use separate epoch/step tracking for validation to prevent cross-contamination
-            val_current_epoch = Value("i", 0)
-            val_current_step = Value("i", 0)
+            # Validation epoch/step tracking already created during dataset initialization
             val_epoch_step_sync = (val_current_epoch, val_current_step)
 
             # Use the same collator class as training
@@ -871,8 +886,6 @@ class WanFinetuneTrainer:
             )
 
         # Prepare data collator
-        current_epoch = Value("i", 0)
-        current_step = Value("i", 0)
         ds_for_collator = (
             train_dataset_group if args.max_data_loader_n_workers == 0 else None
         )
@@ -1290,24 +1303,30 @@ class WanFinetuneTrainer:
                 starting_global_step = 0
 
         # Enhanced resume functionality - backward compatible with existing logic
-        enhanced_initial_step, enhanced_epoch_to_start, should_skip_data, _ = CheckpointUtils.prepare_enhanced_resume(
-            args,
-            len(train_dataloader),
-            accelerator.num_processes,
-            getattr(args, 'gradient_accumulation_steps', 1)
+        enhanced_initial_step, enhanced_epoch_to_start, should_skip_data, _ = (
+            CheckpointUtils.prepare_enhanced_resume(
+                args,
+                len(train_dataloader),
+                accelerator.num_processes,
+                getattr(args, "gradient_accumulation_steps", 1),
+            )
         )
 
         # Override starting values if enhanced resume is active (while preserving existing checkpoint logic)
         if enhanced_initial_step > 0:
             # Validate max_train_steps
-            if getattr(args, 'max_train_steps', 0) <= enhanced_initial_step:
-                logger.error(f"❌ max_train_steps ({args.max_train_steps}) must be greater than initial_step ({enhanced_initial_step})")
+            if getattr(args, "max_train_steps", 0) <= enhanced_initial_step:
+                logger.error(
+                    f"❌ max_train_steps ({args.max_train_steps}) must be greater than initial_step ({enhanced_initial_step})"
+                )
                 return
 
             # Use enhanced resume values (overrides existing checkpoint resume)
             starting_epoch = enhanced_epoch_to_start
             starting_global_step = enhanced_initial_step
-            logger.info(f"🔄 Enhanced resume overriding checkpoint resume: epoch={starting_epoch}, step={starting_global_step}")
+            logger.info(
+                f"🔄 Enhanced resume overriding checkpoint resume: epoch={starting_epoch}, step={starting_global_step}"
+            )
 
         # Main training loop
         logger.info("🚀 Starting WAN full fine-tuning...")
@@ -1337,8 +1356,13 @@ class WanFinetuneTrainer:
                 logger.info("✅ TensorBoard logging test successful")
 
                 # Run latent quality analysis with TensorBoard logging
-                from dataset.latent_quality_analyzer import run_tensorboard_analysis_for_trainer
-                run_tensorboard_analysis_for_trainer(args, train_dataset_group, accelerator, global_step)
+                from dataset.latent_quality_analyzer import (
+                    run_tensorboard_analysis_for_trainer,
+                )
+
+                run_tensorboard_analysis_for_trainer(
+                    args, train_dataset_group, accelerator, global_step
+                )
             except Exception as e:
                 logger.warning(f"⚠️  TensorBoard test logging failed: {e}")
 
@@ -1379,12 +1403,14 @@ class WanFinetuneTrainer:
         NetworkLoggingUtils.log_training_loop_entry(starting_epoch, max_epochs)
 
         # Handle enhanced resume dataloader wrapping (minimal integration)
-        active_dataloader, skipped_steps = CheckpointUtils.create_enhanced_training_loop_wrapper(
-            train_dataloader,
-            accelerator,
-            enhanced_initial_step,
-            should_skip_data,
-            getattr(args, 'gradient_accumulation_steps', 1)
+        active_dataloader, skipped_steps = (
+            CheckpointUtils.create_enhanced_training_loop_wrapper(
+                train_dataloader,
+                accelerator,
+                enhanced_initial_step,
+                should_skip_data,
+                getattr(args, "gradient_accumulation_steps", 1),
+            )
         )
 
         for epoch in range(starting_epoch, max_epochs):
@@ -1392,7 +1418,9 @@ class WanFinetuneTrainer:
             training_model.train()
 
             # Update training state for checkpoint saving
-            CheckpointUtils.update_training_state_for_saving(args, epoch + 1, global_step)
+            CheckpointUtils.update_training_state_for_saving(
+                args, epoch + 1, global_step
+            )
 
             for step, batch in enumerate(active_dataloader):
                 # Initialize timestep distribution and logging (using centralized utility)
@@ -1532,7 +1560,9 @@ class WanFinetuneTrainer:
                     global_step += 1
 
                     # Update training state for checkpoint saving
-                    CheckpointUtils.update_training_state_for_saving(args, epoch + 1, global_step)
+                    CheckpointUtils.update_training_state_for_saving(
+                        args, epoch + 1, global_step
+                    )
 
                     # Weight dynamics analysis at configurable intervals
                     if analysis_frequency > 0 and global_step % analysis_frequency == 0:

@@ -10,7 +10,12 @@ from textwrap import dedent
 from pathlib import Path
 
 # from toolz import curry
-from typing import List, Optional, Sequence, Tuple, Union
+from typing import List, Optional, Sequence, Tuple, Union, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from multiprocessing.sharedctypes import Synchronized
+
+SharedEpoch = Optional["Synchronized[int]"]
 
 import toml
 import voluptuous
@@ -520,6 +525,7 @@ def generate_dataset_group_by_blueprint(
     load_pixels_for_batches: bool = False,
     prior_loss_weight: float = 1.0,
     num_timestep_buckets: Optional[int] = None,
+    shared_epoch: SharedEpoch = None,
 ) -> DatasetGroup:
     datasets: List[Union[ImageDataset, VideoDataset]] = []
 
@@ -560,7 +566,7 @@ def generate_dataset_group_by_blueprint(
     )  # TODO: Magic number - consider making this configurable - REFACTOR: Extract to constant or config parameter
     for i, dataset in enumerate(datasets):
         # logger.info(f"[Dataset {i}]")  # TODO: Commented out logging - consider removing or enabling
-        dataset.set_seed(seed)
+        dataset.set_seed(seed, shared_epoch)
         if training:
             if hasattr(dataset, "prepare_for_training"):
                 import inspect

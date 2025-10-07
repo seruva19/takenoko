@@ -151,7 +151,10 @@ class WanNetworkTrainer:
 
         # Initialize slider training based on network module
         try:
-            from enhancements.slider.slider_integration import initialize_slider_integration
+            from enhancements.slider.slider_integration import (
+                initialize_slider_integration,
+            )
+
             initialize_slider_integration(args)
         except Exception as e:
             logger.warning(f"Failed to initialize slider training: {e}")
@@ -378,6 +381,11 @@ class WanNetworkTrainer:
             args.seed = random.randint(0, 2**32)
         set_seed(args.seed)
 
+        # Create shared epoch/step counters BEFORE dataset creation
+        # These are used for multiprocessing-safe epoch tracking and bucket shuffling
+        current_epoch = Value("i", 0)
+        current_step = Value("i", 0)
+
         blueprint_generator = BlueprintGenerator(ConfigSanitizer())
         logger.info(f"Load dataset config from {args.dataset_config}")
         user_config = config_utils.load_user_config(args.dataset_config)
@@ -406,6 +414,7 @@ class WanNetworkTrainer:
                 if getattr(args, "use_precomputed_timesteps", False)
                 else getattr(args, "num_timestep_buckets", None)
             ),
+            shared_epoch=current_epoch,  # NEW: Pass shared epoch counter
         )
 
         # Log regularization information
@@ -419,7 +428,13 @@ class WanNetworkTrainer:
 
         # Only create validation dataset group if there are validation datasets
         val_dataset_group = None
+        val_current_epoch = None
+        val_current_step = None
         if len(blueprint.val_dataset_group.datasets) > 0:
+            # Create separate epoch/step tracking for validation to prevent cross-contamination
+            val_current_epoch = Value("i", 0)
+            val_current_step = Value("i", 0)
+
             # For validation, we might want pixels available in batches without enabling Control LoRA.
             # When args.load_val_pixels is True, piggyback on the dataset preparation flag
             # that loads original pixels for control processing.
@@ -437,6 +452,7 @@ class WanNetworkTrainer:
                     if getattr(args, "use_precomputed_timesteps", False)
                     else getattr(args, "num_timestep_buckets", None)
                 ),
+                shared_epoch=val_current_epoch,  # NEW: Use separate shared_epoch for validation
             )
 
         # Optionally wrap with self-correction hybrid group (delegated to helper)
@@ -456,14 +472,16 @@ class WanNetworkTrainer:
             logger.warning(f"Self-correction hybrid setup skipped: {_sc_wrap_err}")
 
         # Setup latent quality analysis if enabled (actual analysis runs later with TensorBoard or here if TB disabled)
-        from dataset.latent_quality_analyzer import setup_latent_quality_for_trainer, run_dataset_analysis_for_trainer
+        from dataset.latent_quality_analyzer import (
+            setup_latent_quality_for_trainer,
+            run_dataset_analysis_for_trainer,
+        )
+
         if setup_latent_quality_for_trainer(args):
             # Only run initial analysis if TensorBoard logging is disabled
             if not getattr(args, "latent_quality_tensorboard", True):
                 run_dataset_analysis_for_trainer(args, train_dataset_group)
 
-        current_epoch = Value("i", 0)
-        current_step = Value("i", 0)
         ds_for_collator = (
             train_dataset_group if args.max_data_loader_n_workers == 0 else None
         )
@@ -584,7 +602,6 @@ class WanNetworkTrainer:
         transformer.eval()
         transformer.requires_grad_(False)
 
-
         # Configure TREAD routing if enabled and routes provided
         if getattr(args, "enable_tread", False):
             tread_cfg = getattr(args, "tread_config", None)
@@ -703,9 +720,7 @@ class WanNetworkTrainer:
 
         val_dataloader = None
         if val_dataset_group is not None:
-            # Use separate epoch/step tracking for validation to prevent cross-contamination
-            val_current_epoch = Value("i", 0)
-            val_current_step = Value("i", 0)
+            # Validation epoch/step tracking already created during dataset initialization
             val_collator = collator_class(
                 val_current_epoch, val_current_step, ds_for_collator
             )
@@ -898,11 +913,17 @@ class WanNetworkTrainer:
 
             # Run latent quality analysis with TensorBoard logging after trackers are ready
             try:
-                from dataset.latent_quality_analyzer import run_tensorboard_analysis_for_trainer
-                run_tensorboard_analysis_for_trainer(args, train_dataset_group, accelerator, 0)
+                from dataset.latent_quality_analyzer import (
+                    run_tensorboard_analysis_for_trainer,
+                )
+
+                run_tensorboard_analysis_for_trainer(
+                    args, train_dataset_group, accelerator, 0
+                )
             except Exception as e:
                 logger.warning(f"❌ Latent quality TensorBoard integration failed: {e}")
                 import traceback
+
                 logger.debug(f"Full traceback: {traceback.format_exc()}")
 
         # ========== Training Loop Setup ==========
