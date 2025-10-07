@@ -665,6 +665,9 @@ class WanFinetuneTrainer:
         noise = noise.to(device=device, dtype=transformer.dtype)
         timesteps = timesteps.to(device=device, dtype=transformer.dtype)
 
+        # Set noise scheduler for custom loss target support
+        self.training_core.noise_scheduler = noise_scheduler
+
         # Use TrainingCore's call_dit method
         with accelerator.autocast():
             model_pred, target, _ = self.training_core.call_dit(

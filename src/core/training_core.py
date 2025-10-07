@@ -113,6 +113,9 @@ class TrainingCore:
         # Initialize adaptive timestep manager (initially None)
         self.adaptive_manager: Optional[Any] = None
 
+        # Noise scheduler reference (set in run_training_loop)
+        self.noise_scheduler: Optional[Any] = None
+
         # EMA loss tracking for smoother TensorBoard visualization
         self.ema_loss: Optional[float] = None
         self.ema_beta: float = 0.98  # Smoothing factor (0.9-0.99 are good choices)
@@ -201,7 +204,6 @@ class TrainingCore:
         ):
             if hasattr(self.timestep_distribution, "set_adaptive_manager"):
                 self.timestep_distribution.set_adaptive_manager(self.adaptive_manager)
-
 
     def initialize_temporal_consistency_enhancement(
         self, args: argparse.Namespace
@@ -519,9 +521,28 @@ class TrainingCore:
             )
 
         # flow matching loss - compute target using perturbed latents if fluxflow is enabled
-        target = noise - perturbed_latents_for_target.to(
-            device=accelerator.device, dtype=network_dtype
-        )
+        # Support custom loss target computation
+        enable_custom_target = getattr(args, "enable_custom_loss_target", False)
+        if enable_custom_target and self.noise_scheduler is not None and hasattr(self.noise_scheduler, "get_loss_target"):
+            try:
+                target = self.noise_scheduler.get_loss_target(
+                    noise=noise,
+                    latents=perturbed_latents_for_target.to(
+                        device=accelerator.device, dtype=network_dtype
+                    ),
+                    timesteps=timesteps,
+                ).detach()
+            except Exception as e:
+                logger.warning(
+                    f"Custom get_loss_target() failed, falling back to standard flow matching: {e}"
+                )
+                target = noise - perturbed_latents_for_target.to(
+                    device=accelerator.device, dtype=network_dtype
+                )
+        else:
+            target = noise - perturbed_latents_for_target.to(
+                device=accelerator.device, dtype=network_dtype
+            )
 
         return model_pred, target, intermediate_z
 
@@ -562,12 +583,15 @@ class TrainingCore:
         controlnet: Optional[Any] = None,
         dual_model_manager: Optional[Any] = None,
     ) -> Tuple[int, Any]:
+        """Run the main training loop."""
+        # Store noise scheduler reference for call_dit
+        self.noise_scheduler = noise_scheduler
+
         # Configure EMA hyperparameters from args (non-fatal)
         try:
             self.configure_ema_from_args(args)
         except Exception:
             pass
-        """Run the main training loop."""
 
         # Configure attention metrics from args (non-fatal)
         try:

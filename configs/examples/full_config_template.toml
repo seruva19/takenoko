@@ -758,6 +758,14 @@ stepped_step_size = 50
 # Values > 1.0 increase stepped loss weight, < 1.0 decrease it
 stepped_multiplier = 10.0
 
+# Explicit dimension-aware loss reduction for video tensors (B,C,F,H,W)
+# mean([1,2,3,4]) for video vs mean([1,2,3]) for image
+use_explicit_video_loss_reduction = false
+
+# Custom loss target via noise_scheduler.get_loss_target() hook
+# For schedulers with non-standard flow matching targets
+enable_custom_loss_target = false
+
 # =============================================================================
 # ⚠️ DISPERSIVE LOSS SETTINGS
 # =============================================================================

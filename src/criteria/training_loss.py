@@ -581,7 +581,21 @@ class TrainingLossComputer:
                 logger.debug(f"Error applying adaptive importance weights: {e}")
                 # Continue without adaptive weighting
 
-        loss = loss.mean()
+        # ---- Explicit video-aware loss reduction
+        use_explicit = getattr(args, "use_explicit_video_loss_reduction", False)
+        if use_explicit and loss.dim() > 1:
+            # Dimension-aware reduction: handle video (5D) vs image (4D) tensors explicitly
+            if len(model_pred.shape) == 5:
+                # Video: (B, C, F, H, W) -> reduce [1, 2, 3, 4]
+                loss = loss.mean([1, 2, 3, 4])
+            else:
+                # Image: (B, C, H, W) -> reduce [1, 2, 3]
+                loss = loss.mean([1, 2, 3])
+            # Final batch reduction
+            loss = loss.mean()
+        else:
+            # Default behavior: reduce all dimensions at once
+            loss = loss.mean()
         base_loss = loss
 
         # ---- Optional Dispersive Loss ----

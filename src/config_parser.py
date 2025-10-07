@@ -1033,6 +1033,11 @@ def create_args_from_config(
     # EW loss parameters
     args.ew_boundary_shift = config.get("ew_boundary_shift", 0.0)
 
+    args.use_explicit_video_loss_reduction = config.get(
+        "use_explicit_video_loss_reduction", False
+    )
+    args.enable_custom_loss_target = config.get("enable_custom_loss_target", False)
+
     # Optical Flow Loss (RAFT-based) settings
     args.enable_optical_flow_loss = config.get("enable_optical_flow_loss", False)
     args.lambda_optical_flow = config.get("lambda_optical_flow", 0.0)
