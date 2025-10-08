@@ -1362,4 +1362,97 @@ def create_args_from_config(
             f"🚀 TorchAO FP8 enabled - Weight dtype: {args.torchao_fp8_weight_dtype}"
         )
 
+    # SRPO (Semantic Relative Preference Optimization) training configuration
+    args.enable_srpo_training = bool(config.get("enable_srpo_training", False))
+
+    if args.enable_srpo_training:
+        # Reward model configuration
+        args.srpo_reward_model_name = config.get("srpo_reward_model_name", "hps")
+        args.srpo_reward_model_dtype = config.get("srpo_reward_model_dtype", "float32")
+        args.srpo_srp_control_weight = float(config.get("srpo_srp_control_weight", 1.0))
+        args.srpo_srp_positive_words = config.get("srpo_srp_positive_words", None)
+        args.srpo_srp_negative_words = config.get("srpo_srp_negative_words", None)
+
+        # Direct-Align algorithm parameters
+        args.srpo_sigma_interpolation_method = config.get(
+            "srpo_sigma_interpolation_method", "linear"
+        )
+        args.srpo_sigma_interpolation_min = float(
+            config.get("srpo_sigma_interpolation_min", 0.0)
+        )
+        args.srpo_sigma_interpolation_max = float(
+            config.get("srpo_sigma_interpolation_max", 1.0)
+        )
+        args.srpo_num_inference_steps = int(config.get("srpo_num_inference_steps", 50))
+        args.srpo_guidance_scale = float(config.get("srpo_guidance_scale", 1.0))
+        args.srpo_enable_sd3_time_shift = bool(
+            config.get("srpo_enable_sd3_time_shift", True)
+        )
+        args.srpo_sd3_time_shift_value = float(
+            config.get("srpo_sd3_time_shift_value", 3.0)
+        )
+
+        # Discount schedules
+        args.srpo_discount_denoise_min = float(
+            config.get("srpo_discount_denoise_min", 0.0)
+        )
+        args.srpo_discount_denoise_max = float(
+            config.get("srpo_discount_denoise_max", 1.0)
+        )
+        args.srpo_discount_inversion_start = float(
+            config.get("srpo_discount_inversion_start", 1.0)
+        )
+        args.srpo_discount_inversion_end = float(
+            config.get("srpo_discount_inversion_end", 0.0)
+        )
+
+        # Training hyperparameters
+        args.srpo_batch_size = int(config.get("srpo_batch_size", 1))
+        args.srpo_gradient_accumulation_steps = int(
+            config.get("srpo_gradient_accumulation_steps", 4)
+        )
+        args.srpo_num_training_steps = int(config.get("srpo_num_training_steps", 500))
+
+        # Validation parameters
+        args.srpo_validation_prompts = config.get("srpo_validation_prompts", None)
+        args.srpo_validation_frequency = int(
+            config.get("srpo_validation_frequency", 50)
+        )
+        args.srpo_save_validation_videos = bool(
+            config.get("srpo_save_validation_videos", True)
+        )
+        args.srpo_save_validation_as_images = bool(
+            config.get("srpo_save_validation_as_images", False)
+        )
+
+        # WAN-specific parameters
+        args.srpo_vae_scale_factor = int(config.get("srpo_vae_scale_factor", 8))
+        args.srpo_latent_channels = int(config.get("srpo_latent_channels", 16))
+
+        # Multi-frame reward parameters
+        args.srpo_reward_frame_strategy = config.get(
+            "srpo_reward_frame_strategy", "first"
+        )
+        args.srpo_reward_num_frames = int(config.get("srpo_reward_num_frames", 1))
+        args.srpo_reward_aggregation = config.get("srpo_reward_aggregation", "mean")
+
+        # Video-specific reward parameters
+        args.srpo_enable_video_rewards = bool(
+            config.get("srpo_enable_video_rewards", False)
+        )
+        args.srpo_temporal_consistency_weight = float(
+            config.get("srpo_temporal_consistency_weight", 0.0)
+        )
+        args.srpo_optical_flow_weight = float(
+            config.get("srpo_optical_flow_weight", 0.0)
+        )
+        args.srpo_motion_quality_weight = float(
+            config.get("srpo_motion_quality_weight", 0.0)
+        )
+
+        logger.info(
+            f"🎯 SRPO training enabled - Reward model: {args.srpo_reward_model_name}, "
+            f"Steps: {args.srpo_num_training_steps}, Batch size: {args.srpo_batch_size}"
+        )
+
     return args

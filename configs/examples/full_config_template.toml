@@ -1315,6 +1315,142 @@ reward_backprop_random_end_step = 50
 reward_stop_latent_model_input_gradient = false
 
 # =============================================================================
+# ⚠️ SRPO SETTINGS
+# =============================================================================
+
+# Enable SRPO preference training (Direct-Align algorithm with reward models)
+# Trains LoRA to maximize reward scores (HPS, PickScore, Aesthetic) via online generation
+# Use after supervised pretraining for preference alignment
+enable_srpo_training = false
+
+# Reward model selection
+# Options: "hps" (Human Preference Score v2.1), "pickscore" (CLIP-based alignment), "aesthetic" (Aesthetic Predictor v2/v2.5)
+srpo_reward_model_name = "hps"
+
+# Data type for reward model inference
+# Options: "float32" (most accurate), "bfloat16", "float16"
+srpo_reward_model_dtype = "float32"
+
+# Semantic Relative Preference (SRP) configuration
+# SRP formula: r_srp = (1 + k) * r_positive - r_negative
+# Uses relative difference between positive/negative prompt-conditioned rewards
+# Controls strength of control word influence on reward
+srpo_srp_control_weight = 1.0
+
+# Positive control words for SRP (appended to prompts for positive rewards)
+srpo_srp_positive_words = [
+    "beautiful", "stunning", "gorgeous", "masterpiece",
+    "professional", "high quality", "detailed", "elegant",
+    "vibrant", "exquisite", "breathtaking", "magnificent",
+    "pristine", "refined", "impeccable", "award-winning", "cinematic"
+]
+
+# Negative control words for SRP (appended to prompts for negative rewards)
+srpo_srp_negative_words = [
+    "ugly", "blurry", "low quality", "distorted",
+    "amateur", "poor", "bad", "grainy",
+    "noisy", "artifacts", "watermark", "text overlay",
+    "oversaturated", "underexposed", "overexposed", "pixelated", "dull"
+]
+
+# Direct-Align algorithm parameters
+# Sigma interpolation method for noise schedule
+# Options: "linear" (uniform distribution), "cosine" (concentrated at mid-range)
+srpo_sigma_interpolation_method = "linear"
+
+# Minimum sigma value for noise interpolation (0.0 = clean)
+srpo_sigma_interpolation_min = 0.0
+
+# Maximum sigma value for noise interpolation (1.0 = pure noise)
+srpo_sigma_interpolation_max = 1.0
+
+# Number of Euler integration steps for online rollout and image recovery
+srpo_num_inference_steps = 50
+
+# Classifier-free guidance scale
+# WAN does not use CFG during training
+# This parameter is only preserved for config compatibility but has no effect
+srpo_guidance_scale = 1.0
+
+# Enable SD3-style time shift in sigma schedule (redistributes to focus on mid-range sigmas)
+srpo_enable_sd3_time_shift = true
+
+# SD3 time shift parameter (default: 3.0 from SD3 paper)
+srpo_sd3_time_shift_value = 3.0
+
+# Discount schedule for gradient backpropagation (denoise branch)
+# Minimum discount applied to early denoising steps (0.0 = no gradient flow)
+srpo_discount_denoise_min = 0.0
+
+# Maximum discount applied to late denoising steps (1.0 = full gradient flow)
+srpo_discount_denoise_max = 1.0
+
+# Discount schedule for gradient backpropagation (inversion branch)
+# Starting discount for early inversion steps (1.0 = full gradient flow)
+srpo_discount_inversion_start = 1.0
+
+# Ending discount for late inversion steps (0.0 = no gradient flow)
+srpo_discount_inversion_end = 0.0
+
+# SRPO training hyperparameters
+# Number of videos per SRPO training iteration (lower values = less VRAM, slower training)
+srpo_batch_size = 1
+
+# Gradient accumulation steps for SRPO (simulates larger batch sizes)
+srpo_gradient_accumulation_steps = 4
+
+# Total number of SRPO training steps (typically 500-1000 after supervised pretraining)
+srpo_num_training_steps = 500
+
+# Validation configuration
+# Prompts to use for SRPO validation (generates videos and computes rewards)
+srpo_validation_prompts = [
+    "a dog running in a sunny field",
+    "a beautiful sunset over snow-capped mountains",
+    "a futuristic city with flying cars at night",
+]
+
+# Run validation every N SRPO training steps
+srpo_validation_frequency = 50
+
+# Save validation outputs to disk (videos or images)
+srpo_save_validation_videos = true
+
+# Save validation outputs as PNG images instead of MP4 videos (faster, smaller file size)
+srpo_save_validation_as_images = false
+
+# Multi-frame reward computation
+# By default, SRPO only evaluates first frame. These settings enable multi-frame evaluation.
+# Options: "first" (frame 0 only), "uniform" (evenly spaced), "boundary" (first+last+middle), "all" (every frame)
+srpo_reward_frame_strategy = "first"  
+
+# Number of frames to evaluate (1 = fastest, more = better temporal coverage)
+srpo_reward_num_frames = 1  
+
+# How to combine multi-frame rewards: "mean", "min" (conservative), "max" (optimistic), "weighted" (prioritize later frames)
+srpo_reward_aggregation = "mean"  
+
+# Video-specific reward models (complement image-based rewards)
+# These measure temporal properties that image rewards can't capture
+# Enable video-specific rewards (temporal consistency, motion quality)
+srpo_enable_video_rewards = false  
+
+# Weight for frame-to-frame consistency (penalizes flickering)
+srpo_temporal_consistency_weight = 0.0  # Weight for frame-to-frame consistency (penalizes flickering)
+
+# Weight for optical flow smoothness (rewards coherent motion)
+srpo_optical_flow_weight = 0.0  
+
+# Weight for overall motion quality (balanced movement)
+srpo_motion_quality_weight = 0.0  # Weight for overall motion quality (balanced movement)
+
+# VAE spatial downsampling factor
+srpo_vae_scale_factor = 8
+
+# Number of channels in WAN latent space
+srpo_latent_channels = 16
+
+# =============================================================================
 # ⚠️ DOP (DIFFERENTIAL OUTPUT PRESERVATION) SETTINGS
 # =============================================================================
 

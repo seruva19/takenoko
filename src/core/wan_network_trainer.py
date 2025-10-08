@@ -1117,6 +1117,25 @@ class WanNetworkTrainer:
                 is_main_process=is_main_process,
                 global_step=global_step,
             )
+        elif getattr(args, "enable_srpo_training", False):
+            # SRPO (Semantic Relative Preference Optimization) training mode
+            from srpo.srpo_setup import setup_srpo_training
+
+            srpo_trainer = setup_srpo_training(
+                args=args,
+                accelerator=accelerator,
+                transformer=transformer,
+                network=network,
+                optimizer=optimizer,
+                vae=vae,
+                model_config=self.config,
+            )
+
+            # Run SRPO training loop
+            srpo_trainer.run_training_loop()
+
+            # SRPO handles its own checkpointing
+            logger.info("✅ SRPO training completed successfully")
         else:
             logger.info("🤖 Starting DiT training mode")
 

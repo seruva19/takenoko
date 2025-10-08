@@ -81,4 +81,4 @@ Keep in mind that work on some features is not yet complete due to time and hard
 | [stochastic_round_cuda](https://github.com/ethansmith2000/stochastic_round_cuda) | repo | - Stochastic rounding CUDA implementation | [ethansmith2000](https://github.com/ethansmith2000) | MIT | |
 | [simplevae](https://huggingface.co/AiArtLab/simplevae) | repo | - VAE training enhancements | [AiArtLab](https://huggingface.co/AiArtLab) |  | |
 | [RamTorch](https://github.com/lodestone-rock/RamTorch) | repo | - RamTorch CPU-bouncing linear layers | [lodestone-rock](https://github.com/lodestone-rock) | Apache 2.0 | |
-
+| [Directly Aligning the Full Diffusion Trajectory with Fine-Grained Human Preference](https://github.com/Tencent-Hunyuan/SRPO/) | repo | - SRPO preference optimization | [Tencent-Hunyuan](https://github.com/Tencent-Hunyuan) | SRPO Non-Commercial License | <sub>see also [paper](https://arxiv.org/abs/2509.06942)</sub> |
