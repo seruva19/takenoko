@@ -48,6 +48,18 @@ def parse_memory_optimization_config(
         "cuda_memory_fraction": None,  # Default: use PyTorch default (no artificial limit)
         "cuda_empty_cache": False,  # Default: don't clear cache at startup
         "cuda_flash_sdp_enabled": None,  # Default: use PyTorch default
+        # Enhanced Offloading Configuration
+        # Master switch for enhanced offloading features
+        "offload_enhanced_enabled": False,
+        # Use pinned memory staging buffers for PR #585 algorithm
+        "offload_pinned_memory_enabled": False,
+        "offload_non_blocking_transfers": True,
+        # Feature 3: Memory Usage Optimization
+        "offload_target_memory_type": "auto",  # "auto", "cpu", or "shared_gpu"
+        "offload_cpu_memory_priority": False,
+        # Feature 4: Debugging and Monitoring
+        "offload_timing_enabled": False,
+        "offload_verbose_logging": False,
     }
 
     # Root-level overrides for known keys only (section is ignored by design)
@@ -75,6 +87,42 @@ def parse_memory_optimization_config(
         for key, safe_default in safe_sub_defaults.items():
             if key not in memory_config or memory_config[key] is None:
                 memory_config[key] = safe_default
+
+    # Enhanced Offloading Validation
+    if not memory_config.get("offload_enhanced_enabled", False):
+        # Force disable enhanced offloading features when master switch is off
+        enhanced_feature_keys = [
+            "offload_pinned_memory_enabled",
+            "offload_non_blocking_transfers",
+            "offload_timing_enabled",
+            "offload_verbose_logging",
+        ]
+        for feature_key in enhanced_feature_keys:
+            if memory_config.get(feature_key, False):
+                logger.info(
+                    f"Enhanced offloading feature '{feature_key}' disabled (offload_enhanced_enabled=False)"
+                )
+                memory_config[feature_key] = False
+    else:
+        # Enhanced offloading is enabled - validate parameters
+        logger.info("Enhanced offloading features enabled")
+
+        # Validate target memory type
+        valid_memory_types = ["auto", "cpu", "shared_gpu"]
+        memory_type = memory_config.get("offload_target_memory_type", "auto")
+        if memory_type not in valid_memory_types:
+            logger.warning(
+                f"Invalid offload_target_memory_type '{memory_type}'. Valid options: {valid_memory_types}. Using 'auto'."
+            )
+            memory_config["offload_target_memory_type"] = "auto"
+
+        # Enforce compatibility between modes: shared_gpu disables enhanced features
+        if memory_config.get("offload_target_memory_type", "auto") == "shared_gpu":
+            if memory_config.get("offload_pinned_memory_enabled", False):
+                logger.info(
+                    "Disabling pinned memory because offload_target_memory_type=shared_gpu"
+                )
+                memory_config["offload_pinned_memory_enabled"] = False
 
     # Validation: Ensure incompatible features are disabled
     incompatible_features = [

@@ -430,7 +430,10 @@ class WanFinetuneTrainer:
                 f"Enable swap {blocks_to_swap} blocks to CPU from device: {accelerator.device}"
             )
             transformer.enable_block_swap(
-                blocks_to_swap, accelerator.device, supports_backward=True
+                blocks_to_swap,
+                accelerator.device,
+                supports_backward=True,
+                config_args=args,
             )
             transformer.move_to_device_except_swap_blocks(accelerator.device)
 

@@ -192,7 +192,7 @@ def stepped_loss(
     # Reconstruct predicted images and target images
     predicted_images = torch.cat(x0_pred_chunks, dim=0)
 
-    # Compare predicted images with original clean latents (as in original patch)
+    # Compare predicted images with original clean latents
     loss = F.mse_loss(
         predicted_images.float(),
         latents.float().to(device=predicted_images.device),
@@ -519,7 +519,7 @@ def conditional_loss_with_pseudo_huber(
                     reduction=reduction,
                 )
 
-                # Apply multiplier to adjust loss magnitude (as in original patch)
+                # Apply multiplier to adjust loss magnitude
                 return step_loss * stepped_multiplier
 
             except Exception as e:

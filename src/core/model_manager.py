@@ -165,9 +165,7 @@ class ModelManager:
                 if hasattr(args, "compile_args") and args.compile_args is not None
                 else None
             ),
-            enable_memory_mapping=bool(
-                getattr(args, "enable_memory_mapping", False)
-            ),
+            enable_memory_mapping=bool(getattr(args, "enable_memory_mapping", False)),
             enable_zero_copy_loading=bool(
                 getattr(args, "enable_zero_copy_loading", False)
             ),
@@ -185,9 +183,15 @@ class ModelManager:
             fp8_use_enhanced=bool(getattr(args, "fp8_use_enhanced", False)),
             # TorchAO integration parameters
             torchao_fp8_enabled=bool(getattr(args, "torchao_fp8_enabled", False)),
-            torchao_fp8_weight_dtype=str(getattr(args, "torchao_fp8_weight_dtype", "e4m3fn")),
-            torchao_fp8_target_modules=getattr(args, "torchao_fp8_target_modules", None),
-            torchao_fp8_exclude_modules=getattr(args, "torchao_fp8_exclude_modules", None),
+            torchao_fp8_weight_dtype=str(
+                getattr(args, "torchao_fp8_weight_dtype", "e4m3fn")
+            ),
+            torchao_fp8_target_modules=getattr(
+                args, "torchao_fp8_target_modules", None
+            ),
+            torchao_fp8_exclude_modules=getattr(
+                args, "torchao_fp8_exclude_modules", None
+            ),
         )
 
         # Optional: enable lean attention math from config
@@ -276,9 +280,7 @@ class ModelManager:
             ),
             scale_input_tensor=getattr(args, "scale_input_tensor", None),
             rope_use_float32=bool(getattr(args, "rope_use_float32", False)),
-            enable_memory_mapping=bool(
-                getattr(args, "enable_memory_mapping", False)
-            ),
+            enable_memory_mapping=bool(getattr(args, "enable_memory_mapping", False)),
             enable_zero_copy_loading=bool(
                 getattr(args, "enable_zero_copy_loading", False)
             ),
@@ -296,9 +298,15 @@ class ModelManager:
             fp8_use_enhanced=bool(getattr(args, "fp8_use_enhanced", False)),
             # TorchAO integration parameters
             torchao_fp8_enabled=bool(getattr(args, "torchao_fp8_enabled", False)),
-            torchao_fp8_weight_dtype=str(getattr(args, "torchao_fp8_weight_dtype", "e4m3fn")),
-            torchao_fp8_target_modules=getattr(args, "torchao_fp8_target_modules", None),
-            torchao_fp8_exclude_modules=getattr(args, "torchao_fp8_exclude_modules", None),
+            torchao_fp8_weight_dtype=str(
+                getattr(args, "torchao_fp8_weight_dtype", "e4m3fn")
+            ),
+            torchao_fp8_target_modules=getattr(
+                args, "torchao_fp8_target_modules", None
+            ),
+            torchao_fp8_exclude_modules=getattr(
+                args, "torchao_fp8_exclude_modules", None
+            ),
         )
 
         # Enable block swap for the temporary high-noise model only when not offloading it
@@ -792,15 +800,32 @@ class ModelManager:
             transformer.eval()
 
     def setup_block_swapping(
-        self, transformer: WanModel, accelerator: Accelerator, blocks_to_swap: int
+        self,
+        transformer: WanModel,
+        accelerator: Accelerator,
+        blocks_to_swap: int,
+        args: Optional[argparse.Namespace] = None,
     ) -> WanModel:
-        """Setup block swapping for memory optimization."""
+        """Setup block swapping for memory optimization with optional enhanced features.
+
+        Args:
+            transformer: The WAN transformer model
+            accelerator: Accelerator instance
+            blocks_to_swap: Number of blocks to swap
+            args: Optional args namespace for enhanced offloading configuration
+
+        Returns:
+            Prepared transformer model
+        """
         if blocks_to_swap > 0:
             logger.info(
                 f"enable swap {blocks_to_swap} blocks to CPU from device: {accelerator.device}"
             )
             transformer.enable_block_swap(
-                blocks_to_swap, accelerator.device, supports_backward=True
+                blocks_to_swap,
+                accelerator.device,
+                supports_backward=True,
+                config_args=args,
             )
             transformer.move_to_device_except_swap_blocks(accelerator.device)
 

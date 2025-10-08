@@ -1,7 +1,8 @@
 from concurrent.futures import ThreadPoolExecutor
 import gc
 import time
-from typing import Optional
+from typing import Optional, List
+import argparse
 import torch
 import torch.nn as nn
 
@@ -36,18 +37,23 @@ def synchronize_device(device: torch.device):
 
 
 def swap_weight_devices_cuda(
-    device: torch.device, layer_to_cpu: nn.Module, layer_to_cuda: nn.Module
+    device: torch.device,
+    layer_to_cpu: nn.Module,
+    layer_to_cuda: nn.Module,
+    enhanced_swapping: bool = False,
+    pinned_memory_enabled: bool = False,
+    non_blocking: bool = True,
+    timing_enabled: bool = False,
+    verbose_logging: bool = False,
 ):
+    """Swap weights between CUDA and CPU devices with optional enhanced features."""
     assert layer_to_cpu.__class__ == layer_to_cuda.__class__
+
+    start_time = time.perf_counter() if timing_enabled else None
 
     weight_swap_jobs = []
 
     # This is not working for all cases (e.g. SD3), so we need to find the corresponding modules
-    # for module_to_cpu, module_to_cuda in zip(layer_to_cpu.modules(), layer_to_cuda.modules()):
-    #     print(module_to_cpu.__class__, module_to_cuda.__class__)
-    #     if hasattr(module_to_cpu, "weight") and module_to_cpu.weight is not None:
-    #         weight_swap_jobs.append((module_to_cpu, module_to_cuda, module_to_cpu.weight.data, module_to_cuda.weight.data))
-
     modules_to_cpu = {k: v for k, v in layer_to_cpu.named_modules()}
     for module_to_cuda_name, module_to_cuda in layer_to_cuda.named_modules():
         if hasattr(module_to_cuda, "weight") and module_to_cuda.weight is not None:
@@ -66,39 +72,23 @@ def swap_weight_devices_cuda(
                 )
             else:
                 if module_to_cuda.weight.data.device.type != device.type:
-                    # print(
-                    #     f"Module {module_to_cuda_name} not found in CPU model or shape mismatch, so not swapping and moving to device"
-                    # )
+                    if verbose_logging:
+                        logger.info(
+                            f"Module {module_to_cuda_name} not found in CPU model or shape mismatch, moving to device"
+                        )
                     module_to_cuda.weight.data = module_to_cuda.weight.data.to(device)  # type: ignore
 
     torch.cuda.current_stream().synchronize()  # this prevents the illegal loss value
 
-    stream = torch.cuda.Stream()
-    with torch.cuda.stream(stream):  # type: ignore
-        # cuda to cpu
-        for (
-            module_to_cpu,
-            module_to_cuda,
-            cuda_data_view,
-            cpu_data_view,
-        ) in weight_swap_jobs:
-            cuda_data_view.record_stream(stream)
-            module_to_cpu.weight.data = cuda_data_view.data.to("cpu", non_blocking=True)
+    # Legacy entrypoint: always use original swapping algorithm to preserve backward compatibility.
+    # Enhanced algorithm is available via Offloader.swap_weight_devices_cuda instance method.
+    _swap_weights_original(device, weight_swap_jobs, non_blocking)
 
-        stream.synchronize()
-
-        # cpu to cuda
-        for (
-            module_to_cpu,
-            module_to_cuda,
-            cuda_data_view,
-            cpu_data_view,
-        ) in weight_swap_jobs:
-            cuda_data_view.copy_(module_to_cuda.weight.data, non_blocking=True)
-            module_to_cuda.weight.data = cuda_data_view
-
-    stream.synchronize()
-    torch.cuda.current_stream().synchronize()  # this prevents the illegal loss value
+    if timing_enabled:
+        elapsed = time.perf_counter() - start_time
+        logger.info(
+            f"Swapped weights in {elapsed:.2f}s. Count of modules swapped: {len(weight_swap_jobs)}"
+        )
 
 
 def swap_weight_devices_no_cuda(
@@ -147,15 +137,53 @@ def swap_weight_devices_no_cuda(
     synchronize_device(device)
 
 
-def weighs_to_device(layer: nn.Module, device: torch.device):
+def weighs_to_device(layer: nn.Module, device: torch.device, non_blocking: bool = True):
     for module in layer.modules():
         if hasattr(module, "weight") and module.weight is not None:
-            module.weight.data = module.weight.data.to(device, non_blocking=True)  # type: ignore
+            # Use non_blocking only when transferring away from CPU
+            use_non_blocking = non_blocking and device.type != "cpu"
+            module.weight.data = module.weight.data.to(  # type: ignore
+                device, non_blocking=use_non_blocking
+            )
+
+
+def _swap_weights_original(
+    device: torch.device, weight_swap_jobs: List, non_blocking: bool = True
+):
+    """Original weight swapping algorithm for backwards compatibility."""
+    stream = torch.cuda.Stream()
+    with torch.cuda.stream(stream):  # type: ignore
+        # cuda to cpu
+        for (
+            module_to_cpu,
+            module_to_cuda,
+            cuda_data_view,
+            cpu_data_view,
+        ) in weight_swap_jobs:
+            cuda_data_view.record_stream(stream)
+            module_to_cpu.weight.data = cuda_data_view.data.to(
+                "cpu", non_blocking=non_blocking
+            )
+
+        stream.synchronize()
+
+        # cpu to cuda
+        for (
+            module_to_cpu,
+            module_to_cuda,
+            cuda_data_view,
+            cpu_data_view,
+        ) in weight_swap_jobs:
+            cuda_data_view.copy_(module_to_cuda.weight.data, non_blocking=non_blocking)
+            module_to_cuda.weight.data = cuda_data_view
+
+    stream.synchronize()
+    torch.cuda.current_stream().synchronize()  # this prevents the illegal loss value
 
 
 class Offloader:
     """
-    common offloading class
+    common offloading class with enhanced features
     """
 
     def __init__(
@@ -165,6 +193,13 @@ class Offloader:
         blocks_to_swap: int,
         device: torch.device,
         debug: bool = False,
+        enhanced_enabled: bool = False,
+        pinned_memory_enabled: bool = False,
+        non_blocking_transfers: bool = True,
+        timing_enabled: bool = False,
+        verbose_logging: bool = False,
+        target_memory_type: str = "auto",
+        cpu_memory_priority: bool = False,
     ):
         self.block_type = block_type
         self.num_blocks = num_blocks
@@ -172,15 +207,185 @@ class Offloader:
         self.device = device
         self.debug = debug
 
+        # Enhanced offloading features
+        self.enhanced_enabled = enhanced_enabled
+        self.pinned_memory_enabled = pinned_memory_enabled
+        self.non_blocking_transfers = non_blocking_transfers
+        self.timing_enabled = timing_enabled
+        self.verbose_logging = verbose_logging
+        self.target_memory_type = target_memory_type
+        self.cpu_memory_priority = cpu_memory_priority
+
         self.thread_pool = ThreadPoolExecutor(max_workers=1)
         self.futures = {}
         self.cuda_available = device.type == "cuda"
 
+        # Persistent staging buffers for enhanced swapping
+        self.staging_buffer_a = None
+        self.staging_buffer_b = None
+
+        if self.verbose_logging:
+            logger.info(
+                f"Offloader initialized for {block_type}: enhanced={enhanced_enabled}, "
+                f"pinned_memory={pinned_memory_enabled}, "
+                f"target_memory_type={target_memory_type}, cpu_memory_priority={cpu_memory_priority}"
+            )
+
     def swap_weight_devices(self, block_to_cpu: nn.Module, block_to_cuda: nn.Module):
         if self.cuda_available:
-            swap_weight_devices_cuda(self.device, block_to_cpu, block_to_cuda)
+            self.swap_weight_devices_cuda(self.device, block_to_cpu, block_to_cuda)
         else:
             swap_weight_devices_no_cuda(self.device, block_to_cpu, block_to_cuda)
+
+    def swap_weight_devices_cuda(
+        self, device: torch.device, layer_to_cpu: nn.Module, layer_to_cuda: nn.Module
+    ):
+        """Enhanced weight swapping with persistent staging buffers."""
+        assert layer_to_cpu.__class__ == layer_to_cuda.__class__
+
+        start_time = time.perf_counter() if self.timing_enabled else None
+
+        weight_swap_jobs = []
+
+        modules_to_cpu = {k: v for k, v in layer_to_cpu.named_modules()}
+        for module_to_cuda_name, module_to_cuda in layer_to_cuda.named_modules():
+            if hasattr(module_to_cuda, "weight") and module_to_cuda.weight is not None:
+                module_to_cpu = modules_to_cpu.get(module_to_cuda_name, None)
+                if (
+                    module_to_cpu is not None
+                    and module_to_cpu.weight.shape == module_to_cuda.weight.shape
+                ):
+                    weight_swap_jobs.append(
+                        (
+                            module_to_cpu,
+                            module_to_cuda,
+                            module_to_cpu.weight.data,
+                            module_to_cuda.weight.data,
+                        )
+                    )
+                else:
+                    if module_to_cuda.weight.data.device.type != device.type:
+                        if self.verbose_logging:
+                            logger.info(
+                                f"Module {module_to_cuda_name} not found in CPU model or shape mismatch, moving to device"
+                            )
+                        module_to_cuda.weight.data = module_to_cuda.weight.data.to(device)  # type: ignore
+
+        torch.cuda.current_stream().synchronize()  # this prevents the illegal loss value
+
+        # Master switch check: if enhanced offloading is disabled, always use original algorithm
+        if not getattr(self, "enhanced_enabled", False):
+            _swap_weights_original(
+                device, weight_swap_jobs, self.non_blocking_transfers
+            )
+            if self.timing_enabled and start_time is not None:
+                elapsed = time.perf_counter() - start_time
+                logger.info(
+                    f"Swapped weights (original) in {elapsed:.2f}s. Count of modules swapped: {len(weight_swap_jobs)}"
+                )
+            return
+
+        # Mode selection: shared_gpu mode uses original algorithm (compatibility)
+        if getattr(self, "target_memory_type", "auto") == "shared_gpu":
+            _swap_weights_original(
+                device, weight_swap_jobs, self.non_blocking_transfers
+            )
+            if self.timing_enabled and start_time is not None:
+                elapsed = time.perf_counter() - start_time
+                logger.info(
+                    f"Swapped weights (shared_gpu) in {elapsed:.2f}s. Count of modules swapped: {len(weight_swap_jobs)}"
+                )
+            return
+
+        # When enhanced offloading is enabled: use staging buffer algorithm if pinned memory is enabled
+        if self.pinned_memory_enabled:
+            # Enhanced swapping with persistent staging buffers (PR #585)
+            self._swap_weights_enhanced_persistent_staging(
+                device, weight_swap_jobs, start_time
+            )
+        else:
+            # Enhanced offloading enabled but pinned memory disabled: use original algorithm
+            _swap_weights_original(
+                device, weight_swap_jobs, self.non_blocking_transfers
+            )
+            if self.timing_enabled and start_time is not None:
+                elapsed = time.perf_counter() - start_time
+                logger.info(
+                    f"Swapped weights (original, no pinned memory) in {elapsed:.2f}s. Count of modules swapped: {len(weight_swap_jobs)}"
+                )
+
+    def _swap_weights_enhanced_persistent_staging(
+        self, device: torch.device, weight_swap_jobs: List, start_time: Optional[float]
+    ):
+        """Enhanced weight swapping with persistent staging buffers."""
+        stream = torch.cuda.Stream()
+        with torch.cuda.stream(stream):
+            if self.staging_buffer_a is None:
+                # Create staging buffers pinned to device for correct multi-GPU behavior
+                self.staging_buffer_a = [
+                    torch.empty_like(cuda_data_view, device="cpu").pin_memory(
+                        device=device
+                    )
+                    for _, _, cuda_data_view, _ in weight_swap_jobs
+                ]
+                self.staging_buffer_b = [
+                    torch.empty_like(cuda_data_view, device="cpu").pin_memory(
+                        device=device
+                    )
+                    for _, _, cuda_data_view, _ in weight_swap_jobs
+                ]
+
+            events = [torch.cuda.Event() for _ in weight_swap_jobs]
+
+            # Phase 1: copy to staging and record events
+            for (
+                event,
+                sbuf_a,
+                sbuf_b,
+                (
+                    module_to_cpu,
+                    module_to_cuda,
+                    cuda_data_view,
+                    cpu_data_view,
+                ),
+            ) in zip(
+                events, self.staging_buffer_a, self.staging_buffer_b, weight_swap_jobs
+            ):
+                sbuf_a.copy_(cuda_data_view.data, non_blocking=True)  # CUDA -> pinned
+                event.record(stream)
+
+                sbuf_b.copy_(module_to_cuda.weight.data)  # CPU -> pinned (sync)
+
+        with torch.cuda.stream(stream):
+            # Phase 2: event-synchronized transfers from staging
+            for (
+                event,
+                sbuf_a,
+                sbuf_b,
+                (
+                    module_to_cpu,
+                    module_to_cuda,
+                    cuda_data_view,
+                    cpu_data_view,
+                ),
+            ) in zip(
+                events, self.staging_buffer_a, self.staging_buffer_b, weight_swap_jobs
+            ):
+                event.synchronize()
+                cuda_data_view.copy_(sbuf_b, non_blocking=True)  # pinned -> CUDA
+                cpu_data_view.copy_(sbuf_a)  # pinned -> CPU (sync)
+
+                module_to_cuda.weight.data = cuda_data_view
+                module_to_cpu.weight.data = cpu_data_view
+
+        stream.synchronize()
+        torch.cuda.current_stream().synchronize()
+
+        if self.timing_enabled and start_time is not None:
+            elapsed = time.perf_counter() - start_time
+            logger.info(
+                f"[{self.block_type}] Swapped weights in {elapsed:.2f}s. Count of modules swapped: {len(weight_swap_jobs)}"
+            )
 
     def _submit_move_blocks(self, blocks, block_idx_to_cpu, block_idx_to_cuda):
         def move_blocks(bidx_to_cpu, block_to_cpu, bidx_to_cuda, block_to_cuda):
@@ -232,7 +437,7 @@ class Offloader:
 
 class ModelOffloader(Offloader):
     """
-    supports forward offloading
+    supports forward offloading with enhanced features
     """
 
     def __init__(
@@ -244,8 +449,28 @@ class ModelOffloader(Offloader):
         supports_backward: bool,
         device: torch.device,
         debug: bool = False,
+        enhanced_enabled: bool = False,
+        pinned_memory_enabled: bool = False,
+        non_blocking_transfers: bool = True,
+        timing_enabled: bool = False,
+        verbose_logging: bool = False,
+        target_memory_type: str = "auto",
+        cpu_memory_priority: bool = False,
     ):
-        super().__init__(block_type, num_blocks, blocks_to_swap, device, debug)
+        super().__init__(
+            block_type,
+            num_blocks,
+            blocks_to_swap,
+            device,
+            debug,
+            enhanced_enabled,
+            pinned_memory_enabled,
+            non_blocking_transfers,
+            timing_enabled,
+            verbose_logging,
+            target_memory_type,
+            cpu_memory_priority,
+        )
 
         self.supports_backward = supports_backward
         self.forward_only = (
@@ -306,15 +531,26 @@ class ModelOffloader(Offloader):
         if self.debug:
             print(f"[{self.block_type}] Prepare block devices before forward")
 
+        # Determine target memory for offloaded blocks
+        cpu_device = torch.device("cpu")
+        offload_device = cpu_device
+        tmt = getattr(self, "target_memory_type", "auto")
+        if tmt == "shared_gpu":
+            offload_device = self.device
+        elif tmt == "cpu":
+            offload_device = cpu_device
+        else:  # auto
+            if getattr(self, "cpu_memory_priority", False):
+                offload_device = cpu_device
+
         for b in blocks[0 : self.num_blocks - self.blocks_to_swap]:
             b.to(self.device)
-            weighs_to_device(b, self.device)  # make sure weights are on device
+            weighs_to_device(b, self.device, non_blocking=self.non_blocking_transfers)
 
         for b in blocks[self.num_blocks - self.blocks_to_swap :]:
-            b.to(
-                self.device
-            )  # move block to device first. this makes sure that buffers (non weights) are on the device
-            weighs_to_device(b, "cpu")  # type: ignore # make sure weights are on cpu
+            b.to(self.device)  # ensure buffers on device
+            if offload_device.type == "cpu":
+                weighs_to_device(b, offload_device, non_blocking=False)
 
         synchronize_device(self.device)
         clean_memory_on_device(self.device)
@@ -339,3 +575,103 @@ class ModelOffloader(Offloader):
             block_idx_to_cuda % self.num_blocks
         )  # this works for forward-only offloading
         self._submit_move_blocks(blocks, block_idx_to_cpu, block_idx_to_cuda)
+
+
+def create_enhanced_offloader(
+    block_type: str,
+    num_blocks: int,
+    blocks_to_swap: int,
+    device: torch.device,
+    debug: bool = False,
+    config_args: Optional[argparse.Namespace] = None,
+) -> Offloader:
+    """
+    Create an Offloader with enhanced features based on configuration parameters.
+    """
+    enhanced_enabled = False
+    pinned_memory_enabled = False
+    non_blocking_transfers = True
+    timing_enabled = False
+    verbose_logging = False
+    target_memory_type = "auto"
+    cpu_memory_priority = False
+
+    if config_args is not None:
+        enhanced_enabled = getattr(config_args, "offload_enhanced_enabled", False)
+        pinned_memory_enabled = getattr(
+            config_args, "offload_pinned_memory_enabled", False
+        )
+        non_blocking_transfers = getattr(
+            config_args, "offload_non_blocking_transfers", True
+        )
+        timing_enabled = getattr(config_args, "offload_timing_enabled", False)
+        verbose_logging = getattr(config_args, "offload_verbose_logging", False)
+        target_memory_type = getattr(config_args, "offload_target_memory_type", "auto")
+        cpu_memory_priority = getattr(config_args, "offload_cpu_memory_priority", False)
+
+    return Offloader(
+        block_type=block_type,
+        num_blocks=num_blocks,
+        blocks_to_swap=blocks_to_swap,
+        device=device,
+        debug=debug,
+        enhanced_enabled=enhanced_enabled,
+        pinned_memory_enabled=pinned_memory_enabled,
+        non_blocking_transfers=non_blocking_transfers,
+        timing_enabled=timing_enabled,
+        verbose_logging=verbose_logging,
+        target_memory_type=target_memory_type,
+        cpu_memory_priority=cpu_memory_priority,
+    )
+
+
+def create_enhanced_model_offloader(
+    block_type: str,
+    blocks: list[nn.Module],
+    num_blocks: int,
+    blocks_to_swap: int,
+    supports_backward: bool,
+    device: torch.device,
+    debug: bool = False,
+    config_args: Optional[argparse.Namespace] = None,
+) -> ModelOffloader:
+    """
+    Create a ModelOffloader with enhanced features based on configuration parameters.
+    """
+    enhanced_enabled = False
+    pinned_memory_enabled = False
+    non_blocking_transfers = True
+    timing_enabled = False
+    verbose_logging = False
+    target_memory_type = "auto"
+    cpu_memory_priority = False
+
+    if config_args is not None:
+        enhanced_enabled = getattr(config_args, "offload_enhanced_enabled", False)
+        pinned_memory_enabled = getattr(
+            config_args, "offload_pinned_memory_enabled", False
+        )
+        non_blocking_transfers = getattr(
+            config_args, "offload_non_blocking_transfers", True
+        )
+        timing_enabled = getattr(config_args, "offload_timing_enabled", False)
+        verbose_logging = getattr(config_args, "offload_verbose_logging", False)
+        target_memory_type = getattr(config_args, "offload_target_memory_type", "auto")
+        cpu_memory_priority = getattr(config_args, "offload_cpu_memory_priority", False)
+
+    return ModelOffloader(
+        block_type=block_type,
+        blocks=blocks,
+        num_blocks=num_blocks,
+        blocks_to_swap=blocks_to_swap,
+        supports_backward=supports_backward,
+        device=device,
+        debug=debug,
+        enhanced_enabled=enhanced_enabled,
+        pinned_memory_enabled=pinned_memory_enabled,
+        non_blocking_transfers=non_blocking_transfers,
+        timing_enabled=timing_enabled,
+        verbose_logging=verbose_logging,
+        target_memory_type=target_memory_type,
+        cpu_memory_priority=cpu_memory_priority,
+    )

@@ -1,4 +1,5 @@
 # Copyright 2024-2025 The Alibaba Wan Team Authors. All rights reserved.
+import argparse
 import math
 import time
 from typing import Dict, List, Optional, Union
@@ -1084,8 +1085,22 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
         logger.info("WanModel: Gradient checkpointing disabled.")
 
     def enable_block_swap(
-        self, blocks_to_swap: int, device: torch.device, supports_backward: bool
+        self,
+        blocks_to_swap: int,
+        device: torch.device,
+        supports_backward: bool,
+        config_args: Optional[argparse.Namespace] = None,
     ):
+        """Enable block swapping with optional enhanced offloading features.
+
+        Args:
+            blocks_to_swap: Number of blocks to swap
+            device: Target device
+            supports_backward: Whether to support backward pass
+            config_args: Optional configuration namespace for enhanced offloading features
+        """
+        from modules.custom_offloading_utils import create_enhanced_model_offloader
+
         self.blocks_to_swap = blocks_to_swap
         self.num_blocks = len(self.blocks)  # type: ignore
 
@@ -1093,16 +1108,31 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
             self.blocks_to_swap <= self.num_blocks - 1
         ), f"Cannot swap more than {self.num_blocks - 1} blocks. Requested {self.blocks_to_swap} blocks to swap."
 
-        self.offloader = ModelOffloader(
-            "wan_attn_block",
-            self.blocks,  # type: ignore
-            self.num_blocks,
-            self.blocks_to_swap,
-            supports_backward,
-            device,  # , debug=True
+        # Use factory function to support enhanced offloading features
+        self.offloader = create_enhanced_model_offloader(
+            block_type="wan_attn_block",
+            blocks=self.blocks,  # type: ignore
+            num_blocks=self.num_blocks,
+            blocks_to_swap=self.blocks_to_swap,
+            supports_backward=supports_backward,
+            device=device,
+            debug=False,
+            config_args=config_args,
         )
+
+        # Log enhanced features status if enabled
+        enhanced_info = ""
+        if config_args is not None:
+            enhanced_enabled = getattr(config_args, "offload_enhanced_enabled", False)
+            if enhanced_enabled:
+                pinned_memory = getattr(
+                    config_args, "offload_pinned_memory_enabled", False
+                )
+                enhanced_info = f" [Enhanced: pinned={pinned_memory}]"
+
         logger.info(
-            f"WanModel: Block swap enabled. Swapping {self.blocks_to_swap} blocks out of {self.num_blocks} blocks. Supports backward: {supports_backward}"
+            f"WanModel: Block swap enabled. Swapping {self.blocks_to_swap} blocks out of {self.num_blocks} blocks. "
+            f"Supports backward: {supports_backward}{enhanced_info}"
         )
 
     def switch_block_swap_for_inference(self):

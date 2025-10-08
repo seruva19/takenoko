@@ -1033,6 +1033,36 @@ ramtorch_verbose = false
 ramtorch_fp32_io = true
 
 # =============================================================================
+# ENHANCED OFFLOADING SETTINGS
+# =============================================================================
+
+# When enabled, provides advanced weight swapping with pinned memory and performance optimizations
+offload_enhanced_enabled = false
+
+# Use pinned memory staging buffers
+# Requires offload_enhanced_enabled = true
+# Enables persistent staging buffers for 96% shared VRAM reduction
+offload_pinned_memory_enabled = false
+
+# Enable non-blocking memory transfers where possible
+offload_non_blocking_transfers = true
+
+# Target memory type for offloaded weights
+# "auto": Prefer CPU (default behavior), honors offload_cpu_memory_priority
+# "cpu": Force CPU RAM for offloaded weights (recommended for Windows shared VRAM limits)
+# "shared_gpu": Keep offloaded weights in shared GPU memory (disables enhanced+pinned)
+offload_target_memory_type = "auto"
+
+# Prefer CPU memory in auto mode (has effect only when offload_target_memory_type = "auto")
+offload_cpu_memory_priority = false
+
+# Log timing for swapping operations (debugging/perf analysis)
+offload_timing_enabled = false
+
+# Verbose logging for offloading (may reduce performance)
+offload_verbose_logging = false
+
+# =============================================================================
 # CUDA ENVIRONMENT & RUNTIME SETTINGS
 # =============================================================================
 
@@ -1885,7 +1915,7 @@ enable_tread = false
 # 'full' is used with tread_config_route parameters
 # 'frame_contiguous'/'frame_stride' are used with 'tread' parameter for temporal routing
 # 'row_contiguous'/'row_stride'/'row_random' are used with 'tread' parameter for spatial routing
-# 'spatial_auto' automatically detects F=1 (rows) vs F>1 (frames) - hybrid mode like original patch
+# 'spatial_auto' automatically detects F=1 (rows) vs F>1 (frames) - hybrid auto-detection mode
 tread_mode = "full"
 
 # Each route is a semicolon-separated string of key=value pairs. Keys: selection_ratio (0-1), start_layer_idx, end_layer_idx (negative allowed)
@@ -1913,7 +1943,7 @@ tread_config_route1 = "selection_ratio=0.1; start_layer_idx=2; end_layer_idx=-2"
 # tread_mode = "row_random"         # Keep randomly selected rows
 # tread = { start_layer = 2, end_layer = 36, keep_ratio = 0.8 }
 
-# Hybrid auto-detection mode (original patch behavior):
+# Hybrid auto-detection mode:
 # tread_mode = "spatial_auto"       # F=1→rows, F>1→frames
 # tread = { start_layer = 2, end_layer = 36, keep_ratio = 0.7 }
 
