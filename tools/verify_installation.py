@@ -6,7 +6,138 @@ Test script to verify Takenoko installation
 
 import sys
 import os
+import subprocess
 from pathlib import Path
+
+
+def ensure_msvc_env() -> bool:
+    """Ensure MSVC/OpenMP environment variables are available on Windows."""
+    if os.name != "nt":
+        return True
+
+    required_keys = ("INCLUDE", "LIB", "LIBPATH")
+    if all(os.environ.get(key) for key in required_keys):
+        return True
+
+    program_files_x86 = os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")
+    vswhere = Path(program_files_x86) / "Microsoft Visual Studio/Installer/vswhere.exe"
+    if not vswhere.exists():
+        print(
+            "⚠  torch.compile backend 'inductor' skipped: Visual Studio Build Tools not detected."
+        )
+        print(
+            "    😌 INFO: Install VS Build Tools (Desktop C++ + OpenMP) to enable inductor."
+        )
+        return False
+
+    try:
+        install_dir = subprocess.check_output(
+            [
+                str(vswhere),
+                "-latest",
+                "-products",
+                "*",
+                "-requires",
+                "Microsoft.Component.MSBuild",
+                "-property",
+                "installationPath",
+            ],
+            text=True,
+        ).strip()
+    except subprocess.CalledProcessError as exc:
+        print(f"⚠  torch.compile backend 'inductor' skipped: vswhere failed ({exc}).")
+        print(
+            "    😌 INFO: Reinstall VS Build Tools or run install from a VS developer prompt."
+        )
+        return False
+
+    if not install_dir:
+        print(
+            "⚠  torch.compile backend 'inductor' skipped: VS Build Tools installation not found."
+        )
+        print(
+            "    😌 INFO: Install VS Build Tools (Desktop C++ + OpenMP) to enable inductor."
+        )
+        return False
+
+    vcvars = Path(install_dir) / "VC/Auxiliary/Build/vcvarsall.bat"
+    if not vcvars.exists():
+        print(f"⚠  torch.compile backend 'inductor' skipped: {vcvars} missing.")
+        print("    😌 INFO: Repair or reinstall VS Build Tools.")
+        return False
+
+    try:
+        env_dump = subprocess.check_output(
+            f'"{vcvars}" x64 & set',
+            shell=True,
+            encoding="mbcs",
+            errors="ignore",
+        )
+    except subprocess.CalledProcessError as exc:
+        print(
+            f"⚠  torch.compile backend 'inductor' skipped: vcvarsall.bat failed ({exc})."
+        )
+        print(
+            "    😌 INFO: Run install from an MSVC developer prompt after fixing VS setup."
+        )
+        return False
+
+    for line in env_dump.splitlines():
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key_upper = key.upper()
+        if key_upper in {"INCLUDE", "LIB", "LIBPATH", "PATH"}:
+            if key_upper == "PATH":
+                existing = os.environ.get(key_upper, "")
+                os.environ[key_upper] = value + (
+                    os.pathsep + existing if existing else ""
+                )
+            else:
+                os.environ[key_upper] = value
+
+    return True
+
+
+def summarize_exception(exc: Exception) -> str:
+    """Return a compact, single-line summary for an exception."""
+    exc_text = str(exc)
+    if "UnicodeDecodeError" in exc_text:
+        return "UnicodeDecodeError reading MSVC output (missing OpenMP headers?)"
+    message_lines = [line.strip() for line in exc_text.splitlines() if line.strip()]
+    if not message_lines:
+        return repr(exc)
+    return message_lines[0]
+
+
+def emit_backend_warning(backend: str, exc: Exception) -> None:
+    """Emit warning and guidance for torch.compile backend failures."""
+    summary = summarize_exception(exc)
+    print(f"⚠  torch.compile backend '{backend}' failed: {summary}")
+
+    tips: list[str] = []
+    text = str(exc)
+    if "UnicodeDecodeError" in text or "omp.h" in text:
+        tips.append(
+            "Install VS Build Tools with OpenMP and run install from the Native Tools prompt."
+        )
+    elif "cl is not found" in text:
+        tips.append(
+            "Run install from the Native Tools command prompt so cl.exe is on PATH."
+        )
+    else:
+        tips.append("Set TORCH_LOGS=+dynamo for details or continue with eager mode.")
+
+    for tip in tips:
+        print(f"    😌 INFO: {tip}")
+    if backend == "eager":
+        print(
+            "    😌 INFO: Investigate the eager backend failure; training depends on it."
+        )
+    else:
+        print(
+            "    😌 INFO: Training will continue using eager mode; this is not fatal."
+        )
 
 
 def test_imports():
@@ -149,13 +280,22 @@ def test_flash_attention():
                     print("🟢 Flash Attention computation works")
                 except Exception as e:
                     print(f"✗ Flash Attention computation failed: {e}")
+                    print(
+                        "    😌 INFO: Flash Attention is optional; training can proceed without it."
+                    )
 
             except ImportError:
                 print("🚫 Flash Attention functions not available")
+                print(
+                    "    😌 INFO: Flash Attention is optional; training can proceed without it."
+                )
 
         except ImportError:
             print(
                 "🚫 Flash Attention package not installed (install with: pip install flash-attn)"
+            )
+            print(
+                "    😌 INFO: Flash Attention is optional; training can proceed without it."
             )
 
         # Check if xformers is available (alternative to flash_attn)
@@ -171,14 +311,21 @@ def test_flash_attention():
                 print("🟢 XFormers memory efficient attention available")
             except ImportError:
                 print("🚫 XFormers memory efficient attention not available")
+                print(
+                    "    😌 INFO: XFormers attention is optional; training can proceed without it."
+                )
 
         except ImportError:
             print("🚫 XFormers not installed (install with: pip install xformers)")
+            print("    😌 INFO: XFormers is optional; training can proceed without it.")
 
         return True
 
     except Exception as e:
         print(f"🚫 Flash Attention test failed: {e}")
+        print(
+            "    😌 INFO: Flash Attention is optional; training can proceed without it."
+        )
         return False
 
 
@@ -231,19 +378,31 @@ def test_sage_attention():
                     print("🟢 Sage Attention computation works")
                 except Exception as e:
                     print(f"🚫 Sage Attention computation failed: {e}")
+                    print(
+                        "    😌 INFO: Sage Attention is optional; training can proceed without it."
+                    )
 
             except ImportError:
                 print("🚫 Sage Attention functions not available")
+                print(
+                    "    😌 INFO: Sage Attention is optional; training can proceed without it."
+                )
 
         except ImportError:
             print(
                 "🚫 Sage Attention package not installed (install with: pip install sage-attn)"
+            )
+            print(
+                "    😌 INFO: Sage Attention is optional; training can proceed without it."
             )
 
         return True
 
     except Exception as e:
         print(f"🚫 Sage Attention test failed: {e}")
+        print(
+            "    😌 INFO: Sage Attention is optional; training can proceed without it."
+        )
         return False
 
 
@@ -265,9 +424,13 @@ def test_triton():
                 print("🟢 Triton compiler available")
             except ImportError:
                 print("🚫 Triton compiler not available")
+                print(
+                    "    😌 INFO: Triton is optional; training can proceed without it."
+                )
 
         except ImportError:
             print("🚫 Triton not installed (install with: pip install triton)")
+            print("    😌 INFO: Triton is optional; training can proceed without it.")
             return True  # Not critical for basic functionality
 
         # Test if inductor backend works (requires C++ compiler)
@@ -289,11 +452,15 @@ def test_triton():
             print(
                 f"🚫 Triton inductor backend not working: {error_msg} (will fallback to eager backend)"
             )
+            print(
+                "    😌 INFO: Training will continue in eager mode; this is not fatal."
+            )
 
         return True
 
     except Exception as e:
         print(f"🚫 Triton test failed: {e}")
+        print("    😌 INFO: Triton is optional; training can proceed without it.")
         return False
 
 
@@ -313,9 +480,13 @@ def test_cuda():
             return True
         else:
             print("🚫 CUDA not available - will use CPU")
+            print("    😌 INFO: Training will run on CPU; expect slower performance.")
             return True
     except Exception as e:
         print(f"🚫 CUDA test failed: {e}")
+        print(
+            "    😌 INFO: Training can still run on CPU; investigate CUDA setup if GPU is desired."
+        )
         return False
 
 
@@ -368,24 +539,39 @@ def test_torch_compile():
 
     try:
         import torch
+    except Exception as e:
+        print(f"🚫 torch.compile import failed: {e}")
+        print("    😌 INFO: Install PyTorch to run training.")
+        return False
 
-        # Test basic compilation with eager backend
-        def test_function(x):
-            return torch.nn.functional.relu(x)
+    def test_function(x):
+        return torch.nn.functional.relu(x)
+
+    success = True
+    for backend in ("eager", "inductor"):
+        if backend == "inductor" and os.name == "nt" and not ensure_msvc_env():
+            print(
+                "⚠  torch.compile backend 'inductor' skipped: MSVC/OpenMP toolchain not detected."
+            )
+            print(
+                "    😌 INFO: Install VS Build Tools (Desktop C++ + OpenMP) and rerun from the Native Tools prompt."
+            )
+            print(
+                "    😌 INFO: Training will continue using eager mode; this is not fatal."
+            )
+            continue
 
         try:
-            compiled_fn = torch.compile(test_function, backend="eager")
+            compiled_fn = torch.compile(test_function, backend=backend)
             test_input = torch.randn(10, 10)
-            result = compiled_fn(test_input)
-            print("🟢 torch.compile with eager backend")
-            return True
-        except Exception as e:
-            print(f"🚫 torch.compile test failed: {e}")
-            return False
+            _ = compiled_fn(test_input)
+            print(f"🟢 torch.compile backend '{backend}' passed")
+        except Exception as exc:
+            emit_backend_warning(backend, exc)
+            if backend == "eager":
+                success = False
 
-    except Exception as e:
-        print(f"🚫 torch.compile test failed: {e}")
-        return False
+    return success
 
 
 def main():
