@@ -1037,7 +1037,7 @@ sara_feature_matching_weight = 0.1
 
 # Optional discriminator gradient clipping. Set to null to disable; values in the
 # 0.5-5.0 range work well for stabilising adversarial updates.
-sara_discriminator_max_grad_norm = null
+# sara_discriminator_max_grad_norm = 1.0
 
 # Optional StepLR schedule for the discriminator. Set scheduler_step to 0 to disable.
 sara_discriminator_scheduler_step = 0
