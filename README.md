@@ -44,6 +44,7 @@ Keep in mind that work on some features is not yet complete due to time and hard
 | [musubi-tuner (pr)](https://github.com/kohya-ss/musubi-tuner/pull/63) | repo | - Initial implementation of validation datasets | [NSFW-API](https://github.com/NSFW-API) | Apache 2.0 | |
 | [Timestep-Attention-and-other-shenanigans](https://github.com/Anzhc/Timestep-Attention-and-other-shenanigans) | repo | - Clustered MSE Loss<br>- EW loss | [Anzhc](https://github.com/Anzhc) | AGPL-3.0 | |
 | [Diffuse and Disperse: Image Generation with Representation Regularization](https://arxiv.org/abs/2506.09027v1) | paper | - Dispersive loss | Runqian Wang, Kaiming He | CC BY 4.0 | |
+| [DispLoss](https://github.com/raywang4/DispLoss) | repo | - Dispersive loss PyTorch implementation | [raywang4](https://github.com/raywang4) | MIT | <sub>official implementation of Dispersive Loss paper</sub> |
 | [sd-scripts](https://github.com/kohya-ss/sd-scripts) | repo | - Regularization datasets<br>- LoRA-GGPO | [kohya-ss](https://github.com/kohya-ss) | Apache 2.0 | |
 | [wan2.1-dilated-controlnet](https://github.com/TheDenk/wan2.1-dilated-controlnet) | repo | - ControlNET training | [TheDenk](https://github.com/TheDenk) | Apache 2.0 | |
 | [T-LoRA](https://github.com/ControlGenAI/T-LoRA) | repo | - T-LoRA training | [ControlGenAI](https://github.com/ControlGenAI) | MIT | |

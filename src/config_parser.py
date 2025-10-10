@@ -975,13 +975,15 @@ def create_args_from_config(
 
     # Dispersive Loss Regularization settings
     args.enable_dispersive_loss = config.get("enable_dispersive_loss", False)
-    args.dispersive_loss_lambda = config.get("dispersive_loss_lambda", 0.0)
-    args.dispersive_loss_tau = config.get("dispersive_loss_tau", 0.5)
-    # None disables extraction, non-negative integer selects a block index
-    args.dispersive_loss_target_block = config.get("dispersive_loss_target_block")
+    args.dispersive_loss_lambda = config.get("dispersive_loss_lambda", 0.25)
+    args.dispersive_loss_tau = config.get("dispersive_loss_tau", 1.0)
+    # None disables extraction; use "last" (default) to select the final block
+    args.dispersive_loss_target_block = config.get(
+        "dispersive_loss_target_block", "last"
+    )
     args.dispersive_loss_metric = config.get(
         "dispersive_loss_metric", "l2_sq"
-    )  # "l2_sq" or "cosine"
+    )  # "l2_sq", "l2_sq_legacy", or "cosine"
     # Optional: pool spatial tokens per frame before dispersion ("none" or "frame_mean")
     args.dispersive_loss_pooling = config.get("dispersive_loss_pooling", "none")
 

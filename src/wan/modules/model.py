@@ -44,6 +44,7 @@ from modules.fp8_optimization_utils import (
 
 from .attention import local_patching, local_merge, nablaT, sta
 from utils.advanced_rope import apply_rope_comfy
+from utils.dispersive_loss_utils import resolve_dispersive_target_block
 
 from utils.tread.tread_router import TREADRouter
 from wan.modules.lean_attention import forward_wan22_lean_block
@@ -1451,6 +1452,9 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
 
         # Optional intermediate capture for dispersive loss
         intermediate_z = None
+        target_block_idx = resolve_dispersive_target_block(
+            len(self.blocks), dispersive_loss_target_block
+        )  # type: ignore[arg-type]
 
         # Track input device for consistency check when CPU offloading is enabled
         input_device = x.device
@@ -1538,8 +1542,8 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
                 # Capture intermediate representation if requested
                 if (
                     return_intermediate
-                    and dispersive_loss_target_block is not None
-                    and block_idx == int(dispersive_loss_target_block)
+                    and target_block_idx is not None
+                    and block_idx == target_block_idx
                 ):
                     # x shape is (B, L, C). Keep as-is for downstream flattening.
                     intermediate_z = x

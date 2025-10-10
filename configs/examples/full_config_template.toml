@@ -773,16 +773,16 @@ enable_custom_loss_target = false
 # Enable dispersive loss for improved generation quality and speed.
 enable_dispersive_loss = false
 
-# The lambda (λ) hyperparameter that controls the strength of the dispersive loss. The paper found 0.05 to be a robust value.
-dispersive_loss_lambda = 0.05
+# The lambda (λ) hyperparameter that controls the strength of the dispersive loss. The official PyTorch release uses 0.25.
+dispersive_loss_lambda = 0.25
 
 # Temperature parameter (> 0). Smaller values sharpen repulsion.
-dispersive_loss_tau = 0.5
+dispersive_loss_tau = 1.0
 
-# None disables extraction, non-negative integer selects a block index
-dispersive_loss_target_block = 2
+# None disables extraction, non-negative integer selects a block index, "last" picks the final block
+dispersive_loss_target_block = "last"
 
-# "l2_sq" or "cosine"
+# "l2_sq" (official), "l2_sq_legacy", or "cosine"
 dispersive_loss_metric = "l2_sq"
 
 # Optional: pool spatial tokens per frame before dispersion ("none" or "frame_mean")
