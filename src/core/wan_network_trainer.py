@@ -404,10 +404,16 @@ class WanNetworkTrainer:
         except Exception:
             pass
 
+        need_pixels_for_alignment = bool(
+            getattr(args, "enable_control_lora", False)
+            or getattr(args, "sara_enabled", False)
+            or getattr(args, "enable_repa", False)
+        )
+
         train_dataset_group = config_utils.generate_dataset_group_by_blueprint(
             blueprint.train_dataset_group,
             training=True,
-            load_pixels_for_batches=getattr(args, "enable_control_lora", False),
+            load_pixels_for_batches=need_pixels_for_alignment,
             prior_loss_weight=getattr(args, "prior_loss_weight", 1.0),
             num_timestep_buckets=(
                 None
@@ -438,14 +444,17 @@ class WanNetworkTrainer:
             # For validation, we might want pixels available in batches without enabling Control LoRA.
             # When args.load_val_pixels is True, piggyback on the dataset preparation flag
             # that loads original pixels for control processing.
-            val_enable_control_lora = bool(getattr(args, "enable_control_lora", False))
-            if bool(getattr(args, "load_val_pixels", False)):
-                val_enable_control_lora = True
+            val_need_pixels = bool(
+                getattr(args, "enable_control_lora", False)
+                or getattr(args, "sara_enabled", False)
+                or getattr(args, "enable_repa", False)
+                or getattr(args, "load_val_pixels", False)
+            )
 
             val_dataset_group = config_utils.generate_dataset_group_by_blueprint(
                 blueprint.val_dataset_group,
                 training=True,
-                load_pixels_for_batches=val_enable_control_lora,
+                load_pixels_for_batches=val_need_pixels,
                 prior_loss_weight=getattr(args, "prior_loss_weight", 1.0),
                 num_timestep_buckets=(
                     None
@@ -1147,16 +1156,25 @@ class WanNetworkTrainer:
 
             log_loss_type_info(args)
 
-            # ========== REPA Helper Setup ==========
+            # ========== SARA / REPA Helper Setup ==========
+            sara_helper = None
             repa_helper = None
-            if hasattr(args, "enable_repa") and args.enable_repa:
+            if getattr(args, "sara_enabled", False):
+                from enhancements.sara.sara_helper import create_sara_helper
+
+                logger.info("SARA is enabled. Setting up the helper module.")
+                sara_helper = create_sara_helper(transformer, args)
+                if sara_helper is not None:
+                    if hasattr(sara_helper, "configure_accelerator"):
+                        sara_helper.configure_accelerator(accelerator)
+                    sara_helper.setup_hooks()
+                    sara_helper = accelerator.prepare(sara_helper)
+            elif getattr(args, "enable_repa", False):
                 from enhancements.repa.enhanced_repa_helper import EnhancedRepaHelper
 
                 logger.info("REPA is enabled. Setting up the enhanced helper module.")
                 repa_helper = EnhancedRepaHelper(transformer, args)
                 repa_helper.setup_hooks()
-
-                # Prepare repa_helper with accelerator
                 repa_helper = accelerator.prepare(repa_helper)
 
             # Run the main training loop using TrainingCore
@@ -1212,10 +1230,13 @@ class WanNetworkTrainer:
                 remove_model=remove_model,
                 is_main_process=is_main_process,
                 val_epoch_step_sync=val_epoch_step_sync,
-                repa_helper=repa_helper,
+                repa_helper=repa_helper if sara_helper is None else None,
+                sara_helper=sara_helper,
                 dual_model_manager=dual_model_manager,
             )
 
+        if "sara_helper" in locals() and sara_helper is not None:
+            sara_helper.remove_hooks()
         if "repa_helper" in locals() and repa_helper is not None:
             repa_helper.remove_hooks()
 

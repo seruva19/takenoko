@@ -796,10 +796,16 @@ class WanFinetuneTrainer:
             blueprint
         )  # TODO: find out why this is needed only for finetuning
 
+        need_pixels_for_alignment = bool(
+            getattr(args, "enable_control_lora", False)
+            or getattr(args, "sara_enabled", False)
+            or getattr(args, "enable_repa", False)
+        )
+
         train_dataset_group = config_utils.generate_dataset_group_by_blueprint(
             blueprint.train_dataset_group,
             training=True,
-            load_pixels_for_batches=getattr(args, "enable_control_lora", False),
+            load_pixels_for_batches=need_pixels_for_alignment,
             prior_loss_weight=getattr(args, "prior_loss_weight", 1.0),
             num_timestep_buckets=(
                 None
@@ -846,14 +852,17 @@ class WanFinetuneTrainer:
             val_current_epoch = Value("i", 0)
             val_current_step = Value("i", 0)
 
-            val_enable_control_lora = bool(getattr(args, "enable_control_lora", False))
-            if bool(getattr(args, "load_val_pixels", False)):
-                val_enable_control_lora = True
+            val_need_pixels = bool(
+                getattr(args, "enable_control_lora", False)
+                or getattr(args, "sara_enabled", False)
+                or getattr(args, "enable_repa", False)
+                or getattr(args, "load_val_pixels", False)
+            )
 
             val_dataset_group = config_utils.generate_dataset_group_by_blueprint(
                 blueprint.val_dataset_group,
                 training=True,
-                load_pixels_for_batches=val_enable_control_lora,
+                load_pixels_for_batches=val_need_pixels,
                 prior_loss_weight=getattr(args, "prior_loss_weight", 1.0),
                 num_timestep_buckets=(
                     None

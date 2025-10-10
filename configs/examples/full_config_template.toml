@@ -924,7 +924,7 @@ contrastive_flow_skip_unconditional = false
 # contrastive_flow_null_class_idx = 0
 
 # =============================================================================
-# ⚠️ REPRESENTATIONAL ALIGNMENT (REPA) SETTINGS
+# ⚠️ REPA (REPRESENTATIONAL ALIGNMENT) SETTINGS
 # =============================================================================
 
 # Enable REPA for representational alignment during training
@@ -953,6 +953,111 @@ repa_ensemble_mode = "individual"
 
 # Projection sharing (false = individual heads per encoder, true = shared head)
 repa_shared_projection = false
+
+# =============================================================================
+# ⚠️ SARA (STRUCTURAL AND ADVERSARIAL REPRESENTATION ALIGNMENT) SETTINGS
+# =============================================================================
+
+# Enable SARA (Structural and Adversarial Representation Alignment) training
+# SARA extends REPA with autocorrelation matching and adversarial discriminators
+# to improve training efficiency and generation quality for diffusion models
+sara_enabled = false
+
+# Pretrained encoder to use for feature extraction
+# Options: "dinov2_vitb14", "dinov2_vits14", "dinov2_vitl14", "dinov2_vitg14", "clip_vitb16", "clip_vitl14"
+# DINOv2 models generally provide better structural features than CLIP
+sara_encoder_name = "dinov2_vitb14"
+
+# Number of transformer blocks in the diffusion model to align features from
+# Lower values (4-8) align early features (structure), higher values align later features (semantics)
+# Paper recommendation: 8 for balanced structural and semantic alignment
+sara_alignment_depth = 8
+
+# Weight for patch-wise feature alignment loss (REPA baseline component)
+# Encourages diffusion model features to match pretrained encoder features locally
+# Paper default: 0.5-1.0, higher values strengthen feature alignment
+sara_patch_loss_weight = 0.5
+
+# Weight for autocorrelation (structural) alignment loss
+# Matches spatial correlation patterns between diffusion and encoder features
+# Paper default: 0.5, captures long-range structural dependencies
+sara_autocorr_loss_weight = 0.5
+
+# Weight for adversarial discriminator loss
+# Encourages diffusion features to be indistinguishable from encoder features
+# Paper default: 0.05-0.1, too high can cause training instability
+sara_adversarial_loss_weight = 0.05
+
+# Normalize autocorrelation matrices before computing loss
+# Recommended: true for stability and scale-invariance
+sara_autocorr_normalize = true
+
+# Use Frobenius norm for autocorrelation loss instead of element-wise MSE
+# Frobenius norm provides more stable gradients for matrix differences
+sara_autocorr_use_frobenius = true
+
+# Enable adversarial discriminator training
+# Set to false to use only patch and autocorrelation losses (no discriminator)
+sara_adversarial_enabled = true
+
+# Discriminator architecture: "resnet18" (deeper, more capacity) or "simple_cnn" (lightweight)
+# ResNet18 is more powerful but slower; simple_cnn is faster and uses less memory
+sara_discriminator_arch = "resnet18"
+
+# Learning rate for discriminator optimizer (separate from main model LR)
+# Typical range: 0.0001-0.0005, higher than generator for balanced adversarial training
+sara_discriminator_lr = 0.0002
+
+# Number of discriminator update steps per generator step
+# Values > 1 give discriminator more training, improving feature quality at cost of speed
+sara_discriminator_updates_per_step = 1
+
+# Number of warmup steps before discriminator loss affects generator
+# Allows generator to stabilize before adversarial training begins
+sara_discriminator_warmup_steps = 500
+
+# Similarity function for patch-wise alignment: "cosine", "mse", or "l1"
+# Cosine is scale-invariant and works well for normalized features
+# MSE/L1 are simpler but sensitive to feature magnitude
+sara_similarity_fn = "cosine"
+
+# Weight for gradient penalty on discriminator (regularization)
+# Set to 0.0 to disable, typical values 0.1-10.0 for WGAN-GP style training
+# Helps prevent discriminator gradient explosion
+sara_gradient_penalty_weight = 0.0
+
+# Enable feature matching loss (match intermediate discriminator features)
+# Can improve training stability by providing additional alignment signal
+# Adds computational overhead, recommended for difficult training scenarios
+sara_feature_matching = false
+
+# Scaling applied when feature matching is enabled. Kept small to avoid overpowering
+# the primary adversarial objective.
+sara_feature_matching_weight = 0.1
+
+# Optional discriminator gradient clipping. Set to null to disable; values in the
+# 0.5-5.0 range work well for stabilising adversarial updates.
+sara_discriminator_max_grad_norm = null
+
+# Optional StepLR schedule for the discriminator. Set scheduler_step to 0 to disable.
+sara_discriminator_scheduler_step = 0
+
+# When enabled, LR decays by scheduler_gamma every scheduler_step updates.
+sara_discriminator_scheduler_gamma = 0.1
+
+# Emit extended per-component metrics (discriminator LR, grad norms, logits).
+# Helpful when debugging training instabilities.
+sara_log_detailed_metrics = false
+
+# Cache pretrained encoder outputs to avoid recomputation
+# Significantly speeds up training when encoder is frozen
+# Disable if encoder parameters are being updated
+sara_cache_encoder_outputs = true
+
+# Use mixed precision (fp16/bf16) for SARA computations
+# Reduces memory usage and speeds up training with minimal quality impact
+# Recommended: true unless you encounter numerical stability issues
+sara_use_mixed_precision = true
 
 # =============================================================================
 # ⚠️ FOPP SETTINGS

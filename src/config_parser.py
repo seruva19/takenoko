@@ -1054,6 +1054,45 @@ def create_args_from_config(
     args.repa_ensemble_mode = config.get("repa_ensemble_mode", "individual")
     args.repa_shared_projection = config.get("repa_shared_projection", False)
 
+    # SARA (Structural and Adversarial Representation Alignment) settings
+    args.sara_enabled = config.get("sara_enabled", False)
+    args.sara_encoder_name = config.get("sara_encoder_name", "dinov2_vitb14")
+    args.sara_alignment_depth = config.get("sara_alignment_depth", 8)
+
+    # Loss weights
+    args.sara_patch_loss_weight = float(config.get("sara_patch_loss_weight", 0.5))
+    args.sara_autocorr_loss_weight = float(config.get("sara_autocorr_loss_weight", 0.5))
+    args.sara_adversarial_loss_weight = float(config.get("sara_adversarial_loss_weight", 0.05))
+
+    # Structural alignment settings
+    args.sara_autocorr_normalize = bool(config.get("sara_autocorr_normalize", True))
+    args.sara_autocorr_use_frobenius = bool(config.get("sara_autocorr_use_frobenius", True))
+
+    # Adversarial discriminator settings
+    args.sara_adversarial_enabled = bool(config.get("sara_adversarial_enabled", True))
+    args.sara_discriminator_arch = config.get("sara_discriminator_arch", "resnet18")
+    args.sara_discriminator_lr = float(config.get("sara_discriminator_lr", 2e-4))
+    args.sara_discriminator_updates_per_step = int(config.get("sara_discriminator_updates_per_step", 1))
+    args.sara_discriminator_warmup_steps = int(config.get("sara_discriminator_warmup_steps", 500))
+    args.sara_discriminator_update_interval = int(config.get("sara_discriminator_update_interval", 5))
+
+    # Advanced training controls
+    args.sara_similarity_fn = config.get("sara_similarity_fn", "cosine")
+    args.sara_gradient_penalty_weight = float(config.get("sara_gradient_penalty_weight", 0.0))
+    args.sara_feature_matching = bool(config.get("sara_feature_matching", False))
+    args.sara_feature_matching_weight = float(config.get("sara_feature_matching_weight", 0.1))
+
+    # Memory and stability settings
+    args.sara_cache_encoder_outputs = bool(config.get("sara_cache_encoder_outputs", True))
+    args.sara_use_mixed_precision = bool(config.get("sara_use_mixed_precision", True))
+    max_grad_norm = config.get("sara_discriminator_max_grad_norm", None)
+    args.sara_discriminator_max_grad_norm = (
+        None if max_grad_norm is None else float(max_grad_norm)
+    )
+    args.sara_discriminator_scheduler_step = int(config.get("sara_discriminator_scheduler_step", 0))
+    args.sara_discriminator_scheduler_gamma = float(config.get("sara_discriminator_scheduler_gamma", 0.1))
+    args.sara_log_detailed_metrics = bool(config.get("sara_log_detailed_metrics", False))
+
     # Masked Training Configuration
     args.use_masked_training_with_prior = config.get(
         "use_masked_training_with_prior", False

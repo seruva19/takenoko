@@ -85,6 +85,7 @@ class LossComponents:
     dispersive_loss: Optional[torch.Tensor] = None
     optical_flow_loss: Optional[torch.Tensor] = None
     repa_loss: Optional[torch.Tensor] = None
+    sara_loss: Optional[torch.Tensor] = None
     ortho_reg_p: Optional[torch.Tensor] = None
     ortho_reg_q: Optional[torch.Tensor] = None
 
@@ -282,6 +283,7 @@ class TrainingLossComputer:
         network: Optional[Any] = None,
         control_signal_processor: Optional[Any] = None,
         repa_helper: Optional[Any] = None,
+        sara_helper: Optional[Any] = None,
         raft: Optional[Any] = None,
         warp_fn: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
         adaptive_manager: Optional[Any] = None,
@@ -644,9 +646,28 @@ class TrainingLossComputer:
             except Exception as e:
                 logger.warning(f"Dispersive loss computation failed: {e}")
 
-        # ---- Optional REPA Loss ----
+        # ---- Optional SARA or REPA Loss ----
+        sara_loss_value: Optional[torch.Tensor] = None
         repa_loss_value: Optional[torch.Tensor] = None
-        if repa_helper is not None:
+        if sara_helper is not None:
+            try:
+                if "pixels" in batch:
+                    clean_pixels = torch.stack(batch["pixels"], dim=0)
+                    first_frame_pixels = clean_pixels[:, :, 0, :, :]
+                    sara_val, _ = sara_helper.compute_sara_loss(
+                        first_frame_pixels,
+                        vae,
+                        update_discriminator=accelerator.sync_gradients,
+                    )
+                    loss = loss + sara_val
+                    sara_loss_value = sara_val.detach()
+                else:
+                    logger.warning(
+                        "SARA enabled, but no 'pixels' found in batch. Skipping SARA loss."
+                    )
+            except Exception as e:
+                logger.warning(f"SARA loss computation failed: {e}")
+        elif repa_helper is not None:
             try:
                 if "pixels" in batch:
                     clean_pixels = torch.stack(
@@ -845,6 +866,7 @@ class TrainingLossComputer:
             dispersive_loss=dispersive_loss_value,
             optical_flow_loss=optical_flow_loss_value,
             repa_loss=repa_loss_value,
+            sara_loss=sara_loss_value,
             ortho_reg_p=ortho_p_val,
             ortho_reg_q=ortho_q_val,
         )

@@ -66,7 +66,11 @@ def maybe_wrap_with_self_correction(
         correction_group = config_utils.generate_dataset_group_by_blueprint(
             corr_blueprint.train_dataset_group,
             training=True,
-            load_pixels_for_batches=getattr(args, "enable_control_lora", False),
+            load_pixels_for_batches=bool(
+                getattr(args, "enable_control_lora", False)
+                or getattr(args, "sara_enabled", False)
+                or getattr(args, "enable_repa", False)
+            ),
             prior_loss_weight=getattr(args, "prior_loss_weight", 1.0),
         )
         ratio = float(getattr(args, "self_correction_batch_ratio", 0.2))
