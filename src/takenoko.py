@@ -375,32 +375,11 @@ class UnifiedTrainer:
         except Exception as e:
             logger.debug(f"RamTorch Linear configuration skipped: {e}")
 
-    def show_memory_diagnostics(self) -> None:
-        """Display comprehensive memory diagnostics."""
-        show_memory_diagnostics_func()
-
     def show_menu(self) -> str:
-        """Display the main menu and get user choice"""
-        print("\n" + "=" * 50)
-        print("Takenoko - Unified Operations Menu")
-        print("=" * 50)
-        print("1. Cache Latents")
-        print("2. Cache Text Encoder Outputs")
-        print("3. Train Model")
-        print("4. Estimate VRAM Usage (from current config)")
-        print("5. Estimate latent cache chunks (by frame extraction mode)")
-        print("6. Reload Config File")
-        print("7. Free VRAM (aggressive)")
-        print("8. Memory Diagnostics")
-        print("9. Return to Config Selection")
-        print("=" * 50)
-
-        while True:
-            choice = input("Enter your choice (1-9): ").strip()
-            if choice in ["1", "2", "3", "4", "5", "6", "7", "8", "9"]:
-                return choice
-            else:
-                print("Invalid choice. Please enter 1-9.")
+        """Display the main menu and get user choice (legacy method)"""
+        from menu.operations_menu import create_operations_menu
+        menu = create_operations_menu(self)
+        return menu.display()
 
     def cache_latents(self) -> bool:
         """Run latent caching operation"""
@@ -1073,89 +1052,10 @@ class UnifiedTrainer:
         """Main loop for the unified trainer"""
         logger.info(f"Loaded configuration from: {self.config_path}")
 
-        while True:
-            choice = self.show_menu()
-
-            if choice == "1":
-                success = self.cache_latents()
-                if not success:
-                    logger.error(
-                        "Latent caching failed. Please check the error messages above."
-                    )
-                    input("Press Enter to continue...")
-
-            elif choice == "2":
-                success = self.cache_text_encoder_outputs()
-                if not success:
-                    logger.error(
-                        "Text encoder output caching failed. Please check the error messages above."
-                    )
-                    input("Press Enter to continue...")
-
-            elif choice == "3":
-                success = self.train_model()
-                if not success:
-                    logger.error(
-                        "Training failed. Please check the error messages above."
-                    )
-                    input("Press Enter to continue...")
-
-            elif choice == "4":
-                try:
-                    gb, details = _estimate_and_log_vram_from_config(
-                        self.config, logger
-                    )
-                except Exception as e:
-                    logger.exception(f"❌ Error estimating VRAM usage: {e}")
-                finally:
-                    input("Press Enter to continue...")
-
-            elif choice == "5":
-                try:
-                    # Show both total and per-dataset breakdown
-                    from caching.chunk_estimator import (
-                        estimate_latent_cache_chunks,
-                        estimate_latent_cache_chunks_per_dataset,
-                    )
-
-                    total_chunks = estimate_latent_cache_chunks(
-                        self.args.dataset_config, self.args
-                    )
-                    per_ds = estimate_latent_cache_chunks_per_dataset(
-                        self.args.dataset_config, self.args
-                    )
-                    logger.info(
-                        f"🧮 Estimated latent cache chunks: {total_chunks} (across all video datasets)"
-                    )
-                    for entry in per_ds:
-                        logger.info(
-                            f"   - {entry['video_directory']}: {entry['chunks']} chunks"
-                        )
-                except Exception as e:
-                    logger.exception(f"❌ Error estimating cache chunks: {e}")
-                input("Press Enter to continue...")
-
-            elif choice == "6":
-                success = self.reload_config()
-                if not success:
-                    logger.error(
-                        "Config reload failed. Please check the error messages above."
-                    )
-                input("Press Enter to continue...")
-
-            elif choice == "7":
-                success = self.free_vram_aggressively()
-                if not success:
-                    logger.error("VRAM cleanup failed.")
-                input("Press Enter to continue...")
-
-            elif choice == "8":
-                self.show_memory_diagnostics()
-                input("Press Enter to continue...")
-
-            elif choice == "9":
-                logger.info("Returning to config selection menu...")
-                sys.exit(100)
+        # Use the new menu system
+        from menu.operations_menu import create_operations_menu
+        menu = create_operations_menu(self)
+        menu.run(self)
 
     def cleanup(self):
         """Clean up temporary files"""
