@@ -10,7 +10,7 @@ import os
 import random
 import time
 from multiprocessing import Value
-from typing import Any
+from typing import Any, Optional
 import torch
 from tqdm import tqdm
 from accelerate.utils import set_seed
@@ -47,6 +47,8 @@ from scheduling.timestep_utils import (
     initialize_timestep_distribution,
     get_noisy_model_input_and_timesteps,
 )
+from research.eqm_mode.config import EqMModeConfig
+from research.eqm_mode.energy import register_energy_head_metadata
 import logging
 from common.logger import get_logger
 from common.performance_logger import snapshot_gpu_memory
@@ -74,6 +76,7 @@ class WanNetworkTrainer:
         self.checkpoint_manager = CheckpointManager()
         self.training_core = None  # Will be initialized with config
         self.vae_training_core = None  # Will be initialized for VAE training
+        self.eqm_mode_config: Optional[EqMModeConfig] = None
 
     def handle_model_specific_args(self, args: argparse.Namespace) -> None:
         """Handle model-specific arguments and configuration."""
@@ -117,6 +120,17 @@ class WanNetworkTrainer:
         self.training_core = TrainingCore(self.config, self.fluxflow_config)
         self.vae_training_core = VaeTrainingCore(self.config)
         self.reward_training_core = RewardTrainingCore(self.config)
+
+        if getattr(args, "enable_eqm_mode", False):
+            self.eqm_mode_config = EqMModeConfig.from_args(args)
+            args.eqm_mode_config = self.eqm_mode_config
+            logger.info(
+                "EqM mode enabled (prediction=%s, path=%s)",
+                self.eqm_mode_config.prediction,
+                self.eqm_mode_config.path_type,
+            )
+        else:
+            self.eqm_mode_config = None
 
         # Configure advanced logging settings (progress bar, parameter stats, etc.)
         # This ensures TOML config values are actually used instead of hardcoded defaults
@@ -610,6 +624,14 @@ class WanNetworkTrainer:
 
         transformer.eval()
         transformer.requires_grad_(False)
+
+        if self.eqm_mode_config and self.eqm_mode_config.energy_head:
+            register_energy_head_metadata(
+                transformer, mode=self.eqm_mode_config.energy_mode
+            )
+            logger.info(
+                "EqM energy head enabled (mode=%s)", self.eqm_mode_config.energy_mode
+            )
 
         # Configure TREAD routing if enabled and routes provided
         if getattr(args, "enable_tread", False):

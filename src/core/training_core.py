@@ -3,12 +3,14 @@ This module handles the main training loop, model calling, loss computation, and
 """
 
 import argparse
+import math
 from typing import Any, Callable, Dict, List, Optional, Tuple
 import torch
 from tqdm import tqdm
 import accelerate
 from accelerate import Accelerator
 import torch.nn.functional as F
+from easydict import EasyDict
 
 import logging
 from common.logger import get_logger
@@ -23,6 +25,9 @@ from enhancements.temporal_consistency.training_integration import (
 # Slider training integration (clean interface)
 from enhancements.slider.slider_integration import compute_slider_loss_if_enabled
 import utils.fluxflow_augmentation as fluxflow_augmentation
+from research.eqm_mode.training_helper import EqMTrainingHelper
+
+
 from scheduling.fvdm_manager import create_fvdm_manager
 
 from modules.scheduling_flow_match_discrete import FlowMatchDiscreteScheduler
@@ -100,6 +105,8 @@ from common.performance_logger import (
 )
 
 
+
+
 class TrainingCore:
     """Handles core training logic, model calling, and validation."""
 
@@ -160,6 +167,9 @@ class TrainingCore:
         # EMA for iteration time display (seconds)
         self._iter_time_ema_sec: Optional[float] = None
         self._iter_time_ema_beta: float = 0.95
+
+        # EqM transport helper (experimental)
+        self.eqm_training_helper: Optional[EqMTrainingHelper] = None
 
         # Initialize temporal consistency enhancement
         self.temporal_consistency_integration = None
@@ -248,6 +258,9 @@ class TrainingCore:
         self._iter_time_ema_sec = new_ema
         return new_ema
 
+
+
+
     def call_dit(
         self,
         args: argparse.Namespace,
@@ -316,7 +329,7 @@ class TrainingCore:
         control_latents = None
         if hasattr(args, "enable_control_lora") and args.enable_control_lora:
             # Log that control LoRA is engaged
-            logger.info("🎯 Control LoRA processing engaged in training loop")
+            logger.info("Р РѓР Р‡Р С›Р С— Control LoRA processing engaged in training loop")
 
             # Pass VAE to control signal processing (must be provided by training loop)
             vae = (
@@ -585,8 +598,21 @@ class TrainingCore:
         dual_model_manager: Optional[Any] = None,
     ) -> Tuple[int, Any]:
         """Run the main training loop."""
+
         # Store noise scheduler reference for call_dit
         self.noise_scheduler = noise_scheduler
+
+        self.eqm_training_helper = EqMTrainingHelper.maybe_create(args, noise_scheduler)
+        eqm_enabled = self.eqm_training_helper is not None
+        if eqm_enabled and self.eqm_training_helper is not None:
+            metadata = self.eqm_training_helper.log_startup()
+            logger.info(
+                "EqM mode enabled (prediction=%s, path=%s).",
+                metadata.get("prediction"),
+                metadata.get("path_type"),
+            )
+        else:
+            self.eqm_training_helper = None
 
         # Configure EMA hyperparameters from args (non-fatal)
         try:
@@ -884,133 +910,197 @@ class TrainingCore:
                     if dual_model_manager is not None:
                         active_transformer = dual_model_manager.active_model
 
-                    # Trigger before_forward junction event
-                    trigger_event(
-                        "before_forward",
-                        args=args,
-                        accelerator=accelerator,
-                        latents=latents,
-                        batch=batch,
-                        noise=noise,
-                        noisy_model_input=noisy_model_input,
-                        timesteps=timesteps,
-                        network_dtype=network_dtype,
-                        transformer=active_transformer,
-                        weighting=weighting,
-                    )
-
-                    model_result = self.call_dit(
-                        args,
-                        accelerator,
-                        active_transformer,
-                        latents,
-                        batch,
-                        noise,
-                        noisy_model_input,
-                        timesteps,
-                        network_dtype,
-                        control_signal_processor,
-                        controlnet,
-                    )
-
-                    # End forward pass timing
-                    end_forward_pass_timing()
-
-                    # Handle case where control LoRA failed to process
-                    if model_result is None or model_result[0] is None:
-                        logger.warning(
-                            "Skipping batch due to control LoRA processing failure"
-                        )
-                        continue
-
-                    model_pred, target, intermediate_z = model_result
-
-                    # Context memory processing
-                    context_memory_loss, context_stats = (
-                        self.context_memory_manager.process_training_step(
-                            latents=latents,
-                            global_step=global_step,
-                            step=step,
+                    if eqm_enabled:
+                        trigger_event(
+                            "before_forward",
                             args=args,
                             accelerator=accelerator,
-                            temporal_consistency_loss_fn=self.context_memory_manager.create_temporal_consistency_loss_fn(),
+                            latents=latents,
                             batch=batch,
+                            noise=noise,
+                            noisy_model_input=noisy_model_input,
+                            timesteps=timesteps,
+                            network_dtype=network_dtype,
+                            transformer=active_transformer,
+                            weighting=weighting,
                         )
-                    )
 
-                    # Log context memory stats if available
-                    if context_stats:
-                        self.context_memory_manager.log_stats_to_accelerator(
-                            context_stats, accelerator, global_step
+                        if self.eqm_training_helper is None:
+                            raise RuntimeError("EqM training helper was not initialised.")
+
+                        eqm_result = self.eqm_training_helper.prepare_forward(
+                            transformer=active_transformer,
+                            latents=latents,
+                            batch=batch,
+                            args=args,
+                            accelerator=accelerator,
+                            network_dtype=network_dtype,
+                            patch_size=self.config.patch_size,
+                            global_step=global_step,
+                        )
+                        end_forward_pass_timing()
+
+                        model_pred = eqm_result.model_pred
+                        target = eqm_result.target
+                        timesteps = eqm_result.timesteps
+                        noise = eqm_result.noise
+                        noisy_model_input = eqm_result.noisy_latents
+                        intermediate_z = eqm_result.intermediate
+                        context_memory_loss = torch.zeros(
+                            (), device=accelerator.device, dtype=network_dtype
+                        )
+                        context_stats = {}
+                        loss_components = eqm_result.loss_components
+                        if eqm_result.metrics and accelerator.is_main_process:
+                            accelerator.log(eqm_result.metrics, step=global_step)
+                        weighting = None
+                        per_source_losses = {}
+
+                        trigger_event(
+                            "after_forward",
+                            args=args,
+                            accelerator=accelerator,
+                            model_pred=model_pred,
+                            target=target,
+                            intermediate_z=intermediate_z,
+                            latents=latents,
+                            batch=batch,
+                            noise=noise,
+                            noisy_model_input=noisy_model_input,
+                            timesteps=timesteps,
+                            network_dtype=network_dtype,
+                            weighting=weighting,
+                        )
+                    else:
+                        # Trigger before_forward junction event
+                        trigger_event(
+                            "before_forward",
+                            args=args,
+                            accelerator=accelerator,
+                            latents=latents,
+                            batch=batch,
+                            noise=noise,
+                            noisy_model_input=noisy_model_input,
+                            timesteps=timesteps,
+                            network_dtype=network_dtype,
+                            transformer=active_transformer,
+                            weighting=weighting,
                         )
 
-                    # Trigger after_forward junction event
-                    trigger_event(
-                        "after_forward",
-                        args=args,
-                        accelerator=accelerator,
-                        model_pred=model_pred,
-                        target=target,
-                        intermediate_z=intermediate_z,
-                        latents=latents,
-                        batch=batch,
-                        noise=noise,
-                        noisy_model_input=noisy_model_input,
-                        timesteps=timesteps,
-                        network_dtype=network_dtype,
-                        weighting=weighting,
-                    )
+                        model_result = self.call_dit(
+                            args,
+                            accelerator,
+                            active_transformer,
+                            latents,
+                            batch,
+                            noise,
+                            noisy_model_input,
+                            timesteps,
+                            network_dtype,
+                            control_signal_processor,
+                            controlnet,
+                        )
 
-                    # Loss will be computed later by centralized loss computer
+                        # End forward pass timing
+                        end_forward_pass_timing()
 
-                    # Compute per-source losses if enabled (before backprop), separate from loss
-                    if (
-                        hasattr(args, "log_per_source_loss")
-                        and args.log_per_source_loss
-                    ):
-                        try:
-                            sample_weights_local = batch.get("weight", None)
-                            if sample_weights_local is not None:
-                                sample_weights_local = sample_weights_local.to(
-                                    device=accelerator.device, dtype=network_dtype
-                                )
-                            per_source_losses = _compute_per_source_loss(
-                                model_pred.to(network_dtype),
-                                target,
-                                batch,
-                                weighting,
-                                sample_weights_local,
+                        # Handle case where control LoRA failed to process
+                        if model_result is None or model_result[0] is None:
+                            logger.warning(
+                                "Skipping batch due to control LoRA processing failure"
                             )
-                        except Exception as e:
-                            logger.debug(f"⚠️  Failed to compute per-source losses: {e}")
-                            per_source_losses = {}
+                            continue
 
-                    # Centralized training loss computation (includes DOP/REPA/Dispersive/OpticalFlow/Slider)
-                    loss_components = compute_slider_loss_if_enabled(
-                        loss_computer=self.loss_computer,
-                        transformer=active_transformer,
-                        network=network,
-                        noisy_latents=noisy_model_input,
-                        timesteps=timesteps,
-                        batch=batch,
-                        noise=noise,
-                        noise_scheduler=noise_scheduler,
-                        args=args,
-                        accelerator=accelerator,
-                        latents=latents,
-                        network_dtype=network_dtype,
-                        model_pred=model_pred,
-                        target=target,
-                        weighting=weighting,
-                        intermediate_z=intermediate_z,
-                        vae=vae,
-                        control_signal_processor=control_signal_processor,
-                        repa_helper=repa_helper if sara_helper is None else None,
-                        sara_helper=sara_helper,
-                        raft=getattr(self, "raft", None),
-                        warp_fn=getattr(self, "warp", None),
-                        adaptive_manager=self.adaptive_manager,
-                    )
+                        model_pred, target, intermediate_z = model_result
+
+                        # Context memory processing
+                        context_memory_loss, context_stats = (
+                            self.context_memory_manager.process_training_step(
+                                latents=latents,
+                                global_step=global_step,
+                                step=step,
+                                args=args,
+                                accelerator=accelerator,
+                                temporal_consistency_loss_fn=self.context_memory_manager.create_temporal_consistency_loss_fn(),
+                                batch=batch,
+                            )
+                        )
+
+                        # Log context memory stats if available
+                        if context_stats:
+                            self.context_memory_manager.log_stats_to_accelerator(
+                                context_stats, accelerator, global_step
+                            )
+
+                        # Trigger after_forward junction event
+                        trigger_event(
+                            "after_forward",
+                            args=args,
+                            accelerator=accelerator,
+                            model_pred=model_pred,
+                            target=target,
+                            intermediate_z=intermediate_z,
+                            latents=latents,
+                            batch=batch,
+                            noise=noise,
+                            noisy_model_input=noisy_model_input,
+                            timesteps=timesteps,
+                            network_dtype=network_dtype,
+                            weighting=weighting,
+                        )
+
+                        # Loss will be computed later by centralized loss computer
+
+                        # Compute per-source losses if enabled (before backprop), separate from loss
+                        if (
+                            hasattr(args, "log_per_source_loss")
+                            and args.log_per_source_loss
+                        ):
+                            try:
+                                sample_weights_local = batch.get("weight", None)
+                                if sample_weights_local is not None:
+                                    sample_weights_local = sample_weights_local.to(
+                                        device=accelerator.device, dtype=network_dtype
+                                    )
+                                per_source_losses = _compute_per_source_loss(
+                                    model_pred.to(network_dtype),
+                                    target,
+                                    batch,
+                                    weighting,
+                                    sample_weights_local,
+                                )
+                            except Exception as e:
+                                logger.debug(f"⚠️  Failed to compute per-source losses: {e}")
+                                per_source_losses = {}
+
+                        if not eqm_enabled:
+                            # Centralized training loss computation (includes DOP/REPA/Dispersive/OpticalFlow/Slider)
+                            loss_components = compute_slider_loss_if_enabled(
+                                loss_computer=self.loss_computer,
+                                transformer=active_transformer,
+                                network=network,
+                                noisy_latents=noisy_model_input,
+                                timesteps=timesteps,
+                                batch=batch,
+                                noise=noise,
+                                noise_scheduler=noise_scheduler,
+                                args=args,
+                                accelerator=accelerator,
+                                latents=latents,
+                                network_dtype=network_dtype,
+                                model_pred=model_pred,
+                                target=target,
+                                weighting=weighting,
+                                intermediate_z=intermediate_z,
+                                vae=vae,
+                                control_signal_processor=control_signal_processor,
+                                repa_helper=repa_helper if sara_helper is None else None,
+                                sara_helper=sara_helper,
+                                raft=getattr(self, "raft", None),
+                                warp_fn=getattr(self, "warp", None),
+                                adaptive_manager=self.adaptive_manager,
+                            )
+
 
                     # Integrate context memory loss into total loss
                     self.context_memory_manager.integrate_context_loss(
@@ -1139,7 +1229,7 @@ class TrainingCore:
                         try:
                             gradient_norm = _compute_gradient_norm(network)
                         except Exception as e:
-                            logger.debug(f"⚠️ Failed to compute gradient norm: {e}")
+                            logger.debug(f"РЎвЂљР Р„Р В°РЎРЏРІвЂўвЂўР Сџ Failed to compute gradient norm: {e}")
 
                 if accelerator.sync_gradients:
                     # Trigger before_gradient_clipping junction event
@@ -1203,7 +1293,7 @@ class TrainingCore:
                         optimizer.step()
                     except RuntimeError as e:
                         logger.error(
-                            "🚨 Make sure you're not adding empty parameter groups to the optimizer"
+                            "Р РѓР Р‡Р Р„Р С‘ Make sure you're not adding empty parameter groups to the optimizer"
                         )
                         raise e
                     # End optimizer step timing
@@ -1557,3 +1647,4 @@ class TrainingCore:
             # end of epoch
 
         return global_step, network
+

@@ -987,6 +987,67 @@ def create_args_from_config(
     # Optional: pool spatial tokens per frame before dispersion ("none" or "frame_mean")
     args.dispersive_loss_pooling = config.get("dispersive_loss_pooling", "none")
 
+    # EqM mode
+    args.enable_eqm_mode = config.get("enable_eqm_mode", False)
+    eqm_prediction = str(config.get("eqm_prediction", "velocity"))
+    allowed_eqm_predictions = {"velocity", "score", "noise"}
+    if eqm_prediction.lower() not in allowed_eqm_predictions:
+        raise ValueError(
+            f"Unsupported eqm_prediction '{eqm_prediction}'. "
+            f"Expected one of {sorted(allowed_eqm_predictions)}."
+        )
+    args.eqm_prediction = eqm_prediction
+    args.eqm_path_type = config.get("eqm_path_type", "Linear")
+    args.eqm_loss_weight = float(config.get("eqm_loss_weight", 1.0))
+    args.eqm_transport_weighting = config.get("eqm_transport_weighting")
+    args.eqm_train_eps = config.get("eqm_train_eps")
+    args.eqm_sample_eps = config.get("eqm_sample_eps")
+    args.eqm_step_size = config.get("eqm_step_size", 0.0017)
+    args.eqm_momentum = config.get("eqm_momentum", 0.0)
+    args.eqm_sampler = config.get("eqm_sampler", "gd")
+    args.eqm_use_adaptive_sampler = bool(config.get("eqm_use_adaptive_sampler", False))
+    args.eqm_adaptive_step_min = config.get("eqm_adaptive_step_min", 1e-5)
+    args.eqm_adaptive_step_max = config.get("eqm_adaptive_step_max", 0.01)
+    args.eqm_adaptive_growth = config.get("eqm_adaptive_growth", 1.05)
+    args.eqm_adaptive_shrink = config.get("eqm_adaptive_shrink", 0.5)
+    args.eqm_adaptive_restart_patience = int(
+        config.get("eqm_adaptive_restart_patience", 4)
+    )
+    args.eqm_adaptive_alignment_threshold = config.get(
+        "eqm_adaptive_alignment_threshold", 0.0
+    )
+    args.eqm_energy_head = bool(config.get("eqm_energy_head", False))
+    args.eqm_energy_mode = config.get("eqm_energy_mode", "dot")
+    args.eqm_weighting_schedule = config.get("eqm_weighting_schedule")
+    raw_weight_steps = config.get("eqm_weighting_steps")
+    args.eqm_weighting_steps = (
+        int(raw_weight_steps) if raw_weight_steps is not None else None
+    )
+    args.eqm_ode_method = config.get("eqm_ode_method", "dopri5")
+    args.eqm_ode_steps = int(config.get("eqm_ode_steps", 50))
+    args.eqm_ode_atol = float(config.get("eqm_ode_atol", 1e-6))
+    args.eqm_ode_rtol = float(config.get("eqm_ode_rtol", 1e-3))
+    args.eqm_ode_reverse = bool(config.get("eqm_ode_reverse", False))
+    args.eqm_ode_likelihood_atol = float(
+        config.get("eqm_ode_likelihood_atol", args.eqm_ode_atol)
+    )
+    args.eqm_ode_likelihood_rtol = float(
+        config.get("eqm_ode_likelihood_rtol", args.eqm_ode_rtol)
+    )
+    args.eqm_ode_likelihood_trace_samples = int(
+        config.get("eqm_ode_likelihood_trace_samples", 1)
+    )
+    args.eqm_sde_method = config.get("eqm_sde_method", "Euler")
+    args.eqm_sde_steps = int(config.get("eqm_sde_steps", 250))
+    args.eqm_sde_last_step = config.get("eqm_sde_last_step", "Mean")
+    args.eqm_sde_last_step_size = float(config.get("eqm_sde_last_step_size", 0.04))
+    args.eqm_sde_diffusion_form = config.get("eqm_sde_diffusion_form", "SBDM")
+    args.eqm_sde_diffusion_norm = float(config.get("eqm_sde_diffusion_norm", 1.0))
+    args.eqm_save_npz = bool(config.get("eqm_save_npz", False))
+    args.eqm_npz_dir = config.get("eqm_npz_dir")
+    raw_npz_limit = config.get("eqm_npz_limit")
+    args.eqm_npz_limit = int(raw_npz_limit) if raw_npz_limit is not None else None
+
     # Loss function settings
     args.loss_type = config.get("loss_type", "mse")
 
@@ -1064,36 +1125,58 @@ def create_args_from_config(
     # Loss weights
     args.sara_patch_loss_weight = float(config.get("sara_patch_loss_weight", 0.5))
     args.sara_autocorr_loss_weight = float(config.get("sara_autocorr_loss_weight", 0.5))
-    args.sara_adversarial_loss_weight = float(config.get("sara_adversarial_loss_weight", 0.05))
+    args.sara_adversarial_loss_weight = float(
+        config.get("sara_adversarial_loss_weight", 0.05)
+    )
 
     # Structural alignment settings
     args.sara_autocorr_normalize = bool(config.get("sara_autocorr_normalize", True))
-    args.sara_autocorr_use_frobenius = bool(config.get("sara_autocorr_use_frobenius", True))
+    args.sara_autocorr_use_frobenius = bool(
+        config.get("sara_autocorr_use_frobenius", True)
+    )
 
     # Adversarial discriminator settings
     args.sara_adversarial_enabled = bool(config.get("sara_adversarial_enabled", True))
     args.sara_discriminator_arch = config.get("sara_discriminator_arch", "resnet18")
     args.sara_discriminator_lr = float(config.get("sara_discriminator_lr", 2e-4))
-    args.sara_discriminator_updates_per_step = int(config.get("sara_discriminator_updates_per_step", 1))
-    args.sara_discriminator_warmup_steps = int(config.get("sara_discriminator_warmup_steps", 500))
-    args.sara_discriminator_update_interval = int(config.get("sara_discriminator_update_interval", 5))
+    args.sara_discriminator_updates_per_step = int(
+        config.get("sara_discriminator_updates_per_step", 1)
+    )
+    args.sara_discriminator_warmup_steps = int(
+        config.get("sara_discriminator_warmup_steps", 500)
+    )
+    args.sara_discriminator_update_interval = int(
+        config.get("sara_discriminator_update_interval", 5)
+    )
 
     # Advanced training controls
     args.sara_similarity_fn = config.get("sara_similarity_fn", "cosine")
-    args.sara_gradient_penalty_weight = float(config.get("sara_gradient_penalty_weight", 0.0))
+    args.sara_gradient_penalty_weight = float(
+        config.get("sara_gradient_penalty_weight", 0.0)
+    )
     args.sara_feature_matching = bool(config.get("sara_feature_matching", False))
-    args.sara_feature_matching_weight = float(config.get("sara_feature_matching_weight", 0.1))
+    args.sara_feature_matching_weight = float(
+        config.get("sara_feature_matching_weight", 0.1)
+    )
 
     # Memory and stability settings
-    args.sara_cache_encoder_outputs = bool(config.get("sara_cache_encoder_outputs", True))
+    args.sara_cache_encoder_outputs = bool(
+        config.get("sara_cache_encoder_outputs", True)
+    )
     args.sara_use_mixed_precision = bool(config.get("sara_use_mixed_precision", True))
     max_grad_norm = config.get("sara_discriminator_max_grad_norm", None)
     args.sara_discriminator_max_grad_norm = (
         None if max_grad_norm is None else float(max_grad_norm)
     )
-    args.sara_discriminator_scheduler_step = int(config.get("sara_discriminator_scheduler_step", 0))
-    args.sara_discriminator_scheduler_gamma = float(config.get("sara_discriminator_scheduler_gamma", 0.1))
-    args.sara_log_detailed_metrics = bool(config.get("sara_log_detailed_metrics", False))
+    args.sara_discriminator_scheduler_step = int(
+        config.get("sara_discriminator_scheduler_step", 0)
+    )
+    args.sara_discriminator_scheduler_gamma = float(
+        config.get("sara_discriminator_scheduler_gamma", 0.1)
+    )
+    args.sara_log_detailed_metrics = bool(
+        config.get("sara_log_detailed_metrics", False)
+    )
 
     # Masked Training Configuration
     args.use_masked_training_with_prior = config.get(

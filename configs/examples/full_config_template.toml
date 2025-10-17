@@ -789,6 +789,111 @@ dispersive_loss_metric = "l2_sq"
 dispersive_loss_pooling = "none"
 
 # =============================================================================
+# ⚠️ EQUILIBRIUM MATCHING SETTINGS
+# =============================================================================
+
+# Enable the experimental EqM training path (requires new objective and sampler).
+enable_eqm_mode = false
+
+# Prediction head type: "velocity", "score", or "noise".
+eqm_prediction = "velocity"
+
+# Transport path for EqM loss ("Linear", "GVP", or "VP").
+eqm_path_type = "Linear"
+
+# Weight applied to the EqM transport loss when enabled.
+eqm_loss_weight = 1.0
+
+# Optional transport weighting ("velocity" or "likelihood") applied to the EqM regression target.
+# eqm_transport_weighting = "velocity"
+
+# Optional epsilon offsets used by the transport planner.
+# Train epsilon offset
+# eqm_train_eps = 1e-3
+
+# Sample epsilon offset
+# eqm_sample_eps = 1e-3
+
+# Enable EqM energy head (differentiable dot-product energy).
+# eqm_energy_head = false
+
+# Energy mode for EqM energy head, options: "dot", "l2", "mean"
+# eqm_energy_mode = "dot" 
+
+# Sampling parameters
+# Step size for EqM sampling
+# eqm_step_size = 0.0017
+
+# Momentum for EqM sampling
+# eqm_momentum = 0.0
+
+# Sampler for EqM sampling, options: "gd", "ngd", "ode", "sde", or "ode_likelihood"
+# eqm_sampler = "gd"   
+
+# Enable adaptive sampler for EqM sampling
+# eqm_use_adaptive_sampler = false
+
+# Adaptive step size parameters for EqM sampling
+# eqm_adaptive_step_min = 1e-5
+
+# Maximum step size for EqM sampling
+# eqm_adaptive_step_max = 0.01
+
+# Growth factor for adaptive step size
+# eqm_adaptive_growth = 1.05
+
+# Shrink factor for adaptive step size
+# eqm_adaptive_shrink = 0.5
+
+# Restart patience for adaptive step size
+# eqm_adaptive_restart_patience = 4
+
+# Alignment threshold for adaptive step size
+eqm_adaptive_alignment_threshold = 0.0
+
+# ODE method for EqM sampling, options: "dopri5" (requires torchdiffeq), "heun", "euler", "rk4"
+eqm_ode_method = "dopri5"  
+
+# Number of integration steps for ODE samplers
+eqm_ode_steps = 50
+
+# Absolute tolerance for ODE samplers
+eqm_ode_atol = 1e-6
+
+# Relative tolerance for ODE samplers
+eqm_ode_rtol = 1e-3
+
+# Reverse the ODE trajectory
+eqm_ode_reverse = false
+
+# Absolute tolerance for ODE likelihood samplers
+# eqm_ode_likelihood_atol = 1e-6
+
+# Relative tolerance for ODE likelihood samplers
+# eqm_ode_likelihood_rtol = 1e-3
+
+# Number of Hutchinson trace samples for ODE likelihood samplers
+eqm_ode_likelihood_trace_samples = 1
+
+# SDE method for EqM sampling, options: "Euler", "Heun"
+eqm_sde_method = "Euler"
+
+# Number of SDE integration steps
+eqm_sde_steps = 250
+
+# SDE last step policy, options: "Mean", "Tweedie", "Euler", null
+eqm_sde_last_step = "Mean"
+
+# Step size applied when the final SDE correction is enabled
+eqm_sde_last_step_size = 0.04
+
+# SDE diffusion form, options: "SBDM", "SBDM-E"
+eqm_sde_diffusion_form = "SBDM"
+
+# SDE diffusion norm
+eqm_sde_diffusion_norm = 1.0
+
+# =============================================================================
 # ⚠️ ADAPTIVE TIMESTEP SAMPLING
 # =============================================================================
 
@@ -2514,6 +2619,52 @@ step = 20
 
 # Classifier-free guidance scale (CFG)
 cfg_scale = 6.0
+
+# Optional EqM sampler overrides (only used when enable_eqm_mode = true)
+# Step size for EqM sampling
+# eqm_step_size = 0.0017
+
+# Momentum for EqM sampling
+# eqm_momentum = 0.0
+
+# Sampler for EqM sampling, options: "gd", "ngd", "ode", "sde", or "ode_likelihood"
+# eqm_sampler = "gd" 
+
+# Enable adaptive sampler for EqM sampling
+# eqm_use_adaptive_sampler = false
+
+# Adaptive step size parameters for EqM sampling
+# eqm_adaptive_step_min = 1e-5
+
+# Maximum step size for EqM sampling
+# eqm_adaptive_step_max = 0.01
+
+# Growth factor for adaptive step size
+# eqm_adaptive_growth = 1.05
+
+# Shrink factor for adaptive step size
+# eqm_adaptive_shrink = 0.5
+
+# Restart patience for adaptive step size
+# eqm_adaptive_restart_patience = 4
+
+# Alignment threshold for adaptive step size
+# eqm_adaptive_alignment_threshold = 0.0
+
+# Weighting schedule for EqM sampling, options: "linear", "cosine", or "sigmoid"
+# eqm_weighting_schedule = "linear"  
+
+# Number of steps to apply weighting schedule
+# eqm_weighting_steps = 1000
+
+# Save NPZ files for EqM sampling
+# eqm_save_npz = false
+
+# Directory to save NPZ files for EqM sampling
+# eqm_npz_dir = "output/eqm_npz"
+
+# Maximum number of NPZ files to save
+# eqm_npz_limit = 64
 
 # =============================================================================
 # LATENT CACHE SETTINGS

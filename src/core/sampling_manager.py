@@ -23,6 +23,9 @@ from wan.modules.model import WanModel
 from wan.utils.fm_solvers_unipc import FlowUniPCMultistepScheduler
 from generation.sampling import save_images_grid, save_videos_grid
 from torch.utils.tensorboard.writer import SummaryWriter
+from research.eqm_mode.integration import EqMModeContext, setup_eqm_mode
+from research.eqm_mode.eval import save_npz_from_samples
+from research.eqm_mode.sampling_helper import EqMSamplingResult, run_eqm_sampling
 
 logger = get_logger(__name__, level=logging.INFO)
 
@@ -34,6 +37,7 @@ class SamplingManager:
         self.config = config
         self.default_guidance_scale = default_guidance_scale
         self._vae_config = None  # Store VAE config for lazy loading
+        self._last_eqm_likelihood: Optional[Dict[str, torch.Tensor]] = None
 
     def set_vae_config(self, vae_config: Dict[str, Any]) -> None:
         """Set VAE configuration for lazy loading."""
@@ -394,6 +398,16 @@ class SamplingManager:
             )
             save_videos_grid(video, os.path.join(save_dir, save_path) + ".mp4")
 
+        if eqm_enabled and getattr(args, 'eqm_save_npz', False):
+            try:
+                npz_dir = getattr(args, 'eqm_npz_dir', save_dir) or save_dir
+                prefix = f"{save_path}_step{steps}"
+                limit = getattr(args, 'eqm_npz_limit', None)
+                save_npz_from_samples(video.squeeze(0), npz_dir, prefix=prefix, limit=limit)
+                logger.info(f"EqM NPZ exported to {npz_dir}")
+            except Exception as exc:
+                logger.warning(f"Failed to export EqM NPZ: {exc}")
+
         # Move models back to initial state
         vae.to("cpu")
         clean_memory_on_device(device)
@@ -665,10 +679,7 @@ class SamplingManager:
                 lat_h = height // vae_scale_factor
                 lat_w = width // vae_scale_factor
 
-        # use the default value for num_train_timesteps (1000)
-        scheduler = FlowUniPCMultistepScheduler(shift=1, use_dynamic_shifting=False)
-        scheduler.set_timesteps(sample_steps, device=device, shift=discrete_flow_shift)
-        timesteps = scheduler.timesteps
+        eqm_enabled = getattr(args, "enable_eqm_mode", False)
 
         # Generate noise for the required number of frames only (keep on device)
         noise = torch.randn(
@@ -681,124 +692,165 @@ class SamplingManager:
             device=device,
         )
 
-        # prepare the model input
-        # Align seq_len computation with training (divide by full 3D patch volume)
-        max_seq_len = (
-            latent_video_length
-            * lat_h
-            * lat_w
-            // (
-                self.config["patch_size"][0]
-                * self.config["patch_size"][1]
-                * self.config["patch_size"][2]
-            )  # type: ignore
-        )
-        arg_c = {"context": [context], "seq_len": max_seq_len}
-        arg_null = {"context": [context_null], "seq_len": max_seq_len}
+        patch_size = tuple(self.config["patch_size"])  # type: ignore
 
-        # Wrap the inner loop with tqdm to track progress over timesteps
-        prompt_idx = sample_parameter.get("enum", 0)
-        latent = noise
-        # Prepare timestep boundary (normalize int 0..1000 to float 0..1 if needed)
-        boundary_cfg = getattr(args, "timestep_boundary", 875)
-        boundary = float(boundary_cfg)
-        if boundary > 1.0:
-            boundary = boundary / 1000.0
-
-        with torch.no_grad():
-            for i, t in enumerate(
-                tqdm(timesteps, desc=f"🎥 Sampling timesteps for prompt {prompt_idx+1}")
+        if eqm_enabled:
+            eqm_context = setup_eqm_mode(args)
+            if (
+                not eqm_context.warning_emitted
+                and (
+                    getattr(args, "enable_control_lora", False)
+                    or getattr(args, "enable_controlnet", False)
+                )
             ):
-                # Dual-mode inference: swap base weights if crossing boundary
-                if dual_model_manager is not None:
-                    # Align with reference normalization: t/1000.0
-                    t_norm = float((t.item()) / 1000.0)
-                    try:
-                        dual_model_manager.next_model_is_high_noise = t_norm >= boundary
-                        dual_model_manager.swap_if_needed(accelerator)
-                        model = (
-                            dual_model_manager.active_model
-                        )  # keep local reference fresh
-                    except Exception as _inf_swap_err:
-                        logger.debug(
-                            f"Dual swap during inference skipped: {_inf_swap_err}"
-                        )
-                # Prepare model input - concatenate control latents if available
-                if hasattr(args, "enable_control_lora") and args.enable_control_lora:
-                    # Always concatenate along the channel dimension to match training
-                    channel_dim = 0  # CFHW format at sampling time
-                    if control_latents is not None:
-                        # Debug logging
-                        logger.debug(f"Latent shape: {latent.shape}")
-                        logger.debug(f"Control latents shape: {control_latents.shape}")
-                        # Ensure device/dtype alignment
-                        cat_latent = torch.cat(
-                            [
-                                latent.to(device=device),
-                                control_latents.to(device=device, dtype=latent.dtype),
-                            ],
-                            dim=channel_dim,
-                        )
-                        latent_model_input = [cat_latent]
-                        logger.debug(
-                            f"Concatenated input shape: {latent_model_input[0].shape}"
-                        )
-                    else:
-                        # Fallback: use current latent as control signal (matches training fallback)
-                        logger.warning(
-                            "Control LoRA enabled but no control signal available, using latent clone as fallback"
-                        )
-                        fallback_control = latent.detach().clone()
-                        cat_latent = torch.cat(
-                            [
-                                latent.to(device=device),
-                                fallback_control.to(device=device),
-                            ],
-                            dim=channel_dim,
-                        )
-                        latent_model_input = [cat_latent]
-                        logger.debug(
-                            f"Concatenated input shape (fallback clone): {latent_model_input[0].shape}"
-                        )
-                else:
-                    # Control LoRA not enabled - use original latent
-                    latent_model_input = [latent.to(device=device)]
-                timestep = t.unsqueeze(0)
+                logger.warning(
+                    "EqM sampling currently ignores ControlNet / Control LoRA signals."
+                )
+                eqm_context.warning_emitted = True
+            latent = self._eqm_sample_latents(
+                eqm_context=eqm_context,
+                accelerator=accelerator,
+                transformer=model,
+                initial_latent=noise,
+                context_tokens=context,
+                negative_context=context_null,
+                sample_parameter=sample_parameter,
+                sample_steps=sample_steps,
+                cfg_scale=cfg_scale,
+                device=device,
+                network_dtype=dit_dtype,
+                patch_size=patch_size,
+                args=args,
+            )
+        else:
+            # use the default value for num_train_timesteps (1000)
+            scheduler = FlowUniPCMultistepScheduler(shift=1, use_dynamic_shifting=False)
+            scheduler.set_timesteps(
+                sample_steps, device=device, shift=discrete_flow_shift
+            )
+            timesteps = scheduler.timesteps
 
-                with accelerator.autocast():
-                    # Apply T-LoRA rank mask at inference time if supported
-                    try:
-                        unwrapped_net = accelerator.unwrap_model(transformer)
-                        if hasattr(unwrapped_net, "update_rank_mask_from_timesteps"):
-                            unwrapped_net.update_rank_mask_from_timesteps(
-                                timestep, max_timestep=1000, device=device
-                            )
-                    except Exception:
-                        pass
+            # prepare the model input
+            # Align seq_len computation with training (divide by full 3D patch volume)
+            max_seq_len = (
+                latent_video_length
+                * lat_h
+                * lat_w
+                // (patch_size[0] * patch_size[1] * patch_size[2])
+            )
+            arg_c = {"context": [context], "seq_len": max_seq_len}
+            arg_null = {"context": [context_null], "seq_len": max_seq_len}
 
-                    noise_pred_cond = model(latent_model_input, t=timestep, **arg_c)[0]
-                    if do_classifier_free_guidance:
-                        noise_pred_uncond = model(
-                            latent_model_input, t=timestep, **arg_null
-                        )[0]
-                    else:
-                        noise_pred_uncond = None
+            # Wrap the inner loop with tqdm to track progress over timesteps
+            prompt_idx = sample_parameter.get("enum", 0)
+            latent = noise
+            # Prepare timestep boundary (normalize int 0..1000 to float 0..1 if needed)
+            boundary_cfg = getattr(args, "timestep_boundary", 875)
+            boundary = float(boundary_cfg)
+            if boundary > 1.0:
+                boundary = boundary / 1000.0
 
-                if do_classifier_free_guidance:
-                    noise_pred = noise_pred_uncond + cfg_scale * (
-                        noise_pred_cond - noise_pred_uncond
+            with torch.no_grad():
+                for i, t in enumerate(
+                    tqdm(
+                        timesteps,
+                        desc=f"🎥 Sampling timesteps for prompt {prompt_idx+1}",
                     )
-                else:
-                    noise_pred = noise_pred_cond
+                ):
+                    # Dual-mode inference: swap base weights if crossing boundary
+                    if dual_model_manager is not None:
+                        # Align with reference normalization: t/1000.0
+                        t_norm = float((t.item()) / 1000.0)
+                        try:
+                            dual_model_manager.next_model_is_high_noise = (
+                                t_norm >= boundary
+                            )
+                            dual_model_manager.swap_if_needed(accelerator)
+                            model = (
+                                dual_model_manager.active_model
+                            )  # keep local reference fresh
+                        except Exception as _inf_swap_err:
+                            logger.debug(
+                                f"Dual swap during inference skipped: {_inf_swap_err}"
+                            )
+                    # Prepare model input - concatenate control latents if available
+                    if hasattr(args, "enable_control_lora") and args.enable_control_lora:
+                        # Always concatenate along the channel dimension to match training
+                        channel_dim = 0  # CFHW format at sampling time
+                        if control_latents is not None:
+                            # Debug logging
+                            logger.debug(f"Latent shape: {latent.shape}")
+                            logger.debug(f"Control latents shape: {control_latents.shape}")
+                            # Ensure device/dtype alignment
+                            cat_latent = torch.cat(
+                                [
+                                    latent.to(device=device),
+                                    control_latents.to(device=device, dtype=latent.dtype),
+                                ],
+                                dim=channel_dim,
+                            )
+                            latent_model_input = [cat_latent]
+                            logger.debug(
+                                f"Concatenated input shape: {latent_model_input[0].shape}"
+                            )
+                        else:
+                            # Fallback: use current latent as control signal (matches training fallback)
+                            logger.warning(
+                                "Control LoRA enabled but no control signal available, using latent clone as fallback"
+                            )
+                            fallback_control = latent.detach().clone()
+                            cat_latent = torch.cat(
+                                [
+                                    latent.to(device=device),
+                                    fallback_control.to(device=device),
+                                ],
+                                dim=channel_dim,
+                            )
+                            latent_model_input = [cat_latent]
+                            logger.debug(
+                                f"Concatenated input shape (fallback clone): {latent_model_input[0].shape}"
+                            )
+                    else:
+                        # Control LoRA not enabled - use original latent
+                        latent_model_input = [latent.to(device=device)]
+                    timestep = t.unsqueeze(0)
 
-                temp_x0 = scheduler.step(
-                    noise_pred.unsqueeze(0),
-                    t,
-                    latent.unsqueeze(0),
-                    return_dict=False,
-                    generator=generator,
-                )[0]
-                latent = temp_x0.squeeze(0)
+                    with accelerator.autocast():
+                        # Apply T-LoRA rank mask at inference time if supported
+                        try:
+                            unwrapped_net = accelerator.unwrap_model(transformer)
+                            if hasattr(unwrapped_net, "update_rank_mask_from_timesteps"):
+                                unwrapped_net.update_rank_mask_from_timesteps(
+                                    timestep, max_timestep=1000, device=device
+                                )
+                        except Exception:
+                            pass
+
+                        noise_pred_cond = model(
+                            latent_model_input, t=timestep, **arg_c
+                        )[0]
+                        if do_classifier_free_guidance:
+                            noise_pred_uncond = model(
+                                latent_model_input, t=timestep, **arg_null
+                            )[0]
+                        else:
+                            noise_pred_uncond = None
+
+                    if do_classifier_free_guidance:
+                        noise_pred = noise_pred_uncond + cfg_scale * (
+                            noise_pred_cond - noise_pred_uncond
+                        )
+                    else:
+                        noise_pred = noise_pred_cond
+
+                    temp_x0 = scheduler.step(
+                        noise_pred.unsqueeze(0),
+                        t,
+                        latent.unsqueeze(0),
+                        return_dict=False,
+                        generator=generator,
+                    )[0]
+                    latent = temp_x0.squeeze(0)
 
         # Move VAE to the appropriate device for sampling
         vae.to(device)
@@ -822,6 +874,60 @@ class SamplingManager:
         clean_memory_on_device(device)
 
         return video
+
+    def _eqm_sample_latents(
+        self,
+        *,
+        eqm_context: EqMModeContext,
+        accelerator: Accelerator,
+        transformer: WanModel,
+        initial_latent: torch.Tensor,
+        context_tokens: torch.Tensor,
+        negative_context: Optional[torch.Tensor],
+        sample_parameter: Dict[str, Any],
+        sample_steps: int,
+        cfg_scale: float,
+        device: torch.device,
+        network_dtype: torch.dtype,
+        patch_size: Tuple[int, int, int],
+        args: argparse.Namespace,
+    ) -> torch.Tensor:
+        result: EqMSamplingResult = run_eqm_sampling(
+            eqm_context=eqm_context,
+            accelerator=accelerator,
+            transformer=transformer,
+            initial_latent=initial_latent,
+            context_tokens=context_tokens,
+            negative_context=negative_context,
+            sample_parameter=sample_parameter,
+            sample_steps=sample_steps,
+            cfg_scale=cfg_scale,
+            device=device,
+            network_dtype=network_dtype,
+            patch_size=patch_size,
+            args=args,
+        )
+
+        if result.likelihood is not None:
+            self._last_eqm_likelihood = result.likelihood
+            if getattr(accelerator, "is_main_process", True):
+                logp_mean = float(result.likelihood["logp"].mean().item())
+                prior_mean = float(result.likelihood["prior_logp"].mean().item())
+                logger.info(
+                    "EqM ODE likelihood stats: logp_mean=%.4f prior_mean=%.4f",
+                    logp_mean,
+                    prior_mean,
+                )
+        else:
+            self._last_eqm_likelihood = None
+
+        return result.latent
+
+    def _eqm_integrator_sample(self, *args, **kwargs) -> torch.Tensor:  # pragma: no cover
+        """Deprecated placeholder retained for backward compatibility."""
+        raise NotImplementedError(
+            "_eqm_integrator_sample has been superseded by research.eqm_mode.sampling_helper.run_eqm_sampling"
+        )
 
     def _generate_control_latents_for_inference(
         self,
