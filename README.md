@@ -86,4 +86,5 @@ Keep in mind that work on some features is not yet complete due to time and hard
 | [SARA: Structural and Adversarial Representation Alignment for Training-efficient Diffusion Models](https://arxiv.org/abs/2503.08253v1) | paper | - Autocorrelation matrix alignment<br>- Adversarial distribution alignment<br>- Multi-level hierarchical representation loss | Hesen Chen, Junyan Wang, Zhiyu Tan, Hao Li | CC BY 4.0 | |
 | [Scion](https://github.com/LIONS-EPFL/scion) | repo | - Scion optimizer | [LIONS-EPFL](https://github.com/LIONS-EPFL) | MIT |  |
 | [EqM](https://github.com/raywang4/EqM) | repo | - Equilibrium matching adaptation | [raywang4](https://github.com/raywang4) | MIT | |
+| [NorMuon](https://github.com/CoffeeVampir3/NorMuon) | repo | - Neuron-wise Normalized Muon implementation | [CoffeeVampir3](https://github.com/CoffeeVampir3) | MIT | |
 

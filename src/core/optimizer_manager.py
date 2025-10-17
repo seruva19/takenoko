@@ -96,6 +96,73 @@ class OptimizerManager:
                     f"  Parsed: {key} = {parsed_value} (type: {type(parsed_value)})"
                 )
 
+        def extract_params(params_list: List[Any]) -> List[torch.nn.Parameter]:
+            """Extract individual parameters from parameter groups or parameter lists."""
+            extracted_params: List[torch.nn.Parameter] = []
+            for i, item in enumerate(params_list):
+                if isinstance(item, dict) and "params" in item:
+                    logger.debug(
+                        f"Parameter group {i}: {len(item['params'])} parameters found"
+                    )
+                    extracted_params.extend(list(item["params"]))
+                elif isinstance(item, torch.nn.Parameter):
+                    logger.debug(
+                        f"Parameter {i}: shape {item.shape}, ndim {item.ndim}"
+                    )
+                    extracted_params.append(item)
+                else:
+                    logger.debug(f"Skipping item {i}: {type(item)}")
+            return extracted_params
+
+        def log_param_structure(
+            matrix_label: str,
+            scalar_label: str,
+            trainable_items: List[Any],
+            all_params: List[torch.nn.Parameter],
+            matrix_params: List[torch.nn.Parameter],
+            scalar_params: List[torch.nn.Parameter],
+        ) -> None:
+            logger.info(f"Total trainable parameters: {len(trainable_items)}")
+            for i, param_item in enumerate(trainable_items):
+                if isinstance(param_item, dict):
+                    logger.info(f"Parameter group {i}:")
+                    logger.info("  - Type: Parameter group (dictionary)")
+                    logger.info(f"  - Keys: {list(param_item.keys())}")
+                    if "params" in param_item:
+                        params_list = list(param_item["params"])  # type: ignore[index]
+                        logger.info(f"  - Number of parameters: {len(params_list)}")
+                        if params_list:
+                            logger.info(
+                                "  - Parameter types: "
+                                f"{[type(p).__name__ for p in params_list[:5]]}..."
+                            )
+                            logger.info(
+                                "  - Parameter shapes: "
+                                f"{[p.shape for p in params_list[:5]]}..."
+                            )
+                    if "lr" in param_item:
+                        logger.info(f"  - Learning rate: {param_item['lr']}")  # type: ignore[index]
+                    if "weight_decay" in param_item:
+                        logger.info(
+                            f"  - Weight decay: {param_item['weight_decay']}"
+                        )  # type: ignore[index]
+                elif isinstance(param_item, torch.nn.Parameter):
+                    logger.info(f"Parameter {i}:")
+                    logger.info("  - Type: Individual parameter")
+                    logger.info(f"  - Shape: {param_item.shape}")
+                    logger.info(f"  - Dtype: {param_item.dtype}")
+                else:
+                    logger.info(f"Item {i}:")
+                    logger.info(f"  - Type: {type(param_item).__name__}")
+                    logger.info(f"  - Content: {param_item}")
+
+            logger.info(
+                f"{matrix_label}: {len(matrix_params)} hidden weight parameters (?2D)"
+            )
+            logger.info(
+                f"{scalar_label}: {len(scalar_params)} bias/gain parameters (<2D)"
+            )
+
         lr = args.learning_rate
         optimizer = None
         optimizer_class = None
@@ -266,79 +333,22 @@ class OptimizerManager:
             from optimizers.muon import SingleDeviceMuonWithAuxAdam
 
             # Separate trainable parameters by dimensionality
-            # Muon should be applied to hidden weights (≥2D parameters) - Linear layers
+            # Muon should be applied to hidden weights (?2D parameters) - Linear layers
             # AdamW should be applied to biases/gains (<2D) and other parameters
-
-            # Handle both parameter lists and parameter group dictionaries
-            def extract_params(params_list):
-                """Extract individual parameters from parameter groups or parameter lists."""
-                extracted_params = []
-                for i, item in enumerate(params_list):
-                    if isinstance(item, dict) and "params" in item:
-                        # This is a parameter group dictionary
-                        logger.debug(
-                            f"Parameter group {i}: {len(item['params'])} parameters"
-                        )
-                        extracted_params.extend(
-                            list(item["params"])
-                        )  # Convert dict_values to list
-                    elif isinstance(item, torch.nn.Parameter):
-                        # This is already a parameter
-                        logger.debug(
-                            f"Parameter {i}: shape {item.shape}, ndim {item.ndim}"
-                        )
-                        extracted_params.append(item)
-                    else:
-                        # Skip non-parameter items
-                        logger.debug(f"Skipping item {i}: {type(item)}")
-                        continue
-                return extracted_params
-
-            # Extract all individual parameters
             all_params = extract_params(trainable_params)
 
             # Separate by dimensionality
             hidden_weights = [p for p in all_params if p.ndim >= 2]
             hidden_gains_biases = [p for p in all_params if p.ndim < 2]
 
-            # Log parameter distribution for debugging
-            logger.info(f"Total trainable parameters: {len(trainable_params)}")
-
-            # Detailed logging of the trainable parameter structure
-            for i, param_item in enumerate(trainable_params):
-                if isinstance(param_item, dict):
-                    logger.info(f"Parameter group {i}:")
-                    logger.info(f"  - Type: Parameter group (dictionary)")
-                    logger.info(f"  - Keys: {list(param_item.keys())}")
-                    if "params" in param_item:
-                        params_list = list(
-                            param_item["params"]  # type: ignore
-                        )  # Convert dict_values to list
-                        logger.info(f"  - Number of parameters: {len(params_list)}")
-                        if len(params_list) > 0:
-                            logger.info(
-                                f"  - Parameter types: {[type(p).__name__ for p in params_list[:5]]}..."
-                            )
-                            logger.info(
-                                f"  - Parameter shapes: {[p.shape for p in params_list[:5]]}..."
-                            )
-                    if "lr" in param_item:
-                        logger.info(f"  - Learning rate: {param_item['lr']}")  # type: ignore
-                    if "weight_decay" in param_item:
-                        logger.info(f"  - Weight decay: {param_item['weight_decay']}")  # type: ignore
-                elif isinstance(param_item, torch.nn.Parameter):
-                    logger.info(f"Parameter {i}:")
-                    logger.info(f"  - Type: Individual parameter")
-                    logger.info(f"  - Shape: {param_item.shape}")
-                    logger.info(f"  - Dtype: {param_item.dtype}")
-                else:
-                    logger.info(f"Item {i}:")
-                    logger.info(f"  - Type: {type(param_item).__name__}")
-                    logger.info(f"  - Content: {param_item}")
-
-            logger.info(f"Extracted individual parameters: {len(all_params)}")
-            logger.info(f"Muon: {len(hidden_weights)} hidden weight parameters (≥2D)")
-            logger.info(f"AdamW: {len(hidden_gains_biases)} bias/gain parameters (<2D)")
+            log_param_structure(
+                "Muon",
+                "AdamW",
+                trainable_params,
+                all_params,
+                hidden_weights,
+                hidden_gains_biases,
+            )
 
             # Validate that we have parameters to optimize
             if len(hidden_weights) == 0 and len(hidden_gains_biases) == 0:
@@ -409,6 +419,117 @@ class OptimizerManager:
             logger.info(f"  - Weight decay: {weight_decay}")
             logger.info(f"  - Momentum: {momentum}")
             logger.info(f"  - Newton-Schulz steps: {ns_steps}")
+
+        elif optimizer_type == "Normuon".lower():
+            logger.info(f"using NorMuon optimizer | {optimizer_kwargs}")
+
+            from optimizers.normuon import (
+                SingleDeviceNorMuonWithAuxAdam,
+                apply_normuon_config_overrides,
+            )
+
+            # NorMuon uses the same parameter partitioning strategy as Muon
+            all_params = extract_params(trainable_params)
+
+            hidden_weights = [p for p in all_params if p.ndim >= 2]
+            hidden_gains_biases = [p for p in all_params if p.ndim < 2]
+
+            log_param_structure(
+                "NorMuon",
+                "Aux Adam",
+                trainable_params,
+                all_params,
+                hidden_weights,
+                hidden_gains_biases,
+            )
+
+            if len(hidden_weights) == 0 and len(hidden_gains_biases) == 0:
+                raise ValueError("No trainable parameters found for NorMuon optimizer!")
+
+            if len(hidden_weights) == 0:
+                logger.warning(
+                    "No hidden weight parameters (?2D) found for NorMuon. Consider using a different optimizer."
+                )
+
+            if len(hidden_gains_biases) == 0:
+                logger.info(
+                    "No bias/gain parameters (<2D) found for NorMuon. Optimizer will only update matrix weights."
+                )
+
+            apply_normuon_config_overrides(args, optimizer_kwargs)
+
+            normuon_lr = optimizer_kwargs.get(
+                "normuon_lr", optimizer_kwargs.get("muon_lr", 0.001)
+            )
+            normuon_adam_lr = optimizer_kwargs.get(
+                "normuon_adam_lr", optimizer_kwargs.get("adam_lr", lr)
+            )
+            weight_decay = optimizer_kwargs.get(
+                "normuon_weight_decay", optimizer_kwargs.get("weight_decay", 0.001)
+            )
+            betas_value = optimizer_kwargs.get(
+                "normuon_betas", optimizer_kwargs.get("betas", (0.9, 0.95))
+            )
+            if isinstance(betas_value, list):
+                betas = tuple(betas_value)
+            else:
+                betas = betas_value
+            if not isinstance(betas, (tuple, list)) or len(betas) != 2:
+                raise ValueError(
+                    f"NorMuon auxiliary Adam betas must be a length-2 sequence. Received: {betas_value}"
+                )
+            betas = tuple(betas)
+            momentum = optimizer_kwargs.get(
+                "normuon_momentum", optimizer_kwargs.get("momentum", 0.9)
+            )
+            beta2 = optimizer_kwargs.get("normuon_beta2", 0.95)
+            eps = optimizer_kwargs.get("normuon_eps", 1e-10)
+            ns_steps = optimizer_kwargs.get(
+                "normuon_ns_steps", optimizer_kwargs.get("ns_steps", 3)
+            )
+
+            param_groups = []
+
+            if len(hidden_weights) > 0:
+                param_groups.append(
+                    dict(
+                        params=hidden_weights,
+                        use_muon=True,
+                        lr=normuon_lr,
+                        weight_decay=weight_decay,
+                        momentum=momentum,
+                        beta2=beta2,
+                        eps=eps,
+                        ns_steps=ns_steps,
+                    )
+                )
+
+            if len(hidden_gains_biases) > 0:
+                param_groups.append(
+                    dict(
+                        params=hidden_gains_biases,
+                        use_muon=False,
+                        lr=normuon_adam_lr,
+                        betas=tuple(betas),
+                        weight_decay=weight_decay,
+                    )
+                )
+
+            if len(param_groups) == 0:
+                raise ValueError("No parameter groups created for NorMuon optimizer!")
+
+            optimizer_class = SingleDeviceNorMuonWithAuxAdam
+            optimizer = optimizer_class(param_groups)
+
+            logger.info("NorMuon configuration:")
+            logger.info(f"  - NorMuon LR: {normuon_lr}")
+            logger.info(f"  - Aux Adam LR: {normuon_adam_lr}")
+            logger.info(f"  - Weight decay: {weight_decay}")
+            logger.info(f"  - Momentum (beta1): {momentum}")
+            logger.info(f"  - Beta2: {beta2}")
+            logger.info(f"  - Epsilon: {eps}")
+            logger.info(f"  - Newton-Schulz steps: {ns_steps}")
+            logger.info(f"  - Aux Adam betas: {betas}")
 
         elif optimizer_type == "Prodigy".lower():
             # Prodigy optimizer from prodigyopt
@@ -816,4 +937,3 @@ class OptimizerManager:
             num_decay_steps=num_decay_steps,
             **lr_scheduler_kwargs,
         )
-

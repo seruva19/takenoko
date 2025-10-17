@@ -22,6 +22,7 @@ def create_args_from_config(
     # Store original config information for state saving
     args.config_file = config_path
     args.config_content = config_content
+    args.raw_config = config
 
     # Set default values for all possible arguments
     # Model settings
