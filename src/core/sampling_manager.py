@@ -23,9 +23,9 @@ from wan.modules.model import WanModel
 from wan.utils.fm_solvers_unipc import FlowUniPCMultistepScheduler
 from generation.sampling import save_images_grid, save_videos_grid
 from torch.utils.tensorboard.writer import SummaryWriter
-from research.eqm_mode.integration import EqMModeContext, setup_eqm_mode
-from research.eqm_mode.eval import save_npz_from_samples
-from research.eqm_mode.sampling_helper import EqMSamplingResult, run_eqm_sampling
+from energy_based.eqm_mode.integration import EqMModeContext, setup_eqm_mode
+from energy_based.eqm_mode.eval import save_npz_from_samples
+from energy_based.eqm_mode.sampling_helper import EqMSamplingResult, run_eqm_sampling
 
 logger = get_logger(__name__, level=logging.INFO)
 

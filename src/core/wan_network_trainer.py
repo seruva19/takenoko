@@ -47,8 +47,8 @@ from scheduling.timestep_utils import (
     initialize_timestep_distribution,
     get_noisy_model_input_and_timesteps,
 )
-from research.eqm_mode.config import EqMModeConfig
-from research.eqm_mode.energy import register_energy_head_metadata
+from energy_based.eqm_mode.config import EqMModeConfig
+from energy_based.eqm_mode.energy import register_energy_head_metadata
 import logging
 from common.logger import get_logger
 from common.performance_logger import snapshot_gpu_memory

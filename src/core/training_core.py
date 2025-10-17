@@ -25,7 +25,7 @@ from enhancements.temporal_consistency.training_integration import (
 # Slider training integration (clean interface)
 from enhancements.slider.slider_integration import compute_slider_loss_if_enabled
 import utils.fluxflow_augmentation as fluxflow_augmentation
-from research.eqm_mode.training_helper import EqMTrainingHelper
+from energy_based.eqm_mode.training_helper import EqMTrainingHelper
 
 
 from scheduling.fvdm_manager import create_fvdm_manager
