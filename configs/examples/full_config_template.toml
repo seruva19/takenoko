@@ -1824,6 +1824,64 @@ freq_temporal_loss_reduction = "mean"
 freq_temporal_apply_to_latent = true         
 
 # =============================================================================
+# ⚠️ TRANSITION TRAINING SETTINGS
+# =============================================================================
+
+# Enable TiM-inspired transition training pipeline (false keeps legacy diffusion loop).
+transition_training_enabled = false
+
+# Fraction of each batch forced to vanilla diffusion pairs (t == r).
+transition_diffusion_ratio = 0.5
+
+# Fraction of each batch clamped to r = t_min for one-step / consistency targets.
+transition_consistency_ratio = 0.1
+
+# Derivative estimator for transport targets ("dde" finite diff, "jvp" autograd, "auto" tries DDE then failover).
+transition_derivative_mode = "dde"
+
+# Estimator to use when derivative_mode="auto" raises ("dde", "jvp", or "none").
+transition_derivative_failover = "jvp"
+
+# Finite-difference step (delta-t) used by the DDE estimator.
+transition_finite_difference_eps = 0.005
+
+# Reserved for downstream hooks: interpret sampled times as "discrete" (1..1000) or "normalized" (0..1).
+transition_delta_time_domain = "discrete"
+
+# Transport family used to mix latents ("linear", "trigflow", or "vp").
+transition_transport = "linear"
+
+# Per-sample loss weighting schedule ("sqrt" uses 1/sqrt(delta-t), "constant", "tau_inverse").
+transition_weight_schedule = "sqrt"
+
+# Apply tan reparameterisation before weighting (emphasises late-time deltas).
+transition_tangent_weighting = true
+
+# Rescale weights by inverse per-sample loss inside each batch.
+transition_adaptive_weighting = true
+
+# Enable LoRA interval adapter to scale multipliers from delta-t features.
+transition_lora_interval_modulation = false
+
+# Weight for optional cosine directional loss (set >0 to request intermediate activations).
+transition_directional_loss_weight = 0.0
+
+# Maintain an EMA teacher and blend its prediction into the transport target.
+transition_use_ema_teacher = false
+
+# Fraction of teacher prediction to mix when enabled (0.0-1.0).
+transition_teacher_mix = 0.2
+
+# EMA decay applied when updating the teacher (0 < decay < 1).
+transition_teacher_decay = 0.999
+
+# When LoRA modulation is enabled, forward delta-t masks to networks that expose rank-mask hooks.
+transition_delta_attention = false
+
+# Width of the harmonic feature stack that drives LoRA multiplier modulation.
+transition_delta_mlp_hidden = 64
+
+# =============================================================================
 # ⚠️ CONTEXT AS MEMORY SETTINGS
 # =============================================================================
 

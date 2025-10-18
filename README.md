@@ -47,23 +47,23 @@ Keep in mind that work on some features is not yet complete due to time and hard
 | [DispLoss](https://github.com/raywang4/DispLoss) | repo | - Dispersive loss PyTorch implementation | [raywang4](https://github.com/raywang4) | MIT | <sub>official implementation of Dispersive Loss paper</sub> |
 | [sd-scripts](https://github.com/kohya-ss/sd-scripts) | repo | - Regularization datasets<br>- LoRA-GGPO | [kohya-ss](https://github.com/kohya-ss) | Apache 2.0 | |
 | [wan2.1-dilated-controlnet](https://github.com/TheDenk/wan2.1-dilated-controlnet) | repo | - ControlNET training | [TheDenk](https://github.com/TheDenk) | Apache 2.0 | |
-| [T-LoRA](https://github.com/ControlGenAI/T-LoRA) | repo | - T-LoRA training | [ControlGenAI](https://github.com/ControlGenAI) | MIT | |
+| [T-LoRA](https://github.com/ControlGenAI/T-LoRA) | repo | - T-LoRA training | [ControlGenAI](https://github.com/ControlGenAI) | MIT | see also [paper](https://arxiv.org/abs/2507.05964) |
 | [sd-scripts (fork)](https://github.com/hinablue/sd-scripts) | repo | - Fourier loss<br>- HinaAdaptive optimizer | [hinablue](https://github.com/hinablue) | Apache 2.0 | |
 | [Muon](https://github.com/KellerJordan/Muon) | repo | - Muon optimizer | [KellerJordan](https://github.com/KellerJordan) | MIT | |
-| [Sana](https://github.com/NVlabs/Sana) | repo | - CAME 8-bit optimizer | [NVlabs](https://github.com/NVlabs) | Apache 2.0 | |
+| [Sana](https://github.com/NVlabs/Sana) | repo | - CAME 8-bit optimizer | [NVlabs](https://github.com/NVlabs) | Apache 2.0 | see also [paper](https://arxiv.org/abs/2410.10629) |
 | [SimpleTuner](https://github.com/bghira/SimpleTuner) | repo | - Routed TREAD<br>- SOAP optimizer<br>- Masked training (spatial-first loss, area interpolation, proper normalization, auto mask generation) | [bghira](https://github.com/bghira) | AGPL-3.0 | |
 | [diffusion-pipe (pr)](https://github.com/Ada123-a/diffusion-pipe-TREAD) | repo | - Frame-based TREAD | [Ada123-a](https://github.com/Ada123-a) | MIT |  |
 | [Representation Alignment for Generation: Training Diffusion Transformers Is Easier Than You Think](https://arxiv.org/abs/2410.06940) | paper | -  Representational alignment loss, 3-layer MLP projection head, forward hook-based feature capture  | Sihyun Yu, Sangkyung Kwak, Huiwon Jang, Jongheon Jeong, Jonathan Huang, Jinwoo Shin, Saining Xie | CC BY 4.0 | |
 | [dino](https://github.com/facebookresearch/dino) | repo | - VisionTransformer implementation | [facebookresearch](https://github.com/facebookresearch) | MIT | |
-| [Sophia](https://github.com/Liuhong99/Sophia) | repo | - Sophia optimizer | [Liuhong99](https://github.com/Liuhong99) | MIT | |
+| [Sophia](https://github.com/Liuhong99/Sophia) | repo | - Sophia optimizer | [Liuhong99](https://github.com/Liuhong99) | MIT | see also [paper](https://arxiv.org/abs/2305.14342) |
 | [Adaptive Non-Uniform Timestep Sampling for Diffusion Model Training](https://github.com/ku-dmlab/Adaptive-Timestep-Sampler) | repo | - Adaptive timestep sampling | [KU-DMLab](https://github.com/ku-dmlab) | MIT | <sub>see also [paper](https://arxiv.org/abs/2411.09998)</sub> |
 | [Temporal Regularization Makes Your Video Generator Stronger](https://arxiv.org/abs/2503.15417) | paper | - Temporal regularization via perturbation | Harold Haodong Chen, Haojian Huang, Xianfeng Wu, Yexin Liu, Yajing Bai, Wen-Jie Shu, Harry Yang, Ser-Nam Lim | arXiv 1.0 | |
 | [AR-Diffusion: Asynchronous Video Generation with Auto-Regressive Diffusion](https://arxiv.org/abs/2503.07418) | paper | - Frame-oriented Probability Propagation (FoPP) scheduler | Mingzhen Sun, Weining Wang, Gen Li, Jiawei Liu, Jiahui Sun, Wanquan Feng, Shanshan Lao, SiYu Zhou, Qian He, Jing Liu | arXiv 1.0 | |
 | [Redefining Temporal Modeling in Video Diffusion: The Vectorized Timestep Approach](https://arxiv.org/abs/2410.03160) | paper | - Vectorized timestep scheduling | Yaofang Liu, Yumeng Ren, Xiaodong Cun, Aitor Artola, Yang Liu, Tieyong Zeng, Raymond H. Chan, Jean-michel Morel | arXiv 1.0 | |
 | [Self Forcing: Bridging the Train-Test Gap in Autoregressive Video Diffusion](https://arxiv.org/abs/2506.08009) | paper | - Post-training autoregressive self-rollout method | Xun Huang, Zhengqi Li, Guande He, Mingyuan Zhou, Eli Shechtman | CC BY-NC-SA 4.0 | |
-| [Wan2.1-NABLA](https://github.com/gen-ai-team/Wan2.1-NABLA) | repo | - Dynamic sparse attention | [gen-ai-team](https://github.com/gen-ai-team) | Apache 2.0 | |
+| [Wan2.1-NABLA](https://github.com/gen-ai-team/Wan2.1-NABLA) | repo | - Dynamic sparse attention | [gen-ai-team](https://github.com/gen-ai-team) | Apache 2.0 | see also [paper](https://arxiv.org/abs/2507.13546) |
 | [VideoX-Fun](https://github.com/aigc-apps/VideoX-Fun) | repo | - Reward LoRA training | [aigc-apps](https://github.com/aigc-apps) | Apache 2.0 | |
-| [Fira](https://github.com/xichen-fy/Fira) | repo | - Fira optimizer | [xichen-fy](https://github.com/xichen-fy) | Apache 2.0 | |
+| [Fira](https://github.com/xichen-fy/Fira) | repo | - Fira optimizer | [xichen-fy](https://github.com/xichen-fy) | Apache 2.0 | see also [paper](https://arxiv.org/abs/2410.01623) |
 | [google-research](https://github.com/google-research/google-research) | repo | - Frechet Video Distance (FVD) implementation | [google-research](https://github.com/google-research) | Apache 2.0 | |
 | [musubi-tuner (pr)](https://github.com/kohya-ss/musubi-tuner/pull/513) | repo | - Reflected Exponential Learning Rate scheduler | [xzuyn](https://github.com/xzuyn) | Apache 2.0 | |
 | [Mixture of Contexts for Long Video Generation](https://arxiv.org/abs/2508.21058) | paper | - Mixture of Contexts (MoC) sparse attention routing | Shengqu Cai, Ceyuan Yang, Lvmin Zhang, Yuwei Guo, Junfei Xiao, Ziyan Yang, Yinghao Xu, Zhenheng Yang, Alan Yuille, Leonidas Guibas, Maneesh Agrawala, Lu Jiang, Gordon Wetzstein | CC BY-SA 4.0 | |
@@ -84,7 +84,7 @@ Keep in mind that work on some features is not yet complete due to time and hard
 | [RamTorch](https://github.com/lodestone-rock/RamTorch) | repo | - RamTorch CPU-bouncing linear layers | [lodestone-rock](https://github.com/lodestone-rock) | Apache 2.0 | |
 | [Directly Aligning the Full Diffusion Trajectory with Fine-Grained Human Preference](https://github.com/Tencent-Hunyuan/SRPO/) | repo | - SRPO preference optimization | [Tencent-Hunyuan](https://github.com/Tencent-Hunyuan) | SRPO Non-Commercial License | <sub>see also [paper](https://arxiv.org/abs/2509.06942)</sub> |
 | [SARA: Structural and Adversarial Representation Alignment for Training-efficient Diffusion Models](https://arxiv.org/abs/2503.08253v1) | paper | - Autocorrelation matrix alignment<br>- Adversarial distribution alignment<br>- Multi-level hierarchical representation loss | Hesen Chen, Junyan Wang, Zhiyu Tan, Hao Li | CC BY 4.0 | |
-| [Scion](https://github.com/LIONS-EPFL/scion) | repo | - Scion optimizer | [LIONS-EPFL](https://github.com/LIONS-EPFL) | MIT |  |
+| [Scion](https://github.com/LIONS-EPFL/scion) | repo | - Scion optimizer | [LIONS-EPFL](https://github.com/LIONS-EPFL) | MIT | see also [paper](https://arxiv.org/abs/2502.07529) |
 | [EqM](https://github.com/raywang4/EqM) | repo | - Equilibrium matching adaptation | [raywang4](https://github.com/raywang4) | MIT | <sub>see also [paper](https://arxiv.org/abs/2510.02300)</sub>  |
 | [NorMuon](https://github.com/CoffeeVampir3/NorMuon) | repo | - Neuron-wise Normalized Muon implementation | [CoffeeVampir3](https://github.com/CoffeeVampir3) | MIT | |
-
+| [TiM](https://github.com/WZDTHU/TiM) | repo | - Transition training objective (paired timesteps, transports, weighting, EMA) | [WZDTHU](https://github.com/WZDTHU) | Apache 2.0 | <sub>see also [paper](https://arxiv.org/abs/2509.04394)</sub> |

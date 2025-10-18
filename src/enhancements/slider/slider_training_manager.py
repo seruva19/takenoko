@@ -166,6 +166,7 @@ class SliderTrainingManager:
                 raft=kwargs.get("raft"),
                 warp_fn=kwargs.get("warp_fn"),
                 adaptive_manager=kwargs.get("adaptive_manager"),
+                transition_loss_context=kwargs.get("transition_loss_context"),
             )
 
         # Slider training - compute guided loss

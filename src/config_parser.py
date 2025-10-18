@@ -3,6 +3,7 @@ import logging
 from typing import Any, Dict
 from common.logger import get_logger
 from memory.config import parse_memory_optimization_config
+from transition.configuration import parse_transition_config
 
 logger = get_logger(__name__, level=logging.INFO)
 
@@ -113,6 +114,8 @@ def create_args_from_config(
     args.memory_mapping_threshold = int(
         config.get("memory_mapping_threshold", 10 * 1024 * 1024)
     )
+
+    args.transition_training = parse_transition_config(config)
 
     # RamTorch linear replacement
     args.use_ramtorch_linear = bool(config.get("use_ramtorch_linear", False))

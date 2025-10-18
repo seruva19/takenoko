@@ -4,6 +4,7 @@ This module handles the main training loop, model calling, loss computation, and
 
 import argparse
 import math
+from contextlib import nullcontext
 from typing import Any, Callable, Dict, List, Optional, Tuple
 import torch
 from tqdm import tqdm
@@ -25,6 +26,13 @@ from enhancements.temporal_consistency.training_integration import (
 # Slider training integration (clean interface)
 from enhancements.slider.slider_integration import compute_slider_loss_if_enabled
 import utils.fluxflow_augmentation as fluxflow_augmentation
+from transition.manager import TransitionTrainingManager
+from transition.pipeline import (
+    prepare_transition_batch,
+    finalize_batch_if_enabled,
+    update_teacher_if_needed,
+)
+from core.training_inputs import prepare_standard_training_inputs
 from energy_based.eqm_mode.training_helper import EqMTrainingHelper
 
 
@@ -140,6 +148,7 @@ class TrainingCore:
 
         # Pre-computed timestep distribution (initialized when needed)
         self.timestep_distribution = TimestepDistribution()
+        self.transition_manager: Optional[TransitionTrainingManager] = None
         self._timestep_logging_initialized: bool = False
 
         # Gradient norm tracking
@@ -602,6 +611,16 @@ class TrainingCore:
         # Store noise scheduler reference for call_dit
         self.noise_scheduler = noise_scheduler
 
+        transition_cfg = getattr(args, "transition_training", None)
+        if transition_cfg and getattr(transition_cfg, "enabled", False):
+            self.transition_manager = TransitionTrainingManager(args=args, config=transition_cfg)
+            try:
+                self.transition_manager.attach_teacher(accelerator.unwrap_model(transformer))
+            except Exception:
+                pass
+        else:
+            self.transition_manager = None
+
         self.eqm_training_helper = EqMTrainingHelper.maybe_create(args, noise_scheduler)
         eqm_enabled = self.eqm_training_helper is not None
         if eqm_enabled and self.eqm_training_helper is not None:
@@ -817,73 +836,50 @@ class TrainingCore:
                         except Exception:
                             pass
 
-                        # calculate model input and timesteps
-                        if dual_model_manager is not None:
-                            noisy_model_input, timesteps, sigmas = (
-                                dual_model_manager.determine_and_prepare_batch(
-                                    args=args,
-                                    noise=noise,
-                                    latents=latents,
-                                    noise_scheduler=noise_scheduler,
-                                    device=accelerator.device,
-                                    dtype=dit_dtype,
-                                    timestep_distribution=self.timestep_distribution,
-                                    presampled_uniform=(
-                                        None
-                                        if (
-                                            hasattr(args, "use_precomputed_timesteps")
-                                            and getattr(
-                                                args, "use_precomputed_timesteps", False
-                                            )
-                                        )
-                                        else batch.get("timesteps", None)
-                                    ),
-                                )
-                            )
-                            # swap base weights if regime changed
-                            try:
-                                dual_model_manager.swap_if_needed(accelerator)
-                            except Exception as _swap_err:
-                                logger.warning(
-                                    f"DualModelManager swap failed: {_swap_err}"
-                                )
-                                # proceed without swap to avoid breaking training
-                        else:
-                            # If dataset provided per-batch pre-sampled uniform t values and
-                            # precomputed timesteps are NOT enabled, map them through the
-                            # selected sampling strategy. Otherwise, ignore and use current path.
-                            batch_timesteps_uniform = None
-                            try:
-                                if hasattr(
-                                    args, "use_precomputed_timesteps"
-                                ) and getattr(args, "use_precomputed_timesteps", False):
-                                    batch_timesteps_uniform = None
-                                else:
-                                    bt = batch.get("timesteps", None)
-                                    if bt is not None:
-                                        # bt may be list[float] length B
-                                        batch_timesteps_uniform = torch.tensor(
-                                            bt,
-                                            device=accelerator.device,
-                                            dtype=torch.float32,
-                                        )
-                            except Exception:
-                                batch_timesteps_uniform = None
 
-                            # Centralized utility with optional presampled uniform
-                            noisy_model_input, timesteps, sigmas = (
-                                get_noisy_model_input_and_timesteps(
-                                    args,
-                                    noise,
-                                    latents,
-                                    noise_scheduler,
-                                    accelerator.device,
-                                    dit_dtype,
-                                    self.timestep_distribution,
-                                    batch_timesteps_uniform,
-                                )
-                            )
 
+                    # calculate model input and timesteps
+                    noisy_model_input, timesteps, sigmas, weighting = prepare_standard_training_inputs(
+                        args,
+                        accelerator,
+                        latents,
+                        noise,
+                        noise_scheduler,
+                        dit_dtype,
+                        self.timestep_distribution,
+                        dual_model_manager,
+                        batch,
+                    )
+
+                    transition_reference_timesteps = None
+                    need_intermediate = False
+                    active_transition_manager = None
+                    prepared_transition = None
+                    if (
+                        self.transition_manager is not None
+                        and dual_model_manager is None
+                        and not eqm_enabled
+                    ):
+                        active_transition_manager = self.transition_manager
+                        prepared_transition = prepare_transition_batch(
+                            active_transition_manager,
+                            accelerator,
+                            latents,
+                            noise,
+                        )
+                        if prepared_transition is not None:
+                            noisy_model_input = prepared_transition.noisy_latents
+                            timesteps = prepared_transition.timesteps.to(
+                                device=accelerator.device, dtype=dit_dtype
+                            )
+                            transition_reference_timesteps = prepared_transition.reference_timesteps.to(
+                                device=accelerator.device, dtype=dit_dtype
+                            )
+                            weighting = prepared_transition.weights.to(
+                                device=accelerator.device, dtype=network_dtype
+                            )
+                            sigmas = None
+                            need_intermediate = prepared_transition.need_directional
                     # Optional: If the network supports TLora-style masking, update mask from timesteps
                     try:
                         unwrapped_net = accelerator.unwrap_model(network)
@@ -894,13 +890,14 @@ class TrainingCore:
                     except Exception:
                         pass
 
-                    weighting = compute_loss_weighting_for_sd3(
-                        args.weighting_scheme,
-                        noise_scheduler,
-                        timesteps,
-                        accelerator.device,
-                        dit_dtype,
-                    )
+                    if weighting is None:
+                        weighting = compute_loss_weighting_for_sd3(
+                            args.weighting_scheme,
+                            noise_scheduler,
+                            timesteps,
+                            accelerator.device,
+                            dit_dtype,
+                        )
 
                     # Start forward pass timing
                     start_forward_pass_timing()
@@ -955,6 +952,7 @@ class TrainingCore:
                             accelerator.log(eqm_result.metrics, step=global_step)
                         weighting = None
                         per_source_losses = {}
+                        transition_loss_context = {"transition_training_enabled": False}
 
                         trigger_event(
                             "after_forward",
@@ -1013,6 +1011,63 @@ class TrainingCore:
 
                         model_pred, target, intermediate_z = model_result
 
+                        transition_loss_context = {"transition_training_enabled": False}
+                        per_sample_transition_loss = None
+
+                        if active_transition_manager is not None:
+
+                            def _transition_forward(model_input: torch.Tensor, step_tensor: torch.Tensor) -> torch.Tensor:
+                                local_ctx = active_transition_manager.lora_modulation_context(
+                                    accelerator.unwrap_model(network),
+                                    step_tensor,
+                                    step_tensor,
+                                )
+                                with local_ctx:
+                                    pred, _, _ = self.call_dit(
+                                        args,
+                                        accelerator,
+                                        active_transformer,
+                                        latents,
+                                        batch,
+                                        noise,
+                                        model_input,
+                                        step_tensor,
+                                        network_dtype,
+                                        control_signal_processor,
+                                        controlnet,
+                                        return_intermediate=False,
+                                        override_target=True,
+                                    )
+                                return pred
+
+                            (
+                                transition_target,
+                                transition_weighting,
+                                transition_metrics,
+                                transition_directional_loss,
+                                per_sample_transition_loss,
+                            ) = finalize_batch_if_enabled(
+                                active_transition_manager,
+                                accelerator,
+                                model_pred,
+                                _transition_forward,
+                                accelerator.unwrap_model(active_transformer),
+                                need_intermediate,
+                                intermediate_z,
+                            )
+
+                            if transition_target is not None:
+                                target = transition_target
+                                if transition_weighting is not None:
+                                    weighting = transition_weighting
+                                if transition_metrics and accelerator.is_main_process:
+                                    accelerator.log(transition_metrics, step=global_step)
+                                transition_loss_context = {
+                                    "transition_training_enabled": True,
+                                    "per_sample_loss": per_sample_transition_loss,
+                                    "directional_loss": transition_directional_loss,
+                                    "directional_weight": getattr(self.transition_manager, "directional_weight", 0.0),
+                                }
                         # Context memory processing
                         context_memory_loss, context_stats = (
                             self.context_memory_manager.process_training_step(
@@ -1099,6 +1154,7 @@ class TrainingCore:
                                 raft=getattr(self, "raft", None),
                                 warp_fn=getattr(self, "warp", None),
                                 adaptive_manager=self.adaptive_manager,
+                                transition_loss_context=transition_loss_context,
                             )
 
 
@@ -1291,6 +1347,9 @@ class TrainingCore:
                     start_optimizer_step_timing()
                     try:
                         optimizer.step()
+                        update_teacher_if_needed(
+                            self.transition_manager, accelerator, transformer
+                        )
                     except RuntimeError as e:
                         logger.error(
                             "Р РѓР Р‡Р Р„Р С‘ Make sure you're not adding empty parameter groups to the optimizer"
@@ -1647,4 +1706,3 @@ class TrainingCore:
             # end of epoch
 
         return global_step, network
-

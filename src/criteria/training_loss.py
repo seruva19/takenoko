@@ -287,12 +287,29 @@ class TrainingLossComputer:
         raft: Optional[Any] = None,
         warp_fn: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
         adaptive_manager: Optional[Any] = None,
+        transition_loss_context: Optional[Dict[str, Any]] = None,
         noise_scheduler: Optional[Any] = None,
     ) -> LossComponents:
         """Compute the full training loss and its components.
 
         The returned `total_loss` is the scalar to backpropagate.
         """
+
+        if transition_loss_context is None:
+            transition_loss_context = {"transition_enabled": False}
+        transition_enabled = bool(
+            transition_loss_context.get("transition_training_enabled")
+        )
+        transition_directional_tensor = None
+        transition_directional_weight = 0.0
+        if transition_enabled:
+            transition_directional_tensor = transition_loss_context.get("directional_loss")
+            try:
+                transition_directional_weight = float(
+                    transition_loss_context.get("directional_weight", 0.0)
+                )
+            except Exception:
+                transition_directional_weight = 0.0
 
         # ---- Contrastive Flow Matching (Enhanced with DeltaFM improvements) ----
         if (
@@ -598,6 +615,21 @@ class TrainingLossComputer:
         else:
             # Default behavior: reduce all dimensions at once
             loss = loss.mean()
+        if (
+            transition_enabled
+            and transition_directional_tensor is not None
+            and transition_directional_weight > 0.0
+            and isinstance(transition_directional_tensor, torch.Tensor)
+        ):
+            directional_value = transition_directional_tensor.to(
+                loss.device, loss.dtype
+            )
+            if directional_value.dim() > 1:
+                directional_value = directional_value.view(
+                    directional_value.size(0), -1
+                ).mean(dim=1)
+            loss = loss + transition_directional_weight * directional_value.mean()
+
         base_loss = loss
 
         # ---- Optional Dispersive Loss ----
