@@ -1,0 +1,39 @@
+# Multi-GPU Training Configuration for RunPod
+# Copy this file to takenoko.runpod and modify as needed
+
+# Takenoko repository
+REPO_ROOT = https://github.com/seruva19/takenoko
+
+# Persistent root on RunPod volume
+PERSIST_ROOT=/runpod-volume/takenoko
+
+# Optional custom subdirectories (default derived from PERSIST_ROOT)
+# DATA_DIR=
+# OUTPUT_DIR=
+# MODELS_DIR=
+# VENV_DIR=
+
+# Install CUDA 12.6 Torch wheels (set to "false" if image already has torch)
+USE_TORCH_CU126=true
+
+# Training config TOML; if relative, it's resolved relative to this file
+CONFIG=config.toml
+
+# Number of GPUs to use (auto-detect if not specified)
+NUM_GPUS=""
+
+# Mixed precision mode (bf16, fp16, or no)
+MIXED_PRECISION="bf16"
+
+# Additional accelerate arguments (optional)
+# Examples:
+# ACCELERATE_EXTRA_ARGS="--gradient_accumulation_steps 2 --dynamo_backend inductor"
+ACCELERATE_EXTRA_ARGS=""
+
+# Use PyTorch with CUDA 12.6 support (recommended for RTX 40xx series)
+# Set to "false" if you need a different PyTorch version
+USE_TORCH_CU126="true"
+
+# Dataset sources (choose one)
+#   Provide a space-separated list of direct URLs:
+# URLS="https://example.com/data1.zip https://example.com/data2.tar.gz"
