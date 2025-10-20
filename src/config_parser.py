@@ -1490,6 +1490,34 @@ def create_args_from_config(
             f"🚀 TorchAO FP8 enabled - Weight dtype: {args.torchao_fp8_weight_dtype}"
         )
 
+    # RCM distillation pipeline configuration (root-level keys, prefixed with rcm_)
+    rcm_extra_args = config.get("rcm_extra_args", {}) or {}
+    if not isinstance(rcm_extra_args, dict):
+        logger.warning(
+            "??  Invalid rcm_extra_args type '%s'. Expected table or inline table. Ignoring.",
+            type(rcm_extra_args),
+        )
+        rcm_extra_args = {}
+    args.rcm = argparse.Namespace(
+        enabled=bool(config.get("rcm_enabled", False)),
+        config_path=None,  # legacy field retained for compatibility
+        override_wan=bool(config.get("rcm_override_wan", True)),
+        accelerator_mode=config.get("rcm_accelerator_mode", "auto"),
+        trainer_variant=config.get("rcm_trainer_variant", "distill"),
+        max_steps=config.get("rcm_max_steps"),
+        mixed_precision=config.get("rcm_mixed_precision", "bf16"),
+        extra_args=rcm_extra_args,
+        cpu_debug=bool(config.get("rcm_cpu_debug", False)),
+    )
+
+    if args.rcm.enabled and args.rcm.override_wan:
+        args.pipeline_override = "rcm"
+    else:
+        args.pipeline_override = getattr(args, "pipeline_override", None)
+
+    if args.rcm.enabled and getattr(args, "finetune_mode", False):
+        raise ValueError("RCM pipeline cannot run with finetune_mode enabled.")
+
     # SRPO (Semantic Relative Preference Optimization) training configuration
     args.enable_srpo_training = bool(config.get("enable_srpo_training", False))
 

@@ -1993,6 +1993,34 @@ fvdm_eval_temporal_metrics = true
 fvdm_eval_frequency = 1000               
 
 # =============================================================================
+# ⚠️ RCM DISTILLATION PIPELINE SETTINGS
+# =============================================================================
+
+# Toggle the alternate RCM-style distillation trainer. When false the legacy WAN finetuner is used; set true to route UnifiedTrainer through distillation.
+rcm_enabled = false
+
+# Force the dispatcher to only run the rCM pipeline when enabled. Set false if you intend to call `dispatch_rcm_pipeline` manually (e.g., experimentation).
+rcm_override_wan = true
+
+# Accelerator selection for rCM: "auto" (mirror WAN accelerate settings) or "cpu" to run the distillation loop entirely on CPU for debugging.
+rcm_accelerator_mode = "auto"
+
+# rCM runner flavour. "distill" executes the generator/critic loop, while "policy_eval" (future) would run evaluation only.
+rcm_trainer_variant = "distill"
+
+# Optional hard ceiling on distillation steps. 0 defers to Takenoko's schedule derived from dataset length / `max_train_steps`.
+rcm_max_steps = 0
+
+# Precision override forwarded to the rCM accelerator; valid values mirror accelerate ("fp16", "bf16", "no").
+rcm_mixed_precision = "bf16"
+
+# Inline table of rCM-specific knobs (e.g. `synthetic_samples`, `rcm_sigma_min`, `text_tokenizer`). Values here land in `RCMConfig.extra_args` and gate optional behaviours.
+rcm_extra_args = { }
+
+# Enable this to keep the entire rCM loop on CPU regardless of accelerator settings—useful when debugging CUDA availability/build issues.
+rcm_cpu_debug = false
+
+# =============================================================================
 # VALIDATION SETTINGS
 # =============================================================================
 
@@ -2528,7 +2556,7 @@ log_timestep_distribution_pmf = true
 # ddp_timeout = 1 
 
 # Enable gradient_as_bucket_view for DDP
-# ddp_gradient_as_bucket_view = false # Enable gradient_as_bucket_view for DDP
+# ddp_gradient_as_bucket_view = false 
 
 # Enable static_graph for DDP
 # ddp_static_graph = false 

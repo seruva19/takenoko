@@ -14,7 +14,7 @@ This project would not have been possible without [musubi-tuner](https://github.
 
 <h3>☄️ Docs</h3>
 
-Since this project is mostly aimed at personal use and is in a state of constant improvement (without guaranteeing backwards compatibility), it probably won't have comprehensive documentation in the near future (unless it somehow becomes popular, which I hope it does not). I've tried to provide detailed comments in the config template, but they can't cover everything. As a workaround, I recommend using [repomix](https://repomix.com/) to compress the entire repository into a single XML AI-readable file (will take around 600K tokens), then feeding it into the free Gemini 2.5 Pro with 1M context window (in [Google AI Studio](https://aistudio.google.com/)) and asking questions about various aspects of the project.
+Since this project is mostly aimed at personal use and is in a state of constant improvement (without guaranteeing backwards compatibility), it probably won't have comprehensive documentation in the near future (unless it somehow becomes popular, which I hope it does not). I've tried to provide detailed comments in the config template, but they can't cover everything. As a workaround, I recommend using [repomix](https://repomix.com/) to compress the entire repository into a single XML AI-readable file (will take around 1M tokens), then feeding it into the free [Grok 4 Fast](https://grok.com/) with 2M context window and asking questions about various aspects of the project.
 
 <h3>☄️ Quick Start (Windows)</h3>
 
@@ -88,3 +88,5 @@ Keep in mind that work on some features is not yet complete due to time and hard
 | [EqM](https://github.com/raywang4/EqM) | repo | - Equilibrium matching adaptation | [raywang4](https://github.com/raywang4) | MIT | <sub>see also [paper](https://arxiv.org/abs/2510.02300)</sub>  |
 | [NorMuon](https://github.com/CoffeeVampir3/NorMuon) | repo | - Neuron-wise Normalized Muon implementation | [CoffeeVampir3](https://github.com/CoffeeVampir3) | MIT | |
 | [TiM](https://github.com/WZDTHU/TiM) | repo | - Transition training objective (paired timesteps, transports, weighting, EMA) | [WZDTHU](https://github.com/WZDTHU) | Apache 2.0 | <sub>see also [paper](https://arxiv.org/abs/2509.04394)</sub> |
+| [rcm](https://github.com/NVlabs/rcm) | repo | rCM distillation algorithm reference | [NVlabs](https://github.com/NVlabs) | Apache 2.0 | <sub>see also [paper](https://arxiv.org/abs/2510.08431)</sub> |
+

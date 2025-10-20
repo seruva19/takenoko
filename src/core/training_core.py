@@ -5,7 +5,7 @@ This module handles the main training loop, model calling, loss computation, and
 import argparse
 import math
 from contextlib import nullcontext
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 import torch
 from tqdm import tqdm
 import accelerate
@@ -110,6 +110,12 @@ from common.performance_logger import (
     start_optimizer_step_timing,
     end_optimizer_step_timing,
     end_step_timing,
+)
+
+from distillation.rcm_core.forward import (
+    RCMDenoiseResult,
+    estimate_trigflow_from_timesteps,
+    rcm_compute_forward,
 )
 
 
@@ -283,8 +289,27 @@ class TrainingCore:
         network_dtype: torch.dtype,
         control_signal_processor: Optional[Any] = None,
         controlnet: Optional[Any] = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
-        """Call the DiT model and compute target for loss calculation."""
+        *,
+        rcm_mode: bool = False,
+        rcm_trigflow: Optional[torch.Tensor] = None,
+        rcm_t_scaling_factor: Optional[float] = None,
+    ) -> Union[
+        Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]],
+        Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor], Optional[RCMDenoiseResult]],
+    ]:
+        """Call the DiT model and compute target for loss calculation.
+
+        Args:
+            rcm_mode: When ``True`` the method will additionally compute
+                rectified-flow predictions and return them as a fourth element.
+                The default behaviour (``False``) preserves the historical
+                3-tuple return contract.
+            rcm_trigflow: Optional pre-computed trigflow time tensor.  When
+                ``None`` a heuristic conversion from discrete timesteps is used.
+            rcm_t_scaling_factor: Allows overriding the scaling factor applied
+                to ``c_noise``; falls back to 1000 following the reference
+                implementation.
+        """
         model = transformer
 
         current_logging_level = getattr(args, "logging_level", "INFO").upper()
@@ -542,6 +567,37 @@ class TrainingCore:
                 "model_pred is detached from the graph before returning from call_dit"
             )
 
+        rcm_result: Optional[RCMDenoiseResult] = None
+        if rcm_mode:
+            base_train_steps = None
+            if getattr(self, "noise_scheduler", None) is not None:
+                base_train_steps = getattr(
+                    getattr(self.noise_scheduler, "config", {}), "num_train_timesteps", None
+                )
+            trigflow = (
+                rcm_trigflow
+                if rcm_trigflow is not None
+                else estimate_trigflow_from_timesteps(
+                    timesteps, base_num_train_timesteps=base_train_steps
+                )
+            )
+            scaling_factor = (
+                float(rcm_t_scaling_factor)
+                if rcm_t_scaling_factor is not None
+                else float(getattr(args, "rcm_t_scaling_factor", 1000.0))
+            )
+            try:
+                rcm_result = rcm_compute_forward(
+                    xt=noisy_model_input,
+                    model_output=model_pred,
+                    trigflow_t=trigflow,
+                    t_scaling_factor=scaling_factor,
+                )
+            except Exception as exc:  # pragma: no cover - rCM path is optional
+                if accelerator.is_local_main_process:
+                    logger.warning("RCM forward pass helper failed: %s", exc)
+                rcm_result = None
+
         # flow matching loss - compute target using perturbed latents if fluxflow is enabled
         # Support custom loss target computation
         enable_custom_target = getattr(args, "enable_custom_loss_target", False)
@@ -566,6 +622,8 @@ class TrainingCore:
                 device=accelerator.device, dtype=network_dtype
             )
 
+        if rcm_mode:
+            return model_pred, target, intermediate_z, rcm_result
         return model_pred, target, intermediate_z
 
     def run_training_loop(

@@ -53,6 +53,11 @@ from dataset.config_utils import (
     ConfigSanitizer,
 )
 
+try:
+    from distillation.rcm_bridge import dispatch_rcm_pipeline  # type: ignore
+except ImportError:  # pragma: no cover - optional dependency tree
+    dispatch_rcm_pipeline = None
+
 import accelerate
 from utils.memory_utils import configure_cuda_from_config
 from common.vram_estimator import (
@@ -997,6 +1002,23 @@ class UnifiedTrainer:
         self._log_acceleration_configuration()
 
         try:
+            # Route to RCM pipeline if enabled via config
+            if getattr(getattr(self.args, "rcm", None), "enabled", False):
+                if dispatch_rcm_pipeline is None:
+                    logger.error(
+                        "RCM pipeline requested but distillation.rcm_bridge is unavailable"
+                    )
+                    return False
+                logger.info(
+                    "?? RCM pipeline enabled via config – dispatching distillation runner"
+                )
+                return dispatch_rcm_pipeline(
+                    args=self.args,
+                    raw_config=self.config,
+                    raw_config_content=self.config_content,
+                    config_path=self.config_path,
+                )
+
             # Select trainer based on network_module configuration
             network_module = getattr(self.args, "network_module", "networks.lora_wan")
 
