@@ -1977,7 +1977,10 @@ fvdm_ptss_warmup = 1000
 
 # FVDM training enhancements
 # Weight for temporal consistency loss (0.0 = disabled)
-fvdm_temporal_consistency_weight = 0.1    
+# IMPROVED: Uses second-order motion derivatives with smooth L1 loss
+# This penalizes sudden inconsistencies (flickering, artifacts) while preserving smooth motion
+# Recommended values: 0.0 (disabled), 0.05-0.1 (mild), 0.2+ (strong)
+fvdm_temporal_consistency_weight = 0.1
 
 # Weight for frame diversity regularization (0.0 = disabled)
 fvdm_frame_diversity_weight = 0.0         

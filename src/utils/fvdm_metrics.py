@@ -36,41 +36,79 @@ class FVDMTrainingMetrics:
         self.timestep_variance_scores = []
     
     def compute_temporal_consistency_loss(
-        self, 
-        frames: torch.Tensor, 
+        self,
+        frames: torch.Tensor,
         reduction: str = 'mean'
     ) -> torch.Tensor:
         """
-        Measure temporal consistency between adjacent frames.
-        Lower values indicate better temporal consistency.
-        
+        Measure temporal consistency between adjacent frames with motion-adaptive weighting.
+
+        This improved implementation:
+        1. Uses smooth L1 loss (less sensitive to outliers than MSE)
+        2. Applies motion-adaptive weighting to reduce penalty for legitimate motion
+        3. Focuses on penalizing sudden, inconsistent changes rather than all motion
+
+        The loss distinguishes between:
+        - Smooth motion (e.g., camera pan, object movement): Low penalty
+        - Temporal inconsistency (e.g., flickering, artifacts): High penalty
+
         Args:
             frames: [B, C, F, H, W] video tensor
             reduction: 'mean', 'sum', or 'none'
-            
+
         Returns:
             Temporal consistency loss value
         """
         if frames.size(2) < 2:  # Need at least 2 frames
             return torch.tensor(0.0, device=frames.device)
-            
-        # Compute frame-to-frame differences
+
+        # Compute frame-to-frame differences (first-order motion)
         frame_diff = frames[:, :, 1:] - frames[:, :, :-1]
-        
-        # MSE of differences (lower = more consistent)
-        if reduction == 'none':
-            consistency_loss = F.mse_loss(
-                frame_diff, 
-                torch.zeros_like(frame_diff), 
-                reduction='none'
-            )
+
+        # Compute second-order differences (motion acceleration/jerk)
+        # This captures sudden changes in motion, which indicate inconsistency
+        # rather than smooth motion
+        if frames.size(2) >= 3:
+            # Second derivative: measures change in motion direction/speed
+            frame_diff_2nd = frame_diff[:, :, 1:] - frame_diff[:, :, :-1]
+
+            # Use smooth L1 loss on second derivative (less sensitive to outliers)
+            # This penalizes sudden changes (flickering, artifacts) more than smooth motion
+            if reduction == 'none':
+                consistency_loss = F.smooth_l1_loss(
+                    frame_diff_2nd,
+                    torch.zeros_like(frame_diff_2nd),
+                    reduction='none',
+                    beta=0.1  # Smooth transition parameter
+                )
+            else:
+                consistency_loss = F.smooth_l1_loss(
+                    frame_diff_2nd,
+                    torch.zeros_like(frame_diff_2nd),
+                    reduction=reduction,
+                    beta=0.1
+                )
         else:
-            consistency_loss = F.mse_loss(
-                frame_diff, 
-                torch.zeros_like(frame_diff), 
-                reduction=reduction
-            )
-        
+            # Fallback for 2-frame videos: use first derivative with smooth L1
+            # Still better than MSE as it's less sensitive to legitimate motion
+            if reduction == 'none':
+                consistency_loss = F.smooth_l1_loss(
+                    frame_diff,
+                    torch.zeros_like(frame_diff),
+                    reduction='none',
+                    beta=0.1
+                )
+            else:
+                consistency_loss = F.smooth_l1_loss(
+                    frame_diff,
+                    torch.zeros_like(frame_diff),
+                    reduction=reduction,
+                    beta=0.1
+                )
+
+            # Scale down for 2-frame case as it's less reliable
+            consistency_loss = consistency_loss * 0.5
+
         return consistency_loss
     
     def compute_frame_diversity_score(

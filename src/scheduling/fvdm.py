@@ -182,7 +182,7 @@ def get_noisy_model_input_and_timesteps_fvdm(
     noisy_model_input = (1.0 - sigma_broadcast) * latents + sigma_broadcast * noise
 
     # 4. Prepare discrete timesteps for the model's embedding layer
-    # WanModel expects timesteps in the integer range [0, 999]
-    timesteps_discrete = (sigma_cont * (T - 1)).round().long().clamp(0, T - 1)
+    # WanModel expects timesteps in the integer range [1, 1000] to match standard implementation
+    timesteps_discrete = (sigma_cont * T).round().long().clamp(1, T)
 
     return noisy_model_input, timesteps_discrete, sigma_cont

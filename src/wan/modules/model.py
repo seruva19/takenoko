@@ -890,6 +890,18 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
         # FVDM uses per-token modulation; force effective version to 2.2 when enabled
         self.use_fvdm = use_fvdm
         self.effective_model_version = "2.2" if self.use_fvdm else self.model_version
+
+        # Warn about Wan 2.1 + FVDM compatibility issues
+        if self.use_fvdm and self.model_version == "2.1":
+            logger.warning(
+                "⚠️  FVDM COMPATIBILITY WARNING: Training on Wan 2.1 with FVDM enabled\n"
+                "   FVDM requires per-token timestep embeddings, forcing internal use of Wan 2.2 architecture.\n"
+                "   This creates a training-inference mismatch:\n"
+                "   - Training: Uses 2.2-style per-token embeddings (e.shape=[B,L,C])\n"
+                "   - Inference: Standard 2.1 uses batch embeddings (e.shape=[B,C])\n"
+                "   ⚡ RECOMMENDATION: Use FVDM only with Wan 2.2 models for full compatibility.\n"
+                "   If training LORAs for Wan 2.1, test inference thoroughly before deployment."
+            )
         # gated features
         self.rope_on_the_fly = rope_on_the_fly
         self.broadcast_time_embed = broadcast_time_embed
