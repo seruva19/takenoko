@@ -1375,6 +1375,16 @@ class WanFinetuneTrainer:
                 run_tensorboard_analysis_for_trainer(
                     args, train_dataset_group, accelerator, global_step
                 )
+                
+                # Log dataset statistics to TensorBoard (only on first run, not on resume)
+                from utils.dataset_stats_logger import log_dataset_stats_to_tensorboard
+                
+                log_dataset_stats_to_tensorboard(
+                    accelerator,
+                    train_dataset_group,
+                    val_dataset_group=None,  # Finetune trainer doesn't have val group at this point
+                    global_step=global_step
+                )
             except Exception as e:
                 logger.warning(f"⚠️  TensorBoard test logging failed: {e}")
 
