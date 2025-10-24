@@ -81,19 +81,32 @@ def get_noisy_model_input_and_timesteps_fvdm(
 
     # Apply PTSS sampling
     is_async = torch.rand((), device=device) < ptss_p
-    if is_async:
-        # Asynchronous: Sample a different continuous time t for each frame
-        t_cont = torch.rand((B, F), device=device, dtype=dtype)
-    else:
-        # Synchronous: Sample one continuous time t for the whole clip
-        t_cont = torch.rand((B, 1), device=device, dtype=dtype).expand(B, F)
 
-    # 2. Apply min/max timestep constraints
-    # These are normalized to the [0, 1] range of t_cont
+    # Sample uniform values first
+    if is_async:
+        # Asynchronous: Sample a different uniform value for each frame
+        t_uniform = torch.rand((B, F), device=device, dtype=dtype)
+    else:
+        # Synchronous: Sample one uniform value for the whole clip
+        t_uniform = torch.rand((B, 1), device=device, dtype=dtype).expand(B, F)
+
+    # 2. Apply timestep_sampling distribution (LogSNR, uniform, etc.)
+    # Import here to avoid circular dependency
+    from scheduling.timestep_utils import map_uniform_to_sampling
+
+    # Transform uniform samples through the configured distribution
+    # This gives us t in [0, 1] range following the configured distribution
+    t_cont = map_uniform_to_sampling(args, t_uniform, latents)
+
+    # 3. Apply min/max timestep constraints
+    # Scale the [0,1] distribution to [min_timestep, max_timestep] range
+    # This preserves the shape of the distribution (LogSNR, etc.)
     original_min_timestep = int(getattr(args, "min_timestep", 0))
     original_max_timestep = int(getattr(args, "max_timestep", T))
     t_min = original_min_timestep / T
     t_max = original_max_timestep / T
+
+    # Scale from [0,1] to [t_min, t_max] while preserving distribution shape
     t_cont = t_cont * (t_max - t_min) + t_min
 
     # 2.5. Optional: Integrate with AdaptiveTimestepManager for importance-based sampling
@@ -148,15 +161,18 @@ def get_noisy_model_input_and_timesteps_fvdm(
                 "adaptive" if getattr(args, "fvdm_adaptive_ptss", False) else "fixed"
             )
             sampling_mode = "async" if is_async else "sync"
+            timestep_sampling = getattr(args, "timestep_sampling", "uniform")
             logger.info(
                 (
                     "⏰ FVDM PTSS applied | mode=%s | ptss_p=%.4f | sampling=%s | "
-                    "t_min_norm=%.4f | t_max_norm=%.4f | t_min_idx=%d | t_max_idx=%d | "
-                    "T=%d | step=%d | adaptive_integration=%s | resample_count=%d"
+                    "timestep_dist=%s | t_min_norm=%.4f | t_max_norm=%.4f | "
+                    "t_min_idx=%d | t_max_idx=%d | T=%d | step=%d | "
+                    "adaptive_integration=%s | resample_count=%d"
                 ),
                 ptss_mode,
                 float(ptss_p),
                 sampling_mode,
+                timestep_sampling,
                 float(t_min),
                 float(t_max),
                 int(original_min_timestep),

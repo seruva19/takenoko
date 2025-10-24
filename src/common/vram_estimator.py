@@ -237,6 +237,8 @@ def estimate_peak_vram_gb_from_config(
                 for li in range(s, e + 1):
                     # Use min to avoid overestimating reduction if multiple routes overlap
                     keep_per_layer[li] = min(keep_per_layer[li], keep_ratio)
+    else:
+        routes = []  # Empty routes list when TREAD is disabled
 
     # Average keep ratio across layers (1.0 = no reduction)
     tread_avg_keep_ratio = sum(keep_per_layer) / float(max(1, len(keep_per_layer)))
@@ -259,7 +261,7 @@ def estimate_peak_vram_gb_from_config(
     # especially with selective routing at later layers where activations are largest
     tread_effective_reduction = tread_avg_keep_ratio
     if tread_enabled and tread_routes_count > 0:
-        # For aggressive routing configurations (selection_ratio >= 0.1), 
+        # For aggressive routing configurations (selection_ratio >= 0.1),
         # the actual memory reduction is often 20-30% better than the average would suggest
         # because later layers where most memory is used get more aggressive routing
         max_selection_ratio = 0.0
@@ -270,11 +272,11 @@ def estimate_peak_vram_gb_from_config(
                     max_selection_ratio = max(max_selection_ratio, sel)
                 except Exception:
                     pass
-        
+
         if max_selection_ratio >= 0.1:  # Aggressive routing
             # Apply an additional 20-30% reduction for realistic behavior
             tread_effective_reduction = tread_avg_keep_ratio * 0.75
-    
+
     activations_bytes = int(
         activations_bytes_base
         * float(tread_effective_reduction)
@@ -430,7 +432,7 @@ def estimate_peak_vram_gb_from_config(
         + training_overhead_bytes
         + model_bytes
     )
-    
+
     # Apply compound optimization efficiency factor for real-world usage
     # When multiple optimizations are combined (full_bf16 + fused_backward + stochastic_rounding + block_swapping + TREAD),
     # the actual memory usage is often 10-20% lower than the sum of individual optimizations suggests
@@ -446,12 +448,34 @@ def estimate_peak_vram_gb_from_config(
         optimization_count += 1
     if tread_enabled and tread_routes_count > 0:
         optimization_count += 1
-    
+
     # Apply compound efficiency factor for highly optimized configurations
     if optimization_count >= 3:  # Multiple optimizations enabled
-        compound_efficiency_factor = 0.85 - (optimization_count - 3) * 0.03  # Up to 15% additional reduction
+        compound_efficiency_factor = (
+            0.85 - (optimization_count - 3) * 0.03
+        )  # Up to 15% additional reduction
         total_bytes = int(total_bytes * max(0.75, compound_efficiency_factor))
-    
+
+    # Add real-world overhead that theoretical calculations miss
+    # These are empirically-derived constants based on observed training runs
+    cuda_context_overhead_gb = 0.3  # CUDA context initialization (~300 MB)
+    allocator_fragmentation_factor = 1.12  # PyTorch allocator overhead (12% typical)
+    misc_buffer_overhead_gb = 0.15  # Logging, profiling, misc buffers (~150 MB)
+
+    # Apply fragmentation factor first
+    total_bytes = int(total_bytes * allocator_fragmentation_factor)
+
+    # Add fixed overheads
+    overhead_bytes = int(
+        (cuda_context_overhead_gb + misc_buffer_overhead_gb) * (1024**3)
+    )
+    total_bytes += overhead_bytes
+
+    # Store pre-overhead estimate for comparison
+    theoretical_gb = (total_bytes - overhead_bytes) / (
+        allocator_fragmentation_factor * (1024**3)
+    )
+
     gb = total_bytes / (1024**3)
 
     details = {
@@ -502,6 +526,13 @@ def estimate_peak_vram_gb_from_config(
         "gradient_memory_reduction": gradient_memory_reduction,
         "optimizer_memory_reduction": optimizer_memory_reduction,
         "activation_memory_reduction": activation_memory_reduction,
+        # Overhead accounting
+        "theoretical_gb": theoretical_gb,
+        "cuda_context_overhead_gb": cuda_context_overhead_gb,
+        "allocator_fragmentation_factor": allocator_fragmentation_factor,
+        "misc_buffer_overhead_gb": misc_buffer_overhead_gb,
+        "total_overhead_gb": (overhead_bytes / (1024**3))
+        + (theoretical_gb * (allocator_fragmentation_factor - 1.0)),
     }
     return gb, details
 
@@ -521,6 +552,14 @@ def log_vram_estimation(
 
     # Main estimation result
     logger.info("🧠 Estimated peak VRAM usage (per device): {:.2f} GB".format(gb))
+
+    # Show overhead breakdown if available
+    if "total_overhead_gb" in details:
+        logger.info(
+            "   ⚙️  Overhead accounted: {:.2f} GB (CUDA context + fragmentation + buffers)".format(
+                details["total_overhead_gb"]
+            )
+        )
 
     # Shape and basic configuration info
     logger.info(
@@ -639,3 +678,70 @@ def estimate_and_log_vram(
     gb, details = estimate_peak_vram_gb_from_config(config)
     log_vram_estimation(gb, details, logger)
     return gb, details
+
+
+def log_vram_comparison(
+    estimated_gb: float,
+    actual_gb: float,
+    details: Optional[Dict[str, Any]] = None,
+    logger: Optional[logging.Logger] = None,
+) -> None:
+    """Log comparison between estimated and actual VRAM usage.
+
+    Call this after first training step to validate estimator accuracy.
+
+    Args:
+        estimated_gb: VRAM estimate from estimate_peak_vram_gb_from_config()
+        actual_gb: Actual peak VRAM from torch.cuda.max_memory_allocated()
+        details: Optional details dict from estimator for more context
+        logger: Logger instance to use (defaults to module logger)
+    """
+    if logger is None:
+        logger = logging.getLogger(__name__)
+
+    diff_gb = actual_gb - estimated_gb
+    diff_pct = ((actual_gb / estimated_gb) - 1.0) * 100 if estimated_gb > 0 else 0.0
+
+    # Determine accuracy level
+    if abs(diff_pct) <= 10:
+        level = "✅ EXCELLENT"
+        icon = "✅"
+    elif abs(diff_pct) <= 20:
+        level = "✅ GOOD"
+        icon = "🞹"
+    elif abs(diff_pct) <= 30:
+        level = "⚠️ WARNING"
+        icon = "⚠️"
+    else:
+        level = "❌ POOR"
+        icon = "❌"
+
+    logger.info("")
+    logger.info("📊 VRAM Estimation Accuracy Check")
+    logger.info("   Estimated: {:.2f} GB".format(estimated_gb))
+    logger.info("   Actual:    {:.2f} GB".format(actual_gb))
+    logger.info("   Difference: {:+.2f} GB ({:+.1f}%)".format(diff_gb, diff_pct))
+    logger.info("   Accuracy:  {} {}".format(icon, level))
+
+    # Provide context if available
+    if details:
+        if diff_pct > 30:
+            logger.warning("   ⚠️  Large underestimate! Possible causes:")
+            if details.get("fused_backward_pass", False):
+                logger.warning(
+                    "      - Fused backward may not be as effective as estimated"
+                )
+            if details.get("blocks_to_swap", 0) > 0:
+                logger.warning(
+                    "      - Block swapping may be keeping blocks in cached allocator"
+                )
+            if details.get("tread_enabled", False):
+                logger.warning(
+                    "      - TREAD reduction may be less aggressive than estimated"
+                )
+        elif diff_pct < -15:
+            logger.info(
+                "   🎉 Actual usage lower than estimate - optimizations working well!"
+            )
+
+    logger.info("")

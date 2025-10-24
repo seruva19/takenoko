@@ -383,6 +383,7 @@ class UnifiedTrainer:
     def show_menu(self) -> str:
         """Display the main menu and get user choice (legacy method)"""
         from menu.operations_menu import create_operations_menu
+
         menu = create_operations_menu(self)
         return menu.display()
 
@@ -1001,6 +1002,11 @@ class UnifiedTrainer:
         # Log acceleration configuration
         self._log_acceleration_configuration()
 
+        # Estimate and store VRAM usage for later validation (if enabled)
+        from core.handlers.vram_validation_handler import estimate_and_store_vram
+
+        estimate_and_store_vram(self.args, self.config)
+
         try:
             # Route to RCM pipeline if enabled via config
             if getattr(getattr(self.args, "rcm", None), "enabled", False):
@@ -1076,6 +1082,7 @@ class UnifiedTrainer:
 
         # Use the new menu system
         from menu.operations_menu import create_operations_menu
+
         menu = create_operations_menu(self)
         menu.run(self)
 

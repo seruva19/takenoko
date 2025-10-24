@@ -100,6 +100,7 @@ from core.handlers.saving_handler import (
 )
 from core.handlers.adaptive_handler import handle_adaptive_timestep_sampling
 from core.handlers.self_correction_handler import handle_self_correction_update
+from core.handlers.vram_validation_handler import handle_vram_validation_if_enabled
 
 from common.performance_logger import (
     start_step_timing,
@@ -117,8 +118,6 @@ from distillation.rcm_core.forward import (
     estimate_trigflow_from_timesteps,
     rcm_compute_forward,
 )
-
-
 
 
 class TrainingCore:
@@ -273,9 +272,6 @@ class TrainingCore:
         self._iter_time_ema_sec = new_ema
         return new_ema
 
-
-
-
     def call_dit(
         self,
         args: argparse.Namespace,
@@ -295,7 +291,12 @@ class TrainingCore:
         rcm_t_scaling_factor: Optional[float] = None,
     ) -> Union[
         Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]],
-        Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor], Optional[RCMDenoiseResult]],
+        Tuple[
+            torch.Tensor,
+            torch.Tensor,
+            Optional[torch.Tensor],
+            Optional[RCMDenoiseResult],
+        ],
     ]:
         """Call the DiT model and compute target for loss calculation.
 
@@ -363,7 +364,9 @@ class TrainingCore:
         control_latents = None
         if hasattr(args, "enable_control_lora") and args.enable_control_lora:
             # Log that control LoRA is engaged
-            logger.info("Р РѓР Р‡Р С›Р С— Control LoRA processing engaged in training loop")
+            logger.info(
+                "Р РѓР Р‡Р С›Р С— Control LoRA processing engaged in training loop"
+            )
 
             # Pass VAE to control signal processing (must be provided by training loop)
             vae = (
@@ -572,7 +575,9 @@ class TrainingCore:
             base_train_steps = None
             if getattr(self, "noise_scheduler", None) is not None:
                 base_train_steps = getattr(
-                    getattr(self.noise_scheduler, "config", {}), "num_train_timesteps", None
+                    getattr(self.noise_scheduler, "config", {}),
+                    "num_train_timesteps",
+                    None,
                 )
             trigflow = (
                 rcm_trigflow
@@ -601,7 +606,11 @@ class TrainingCore:
         # flow matching loss - compute target using perturbed latents if fluxflow is enabled
         # Support custom loss target computation
         enable_custom_target = getattr(args, "enable_custom_loss_target", False)
-        if enable_custom_target and self.noise_scheduler is not None and hasattr(self.noise_scheduler, "get_loss_target"):
+        if (
+            enable_custom_target
+            and self.noise_scheduler is not None
+            and hasattr(self.noise_scheduler, "get_loss_target")
+        ):
             try:
                 target = self.noise_scheduler.get_loss_target(
                     noise=noise,
@@ -671,9 +680,13 @@ class TrainingCore:
 
         transition_cfg = getattr(args, "transition_training", None)
         if transition_cfg and getattr(transition_cfg, "enabled", False):
-            self.transition_manager = TransitionTrainingManager(args=args, config=transition_cfg)
+            self.transition_manager = TransitionTrainingManager(
+                args=args, config=transition_cfg
+            )
             try:
-                self.transition_manager.attach_teacher(accelerator.unwrap_model(transformer))
+                self.transition_manager.attach_teacher(
+                    accelerator.unwrap_model(transformer)
+                )
             except Exception:
                 pass
         else:
@@ -855,13 +868,21 @@ class TrainingCore:
                     # Sample noise that we'll add to the latents
                     noise = torch.randn_like(latents)
 
-                    # Use unified FVDM manager for clean interface
                     if self.fvdm_manager.enabled:
                         # FVDM is enabled - use FVDM manager
                         noisy_model_input, timesteps, sigmas = (
                             self.fvdm_manager.get_noisy_input_and_timesteps(
                                 noise, latents, noise_scheduler, dit_dtype, step
                             )
+                        )
+
+                        # Compute weighting for FVDM timesteps
+                        weighting = compute_loss_weighting_for_sd3(
+                            args.weighting_scheme,
+                            noise_scheduler,
+                            timesteps,
+                            accelerator.device,
+                            dit_dtype,
                         )
                     else:
                         # Initialize timestep distribution if needed
@@ -894,20 +915,20 @@ class TrainingCore:
                         except Exception:
                             pass
 
-
-
-                    # calculate model input and timesteps
-                    noisy_model_input, timesteps, sigmas, weighting = prepare_standard_training_inputs(
-                        args,
-                        accelerator,
-                        latents,
-                        noise,
-                        noise_scheduler,
-                        dit_dtype,
-                        self.timestep_distribution,
-                        dual_model_manager,
-                        batch,
-                    )
+                        # Calculate model input and timesteps (standard path)
+                        noisy_model_input, timesteps, sigmas, weighting = (
+                            prepare_standard_training_inputs(
+                                args,
+                                accelerator,
+                                latents,
+                                noise,
+                                noise_scheduler,
+                                dit_dtype,
+                                self.timestep_distribution,
+                                dual_model_manager,
+                                batch,
+                            )
+                        )
 
                     transition_reference_timesteps = None
                     need_intermediate = False
@@ -930,8 +951,10 @@ class TrainingCore:
                             timesteps = prepared_transition.timesteps.to(
                                 device=accelerator.device, dtype=dit_dtype
                             )
-                            transition_reference_timesteps = prepared_transition.reference_timesteps.to(
-                                device=accelerator.device, dtype=dit_dtype
+                            transition_reference_timesteps = (
+                                prepared_transition.reference_timesteps.to(
+                                    device=accelerator.device, dtype=dit_dtype
+                                )
                             )
                             weighting = prepared_transition.weights.to(
                                 device=accelerator.device, dtype=network_dtype
@@ -981,7 +1004,9 @@ class TrainingCore:
                         )
 
                         if self.eqm_training_helper is None:
-                            raise RuntimeError("EqM training helper was not initialised.")
+                            raise RuntimeError(
+                                "EqM training helper was not initialised."
+                            )
 
                         eqm_result = self.eqm_training_helper.prepare_forward(
                             transformer=active_transformer,
@@ -1067,18 +1092,27 @@ class TrainingCore:
                             )
                             continue
 
-                        model_pred, target, intermediate_z = model_result
+                        # Unpack model result - handle both 3-tuple and 4-tuple returns
+                        # (4-tuple is returned when rcm_mode=True, includes rcm_result)
+                        if len(model_result) == 4:
+                            model_pred, target, intermediate_z, _ = model_result
+                        else:
+                            model_pred, target, intermediate_z = model_result
 
                         transition_loss_context = {"transition_training_enabled": False}
                         per_sample_transition_loss = None
 
                         if active_transition_manager is not None:
 
-                            def _transition_forward(model_input: torch.Tensor, step_tensor: torch.Tensor) -> torch.Tensor:
-                                local_ctx = active_transition_manager.lora_modulation_context(
-                                    accelerator.unwrap_model(network),
-                                    step_tensor,
-                                    step_tensor,
+                            def _transition_forward(
+                                model_input: torch.Tensor, step_tensor: torch.Tensor
+                            ) -> torch.Tensor:
+                                local_ctx = (
+                                    active_transition_manager.lora_modulation_context(
+                                        accelerator.unwrap_model(network),
+                                        step_tensor,
+                                        step_tensor,
+                                    )
                                 )
                                 with local_ctx:
                                     pred, _, _ = self.call_dit(
@@ -1119,12 +1153,18 @@ class TrainingCore:
                                 if transition_weighting is not None:
                                     weighting = transition_weighting
                                 if transition_metrics and accelerator.is_main_process:
-                                    accelerator.log(transition_metrics, step=global_step)
+                                    accelerator.log(
+                                        transition_metrics, step=global_step
+                                    )
                                 transition_loss_context = {
                                     "transition_training_enabled": True,
                                     "per_sample_loss": per_sample_transition_loss,
                                     "directional_loss": transition_directional_loss,
-                                    "directional_weight": getattr(self.transition_manager, "directional_weight", 0.0),
+                                    "directional_weight": getattr(
+                                        self.transition_manager,
+                                        "directional_weight",
+                                        0.0,
+                                    ),
                                 }
                         # Context memory processing
                         context_memory_loss, context_stats = (
@@ -1183,7 +1223,9 @@ class TrainingCore:
                                     sample_weights_local,
                                 )
                             except Exception as e:
-                                logger.debug(f"⚠️  Failed to compute per-source losses: {e}")
+                                logger.debug(
+                                    f"⚠️  Failed to compute per-source losses: {e}"
+                                )
                                 per_source_losses = {}
 
                         if not eqm_enabled:
@@ -1207,14 +1249,15 @@ class TrainingCore:
                                 intermediate_z=intermediate_z,
                                 vae=vae,
                                 control_signal_processor=control_signal_processor,
-                                repa_helper=repa_helper if sara_helper is None else None,
+                                repa_helper=(
+                                    repa_helper if sara_helper is None else None
+                                ),
                                 sara_helper=sara_helper,
                                 raft=getattr(self, "raft", None),
                                 warp_fn=getattr(self, "warp", None),
                                 adaptive_manager=self.adaptive_manager,
                                 transition_loss_context=transition_loss_context,
                             )
-
 
                     # Integrate context memory loss into total loss
                     self.context_memory_manager.integrate_context_loss(
@@ -1343,7 +1386,9 @@ class TrainingCore:
                         try:
                             gradient_norm = _compute_gradient_norm(network)
                         except Exception as e:
-                            logger.debug(f"РЎвЂљР Р„Р В°РЎРЏРІвЂўвЂўР Сџ Failed to compute gradient norm: {e}")
+                            logger.debug(
+                                f"РЎвЂљР Р„Р В°РЎРЏРІвЂўвЂўР Сџ Failed to compute gradient norm: {e}"
+                            )
 
                 if accelerator.sync_gradients:
                     # Trigger before_gradient_clipping junction event
@@ -1662,6 +1707,9 @@ class TrainingCore:
 
                 # End step timing
                 end_step_timing()
+
+                # Validate VRAM estimate vs actual (if enabled, only on first step)
+                handle_vram_validation_if_enabled(args, global_step, accelerator)
 
                 if global_step >= args.max_train_steps:
                     break

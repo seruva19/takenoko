@@ -2418,6 +2418,11 @@ log_throughput_metrics = true
 # Window size for throughput calculation (number of recent steps to average)
 throughput_window_size = 100
 
+# Enable automatic VRAM estimation validation after first training step
+# Compares estimated VRAM vs actual peak usage
+# Provides accuracy feedback to help calibrate expectations
+log_vram_validation = false
+
 # Progress bar postfix metrics mode:
 # true  - alternate each step between showing timing (step_ms) and hardware metrics (peak/util)
 # false - show both timing and hardware metrics every step
@@ -2897,10 +2902,11 @@ num_repeats = 1
 # - middle: take centered window, requires setting target_frames.
 # - chunk: non-overlapping contiguous windows of length target_frame across the video, requires setting target_frames.
 # - slide: sliding windows, requires setting target_frames and frame_stride (>=1), default is 1. Overlap (frames) = target_frame - frame_stride.
-# - slide_end: sliding windows that guarantee the final window ends at the last frame.
-# If the video is shorter than target_frame, produce a single full-length window. Requires target_frames and frame_stride (>=1). Overlap (frames) = target_frame - frame_stride.
+# - slide_end: sliding windows that guarantee the final window ends at the last frame. If the video is shorter than target_frame, produce a single full-length window. Requires target_frames and frame_stride (>=1). Overlap (frames) = target_frame - frame_stride.
 # - uniform: fixed count of evenly spaced start positions, requires setting target_frames and frame_sample (>=1). If frame_sample == 1, it is auto-changed to "head" by the loader.
 # - multiple_overlapping: minimally cover the video with windows (may overlap), end-aligned, requires setting target_frames.
+# - adaptive: intelligently handles variable clip lengths - if shorter than target, takes whole clip; if longer, takes multiple fragments with possible overlap, max_frames caps the effective video length, requires setting target_frames.
+# - uniform_adaptive: uniform sampling that accepts short videos - if shorter than target, takes whole clip; if longer, uses uniform sampling, max_frames caps the effective video length, requires setting target_frames and frame_sample.
 # - full: use up to max_frames (rounded to N*4+1) starting at 0, requires setting target_frames to be non-empty.
 # Uses max_frames to cap length (optional). If multiple target_frames are provided, one identical (0, use_frames) window is produced per entry; recommended target_frames = [1].
 frame_extraction = "uniform"

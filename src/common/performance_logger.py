@@ -564,15 +564,8 @@ class PerformanceLogger:
         metrics = {}
 
         try:
-            # Basic CUDA memory metrics
-            if torch.cuda.is_available():
-                device = torch.device("cuda")
-                peak_allocated = torch.cuda.max_memory_allocated(device) / (1024**3)
-
-                if peak_allocated > 0.1:
-                    metrics["peak"] = f"{peak_allocated:.2f} GiB"
-
-            # Enhanced GPU metrics with nvidia-ml-py
+            # Try enhanced GPU metrics with nvidia-ml-py first (more accurate)
+            nvml_available = False
             try:
                 import pynvml  # nvidia-ml-py package
 
@@ -581,23 +574,37 @@ class PerformanceLogger:
                 meminfo = pynvml.nvmlDeviceGetMemoryInfo(handle)
                 utilization = pynvml.nvmlDeviceGetUtilizationRates(handle)
 
-                # Add VRAM usage
+                # Current VRAM usage (actual hardware-level memory in use)
                 vram_used = float(meminfo.used) / 1024**3
-                metrics["peak"] = f"{vram_used:.2f} GiB"
+                metrics["vram"] = f"{vram_used:.2f} GiB"
 
-                # Add GPU utilization
+                # GPU utilization percentage
                 metrics["util"] = f"{utilization.gpu}%"
 
-                # Add memory utilization
+                # Memory utilization percentage
                 memory_util = (meminfo.used / meminfo.total) * 100  # type: ignore
                 metrics["mem_util"] = f"{memory_util:.1f}%"
 
                 pynvml.nvmlShutdown()
+                nvml_available = True
 
             except Exception as e:
                 logger.debug(f"Failed to get nvidia-ml-py metrics: {e}")
                 # Fallback to basic CUDA metrics
                 pass
+
+            # Add PyTorch peak allocated memory (if NVML not available or as additional metric)
+            if torch.cuda.is_available():
+                device = torch.device("cuda")
+                peak_allocated = torch.cuda.max_memory_allocated(device) / (1024**3)
+
+                if peak_allocated > 0.1:
+                    # If NVML provided current usage, show peak as separate metric
+                    if nvml_available:
+                        metrics["peak"] = f"{peak_allocated:.2f} GiB"
+                    else:
+                        # Fallback: show peak as main metric if NVML unavailable
+                        metrics["vram"] = f"{peak_allocated:.2f} GiB"
 
             # Add memory tracker metrics if available
             if MEMORY_TRACKER_AVAILABLE:

@@ -731,6 +731,9 @@ def create_args_from_config(
     # Progress postfix alternation settings
     args.alternate_perf_postfix = config.get("alternate_perf_postfix", True)
 
+    # VRAM estimation validation logging
+    args.log_vram_validation = config.get("log_vram_validation", False)
+
     # TensorBoard server settings
     args.launch_tensorboard_server = config.get("launch_tensorboard_server", True)
     args.tensorboard_host = config.get("tensorboard_host", "127.0.0.1")
