@@ -116,8 +116,8 @@ def estimate_latent_cache_chunks_per_dataset(
 ) -> List[dict[str, Any]]:
     """Estimate chunk counts per dataset for latent caching.
 
-    Returns a list of dicts with keys: 'video_directory' and 'chunks'. Datasets
-    without a video_directory are skipped.
+    Returns a list of dicts with keys: 'video_directory', 'chunks', 'caption_extension',
+    'latents_cache_dir'. Datasets without a video_directory are skipped.
     """
     blueprint_generator = BlueprintGenerator(ConfigSanitizer())
     user_config = config_utils.load_user_config(dataset_config_path)
@@ -149,6 +149,10 @@ def estimate_latent_cache_chunks_per_dataset(
         frame_sample: int = int(getattr(ds, "frame_sample", 1) or 1)
         max_frames = getattr(ds, "max_frames", None)
 
+        # Get distinguishing info
+        caption_ext = getattr(ds, "caption_extension", ".txt")
+        cache_dir = getattr(ds, "latents_cache_dir", None)
+
         ds_chunks = 0
         for vp in video_paths:
             frame_count = _safe_count_video_frames(vp)
@@ -164,6 +168,13 @@ def estimate_latent_cache_chunks_per_dataset(
             )
             ds_chunks += len(pairs)
 
-        breakdown.append({"video_directory": vdir, "chunks": ds_chunks})
+        breakdown.append(
+            {
+                "video_directory": vdir,
+                "chunks": ds_chunks,
+                "caption_extension": caption_ext,
+                "latents_cache_dir": cache_dir,
+            }
+        )
 
     return breakdown

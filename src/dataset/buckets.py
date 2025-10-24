@@ -1,6 +1,6 @@
 import math
 import random
-from typing import Any, Tuple
+from typing import Any, Optional, Tuple
 import logging
 import os
 import numpy as np
@@ -9,6 +9,7 @@ import torch
 
 from dataset.item_info import ItemInfo
 from common.logger import get_logger
+from common.constants import RESOLUTION_STEPS_WAN_2
 from memory.safetensors_loader import load_file
 
 
@@ -20,20 +21,34 @@ def divisible_by(num: int, divisor: int) -> int:
 
 
 class BucketSelector:
-    # TODO: REFACTOR - Hardcoded constant should be configurable per architecture
-    RESOLUTION_STEPS_WAN_2 = 16
 
     def __init__(
         self,
         resolution: Tuple[int, int],
         enable_bucket: bool = True,
         no_upscale: bool = False,
+        constraint_type: str = "area",
+        constrained_dimension: Optional[str] = None,
     ):
+        """
+        Initialize bucket selector.
+
+        Args:
+            resolution: Base resolution (width, height)
+            enable_bucket: Enable multi-resolution bucketing
+            no_upscale: Prevent upscaling images smaller than bucket area
+            constraint_type: "area" (default) or "dimension"
+                - "area": All buckets have same pixel area, varying ARs (backward compatible)
+                - "dimension": Buckets have fixed width or height, other dimension varies with AR
+            constrained_dimension: "width" or "height" (only used when constraint_type="dimension")
+        """
         # TODO: REFACTOR - Complex bucket calculation logic should be extracted to separate methods
         self.resolution = resolution
         self.bucket_area = resolution[0] * resolution[1]
+        self.constraint_type = constraint_type
+        self.constrained_dimension = constrained_dimension
 
-        self.reso_steps = BucketSelector.RESOLUTION_STEPS_WAN_2
+        self.reso_steps = RESOLUTION_STEPS_WAN_2
 
         if not enable_bucket:
             # only define one bucket
@@ -42,13 +57,25 @@ class BucketSelector:
         else:
             # prepare bucket resolution
             self.no_upscale = no_upscale
-            sqrt_size = int(math.sqrt(self.bucket_area))
-            min_size = divisible_by(sqrt_size // 2, self.reso_steps)
-            self.bucket_resolutions = []
-            for w in range(min_size, sqrt_size + self.reso_steps, self.reso_steps):
-                h = divisible_by(self.bucket_area // w, self.reso_steps)
-                self.bucket_resolutions.append((w, h))
-                self.bucket_resolutions.append((h, w))
+
+            if constraint_type == "dimension":
+                # Dimension-constrained mode: buckets have fixed width or height
+                # This mode is used with resolution formats like [512, ] or [, 512]
+                # Buckets are created dynamically in get_bucket_resolution(), so we don't
+                # pre-generate them here (they vary per image aspect ratio)
+                logger.info(f"🔧 Using dimension-constrained bucketing mode")
+                logger.info(f"   Base resolution: {resolution}")
+                logger.info(f"   Constrained dimension: {constrained_dimension}")
+                self.bucket_resolutions = []  # Empty - buckets created dynamically
+            else:
+                # Area-constrained mode (default, backward compatible)
+                sqrt_size = int(math.sqrt(self.bucket_area))
+                min_size = divisible_by(sqrt_size // 2, self.reso_steps)
+                self.bucket_resolutions = []
+                for w in range(min_size, sqrt_size + self.reso_steps, self.reso_steps):
+                    h = divisible_by(self.bucket_area // w, self.reso_steps)
+                    self.bucket_resolutions.append((w, h))
+                    self.bucket_resolutions.append((h, w))
 
             self.bucket_resolutions = list(set(self.bucket_resolutions))
             self.bucket_resolutions.sort()
@@ -60,6 +87,68 @@ class BucketSelector:
         """
         return the bucket resolution for the given image size, (width, height)
         """
+        if self.constraint_type == "dimension":
+            if not self.constrained_dimension:
+                logger.warning(
+                    f"⚠️  Dimension-constrained mode enabled but constrained_dimension is None! "
+                    f"Falling back to area-constrained mode for image {image_size}"
+                )
+                # Fall through to area mode
+            else:
+                # Dimension-constrained mode: preserve aspect ratio with fixed dimension
+                image_width, image_height = image_size
+                image_ar = image_width / image_height
+                image_area = image_width * image_height
+
+                if self.constrained_dimension == "width":
+                    # Width is constrained, calculate height from image's AR
+                    constrained_width = self.resolution[0]
+                    bucket_height = int(constrained_width / image_ar)
+                    bucket_height = divisible_by(bucket_height, self.reso_steps)
+                    # Ensure minimum height
+                    if bucket_height < self.reso_steps:
+                        bucket_height = self.reso_steps
+
+                    # Check no_upscale: don't create bucket larger than original image
+                    bucket_area = constrained_width * bucket_height
+                    if self.no_upscale and bucket_area > image_area:
+                        # Bucket would be larger than image - use image size rounded to step
+                        logger.debug(
+                            f"no_upscale: image {image_size} smaller than bucket ({constrained_width}, {bucket_height}), "
+                            f"using image size"
+                        )
+                        return (
+                            divisible_by(image_width, self.reso_steps),
+                            divisible_by(image_height, self.reso_steps),
+                        )
+
+                    return (constrained_width, bucket_height)
+
+                elif self.constrained_dimension == "height":
+                    # Height is constrained, calculate width from image's AR
+                    constrained_height = self.resolution[1]
+                    bucket_width = int(constrained_height * image_ar)
+                    bucket_width = divisible_by(bucket_width, self.reso_steps)
+                    # Ensure minimum width
+                    if bucket_width < self.reso_steps:
+                        bucket_width = self.reso_steps
+
+                    # Check no_upscale: don't create bucket larger than original image
+                    bucket_area = bucket_width * constrained_height
+                    if self.no_upscale and bucket_area > image_area:
+                        # Bucket would be larger than image - use image size rounded to step
+                        logger.debug(
+                            f"no_upscale: image {image_size} smaller than bucket ({bucket_width}, {constrained_height}), "
+                            f"using image size"
+                        )
+                        return (
+                            divisible_by(image_width, self.reso_steps),
+                            divisible_by(image_height, self.reso_steps),
+                        )
+
+                    return (bucket_width, constrained_height)
+
+        # Area-constrained mode (default, backward compatible)
         area = image_size[0] * image_size[1]
         if self.no_upscale and area <= self.bucket_area:
             w, h = image_size
@@ -117,7 +206,9 @@ class BucketBatchManager:
             if len(bucket) < (self.batch_size / 2):
 
                 if not already_warned_underfilled_bucket:
-                    logger.warning(f"These buckets have too few entries to even half fill the batch_size:")
+                    logger.warning(
+                        f"These buckets have too few entries to even half fill the batch_size:"
+                    )
                     already_warned_underfilled_bucket = True
 
                 # Get sample filename from the first item in the bucket
@@ -128,11 +219,17 @@ class BucketBatchManager:
 
                     display_filename_len = 55
                     if sample_filename and len(sample_filename) > display_filename_len:
-                        sample_filename = f"...{sample_filename[-(display_filename_len - 3):]}"
+                        sample_filename = (
+                            f"...{sample_filename[-(display_filename_len - 3):]}"
+                        )
 
-                    logger.warning(f"  bucket {bucket_reso}: {len(bucket)} items (example: {sample_filename})")
+                    logger.warning(
+                        f"  bucket {bucket_reso}: {len(bucket)} items (example: {sample_filename})"
+                    )
                 else:
-                    logger.warning(f"  bucket {bucket_reso}: {len(bucket)} items (empty bucket)")
+                    logger.warning(
+                        f"  bucket {bucket_reso}: {len(bucket)} items (empty bucket)"
+                    )
 
     def shuffle(self):
         # shuffle each bucket

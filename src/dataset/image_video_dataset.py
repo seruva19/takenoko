@@ -64,6 +64,8 @@ class BaseDataset(torch.utils.data.Dataset):
         num_repeats: int = 1,
         enable_bucket: bool = False,
         bucket_no_upscale: bool = False,
+        bucket_constraint_type: str = "area",
+        _constrained_dimension: Optional[str] = None,
         cache_directory: Optional[str] = None,
         debug_dataset: bool = False,
         is_val: bool = False,
@@ -80,6 +82,8 @@ class BaseDataset(torch.utils.data.Dataset):
         self.num_repeats = num_repeats
         self.enable_bucket = enable_bucket
         self.bucket_no_upscale = bucket_no_upscale
+        self.bucket_constraint_type = bucket_constraint_type
+        self._constrained_dimension = _constrained_dimension
         self.cache_directory = cache_directory
         self.debug_dataset = debug_dataset
         self.is_val = is_val
@@ -381,6 +385,8 @@ class ImageDataset(BaseDataset):
         num_repeats: int,
         enable_bucket: bool,
         bucket_no_upscale: bool,
+        bucket_constraint_type: str = "area",
+        _constrained_dimension: Optional[str] = None,
         image_directory: Optional[str] = None,
         cache_directory: Optional[str] = None,
         debug_dataset: bool = False,
@@ -400,6 +406,8 @@ class ImageDataset(BaseDataset):
             num_repeats=num_repeats,
             enable_bucket=enable_bucket,
             bucket_no_upscale=bucket_no_upscale,
+            bucket_constraint_type=bucket_constraint_type,
+            _constrained_dimension=_constrained_dimension,
             cache_directory=cache_directory,
             debug_dataset=debug_dataset,
             is_val=is_val,
@@ -463,6 +471,8 @@ class ImageDataset(BaseDataset):
             self.resolution,
             self.enable_bucket,
             self.bucket_no_upscale,
+            self.bucket_constraint_type,
+            self._constrained_dimension,
         )
         executor = ThreadPoolExecutor(max_workers=num_workers)
 
@@ -623,6 +633,8 @@ class ImageDataset(BaseDataset):
             self.resolution,
             self.enable_bucket,
             self.bucket_no_upscale,
+            self.bucket_constraint_type,
+            self._constrained_dimension,
         )
 
         # glob cache files
@@ -893,6 +905,8 @@ class VideoDataset(BaseDataset):
         num_repeats: int,
         enable_bucket: bool,
         bucket_no_upscale: bool,
+        bucket_constraint_type: str = "area",
+        _constrained_dimension: Optional[str] = None,
         frame_extraction: Optional[str] = "head",
         frame_stride: Optional[int] = 1,
         frame_sample: Optional[int] = 1,
@@ -918,6 +932,8 @@ class VideoDataset(BaseDataset):
             num_repeats=num_repeats,
             enable_bucket=enable_bucket,
             bucket_no_upscale=bucket_no_upscale,
+            bucket_constraint_type=bucket_constraint_type,
+            _constrained_dimension=_constrained_dimension,
             cache_directory=cache_directory,
             debug_dataset=debug_dataset,
             is_val=is_val,
@@ -994,7 +1010,13 @@ class VideoDataset(BaseDataset):
     def retrieve_latent_cache_batches(self, num_workers: int):
         # Keep mask loading enabled so that we can pre-cache masks to `_mask.safetensors` alongside latents.
         # This path will forward per-sample masks through `ItemInfo(mask_content=...)` so the collator can save them.
-        buckset_selector = BucketSelector(self.resolution)
+        buckset_selector = BucketSelector(
+            self.resolution,
+            self.enable_bucket,
+            self.bucket_no_upscale,
+            self.bucket_constraint_type,
+            self._constrained_dimension,
+        )
         self.datasource.set_bucket_selector(buckset_selector)
         if self.source_fps is not None:
             self.datasource.set_source_and_target_fps(self.source_fps, self.target_fps)
@@ -1236,6 +1258,8 @@ class VideoDataset(BaseDataset):
             self.resolution,
             self.enable_bucket,
             self.bucket_no_upscale,
+            self.bucket_constraint_type,
+            self._constrained_dimension,
         )
 
         # glob cache files

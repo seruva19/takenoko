@@ -29,6 +29,7 @@ from voluptuous import (
 )
 
 from dataset.image_video_dataset import DatasetGroup, ImageDataset, VideoDataset
+from dataset.resolution_parser import validate_and_parse_resolution
 
 from common.logger import get_logger
 
@@ -40,6 +41,10 @@ class BaseDatasetParams:
     resolution: Tuple[int, int] = (960, 544)
     enable_bucket: bool = False
     bucket_no_upscale: bool = False
+    bucket_constraint_type: str = "area"  # "area" (default) or "dimension"
+    _constrained_dimension: Optional[str] = (
+        None  # Internal: "width", "height", or None (auto-detected)
+    )
     caption_extension: Optional[str] = None
     caption_dropout_rate: float = 0.0
     batch_size: int = 1
@@ -111,17 +116,47 @@ class ConfigSanitizer:
                 # If it's not a scalar that matches klass and not a sequence, re-raise
                 raise
 
+    @staticmethod
+    def __validate_and_parse_flexible_resolution(value) -> dict:
+        """
+        Validate and parse resolution using the new flexible resolution parser.
+
+        Supports:
+        - int: 512 → (512, 512)
+        - str: "480p", "720p", "1080p", "4k", "960x544"
+        - [int, int]: [960, 544] → (960, 544)
+        - [int, None]: [512, None] → (512, derived_height)
+        - [None, int]: [None, 512] → (derived_width, 512)
+
+        Returns:
+            Dictionary with:
+            - "resolution": Tuple of (width, height)
+            - "_constrained_dimension": "width", "height", or None
+        """
+        try:
+            result, constraint_type, constrained_value = validate_and_parse_resolution(
+                value, return_constraint_info=True
+            )
+            return {
+                "resolution": result,
+                "_constrained_dimension": (
+                    constraint_type if constraint_type != "none" else None
+                ),
+            }
+        except Exception as e:
+            # Re-raise with voluptuous error for consistency with other validators
+            raise voluptuous.Invalid(f"Invalid resolution format: {e}")
+
     # datasets schema
     DATASET_ASCENDABLE_SCHEMA = {
         "caption_extension": str,
         "caption_dropout_rate": float,
         "batch_size": int,
         "num_repeats": int,
-        "resolution": functools.partial(
-            __validate_and_convert_scalar_or_twodim.__func__, int
-        ),
+        "resolution": __validate_and_parse_flexible_resolution.__func__,
         "enable_bucket": bool,
         "bucket_no_upscale": bool,
+        "bucket_constraint_type": str,
         "mask_path": str,
     }
     IMAGE_DATASET_DISTINCT_SCHEMA = {
@@ -337,6 +372,44 @@ class BlueprintGenerator:
             )
             for name in param_names
         }
+
+        # Special handling for resolution field
+        if "resolution" in params:
+            res_value = params["resolution"]
+
+            # If it's already been processed into a dict by the validator
+            if isinstance(res_value, dict):
+                params["resolution"] = res_value["resolution"]
+                if "_constrained_dimension" in res_value:
+                    params["_constrained_dimension"] = res_value[
+                        "_constrained_dimension"
+                    ]
+
+            # If it's a string or needs processing (validator wasn't called due to permissive schema)
+            elif isinstance(res_value, (str, int)) or (
+                isinstance(res_value, (list, tuple)) and len(res_value) == 2
+            ):
+                # Manually call the validator to parse flexible resolution formats
+                from dataset.resolution_parser import validate_and_parse_resolution
+
+                parsed_res, constraint_type, constrained_value = (
+                    validate_and_parse_resolution(
+                        res_value, return_constraint_info=True
+                    )
+                )
+                params["resolution"] = parsed_res
+                params["_constrained_dimension"] = (
+                    constraint_type if constraint_type != "none" else None
+                )
+
+                # Auto-enable dimension mode if constrained dimension detected
+                # Only auto-enable if user hasn't explicitly set bucket_constraint_type
+                if constraint_type in ("width", "height"):
+                    if "bucket_constraint_type" not in params:
+                        params["bucket_constraint_type"] = "dimension"
+                        logger.info(
+                            f"📐 Auto-enabled dimension-constrained mode for resolution {res_value}"
+                        )
 
         return param_klass(**params)
 

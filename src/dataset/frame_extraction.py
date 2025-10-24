@@ -27,6 +27,8 @@ def generate_crop_positions(
             - "slide_end" (sliding with stride; ensure last window ends at the last frame; if video is shorter than target, return a single full-length window)
             - "uniform" (fixed count of evenly spaced starts)
             - "multiple_overlapping" (cover video with minimal number of windows, end-aligned)
+            - "adaptive" (intelligently handles variable clip lengths: if shorter than target, takes whole clip; if longer, takes multiple fragments with overlap, max_frames caps the effective video length)
+            - "uniform_adaptive" (uniform sampling that accepts short videos: if shorter than target, takes whole clip; if longer, uses uniform sampling, max_frames caps the effective video length)
             - "full" (use up to max_frames, rounded to N*4+1)
         frame_stride: Stride for "slide"/"slide_end" modes.
         frame_sample: Number of samples for "uniform" mode.
@@ -43,8 +45,11 @@ def generate_crop_positions(
     normalized_mode = mode
 
     for target_frame in target_frames:
-        if frame_count < target_frame:
-            # Not enough frames to extract this window size
+        if frame_count < target_frame and normalized_mode not in [
+            "adaptive",
+            "uniform_adaptive",
+        ]:
+            # Not enough frames to extract this window size (except for adaptive and uniform_adaptive modes)
             continue
 
         if normalized_mode == "head":
@@ -88,6 +93,60 @@ def generate_crop_positions(
             starts = np.linspace(0, frame_count - target_frame, num_clips, dtype=int)
             for i in starts:
                 crop_pos_and_frames.append((int(i), target_frame))
+
+        elif normalized_mode == "adaptive":
+            # Adaptive method: handles variable clip lengths intelligently
+            # Apply max_frames cap to effective frame count if specified
+            effective_frame_count = frame_count
+            if max_frames is not None and max_frames > 0:
+                effective_frame_count = min(frame_count, max_frames)
+
+            # Skip if no frames available
+            if effective_frame_count <= 0:
+                continue
+
+            if effective_frame_count < target_frame:
+                # If effective clip is shorter than target, take it as whole
+                crop_pos_and_frames.append((0, effective_frame_count))
+            else:
+                # Calculate how many fragments we can fit in the effective length
+                num_fragments = effective_frame_count // target_frame
+                # num_fragments will be at least 1 when effective_frame_count >= target_frame
+                if num_fragments == 1:
+                    # Single fragment - take from the beginning
+                    crop_pos_and_frames.append((0, target_frame))
+                else:
+                    # Multiple fragments - distribute evenly across effective length
+                    for i in range(num_fragments):
+                        start = int(
+                            i
+                            * (effective_frame_count - target_frame)
+                            / (num_fragments - 1)
+                        )
+                        crop_pos_and_frames.append((start, target_frame))
+
+        elif normalized_mode == "uniform_adaptive":
+            # Uniform-like method that accepts short videos (like adaptive)
+            # Apply max_frames cap to effective frame count if specified
+            effective_frame_count = frame_count
+            if max_frames is not None and max_frames > 0:
+                effective_frame_count = min(frame_count, max_frames)
+
+            # Skip if no frames available
+            if effective_frame_count <= 0:
+                continue
+
+            if effective_frame_count < target_frame:
+                # If effective clip is shorter than target, take it as whole
+                crop_pos_and_frames.append((0, effective_frame_count))
+            else:
+                # Use uniform sampling on the effective length
+                samples = frame_sample or 1
+                starts = np.linspace(
+                    0, effective_frame_count - target_frame, samples, dtype=int
+                )
+                for i in starts:
+                    crop_pos_and_frames.append((int(i), target_frame))
 
         elif normalized_mode == "full":
             if max_frames is None or max_frames <= 0:
