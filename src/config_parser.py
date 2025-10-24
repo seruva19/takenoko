@@ -557,6 +557,14 @@ def create_args_from_config(
         "log_loss_scatterplot_interval", 500
     )
 
+    # Advanced metrics (gradient stability, convergence, noise split, oscillation bounds)
+    args.enable_advanced_metrics = config.get("enable_advanced_metrics", False)
+    args.advanced_metrics_features = config.get("advanced_metrics_features", None)
+    args.advanced_metrics_max_history = config.get("advanced_metrics_max_history", 10000)
+    args.gradient_watch_threshold = config.get("gradient_watch_threshold", 0.5)
+    args.gradient_stability_window = config.get("gradient_stability_window", 10)
+    args.convergence_window_sizes = config.get("convergence_window_sizes", [10, 25, 50, 100])
+
     # Control LoRA settings
     args.enable_control_lora = config.get("enable_control_lora", False)
     args.control_lora_type = config.get("control_lora_type", "tile")

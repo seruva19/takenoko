@@ -3,6 +3,13 @@ from __future__ import annotations
 import logging
 from typing import Dict, Any, Tuple, List, Optional
 
+# Import resolution parser to handle flexible resolution formats like "480x", "720p", etc.
+try:
+    from dataset.resolution_parser import validate_and_parse_resolution
+    HAS_RESOLUTION_PARSER = True
+except ImportError:
+    HAS_RESOLUTION_PARSER = False
+
 
 def extract_training_shape_from_config(
     config: Dict[str, Any],
@@ -28,13 +35,29 @@ def extract_training_shape_from_config(
     max_f = 1
     max_b = 1
     for ds in train_entries:
-        # Resolution [W, H]
+        # Resolution can be [W, H], "480x", "720p", int, etc.
         res = ds.get("resolution", [512, 512])
+        w, h = 512, 512  # Default fallback
+
         try:
-            w = int(res[0])
-            h = int(res[1])
+            if HAS_RESOLUTION_PARSER and isinstance(res, str):
+                # Handle string formats like "480x", "720p", "1080p", "960x544"
+                parsed = validate_and_parse_resolution(res, return_constraint_info=False)
+                w, h = parsed
+            elif isinstance(res, (list, tuple)) and len(res) >= 2:
+                # Handle [W, H] format
+                w = int(res[0])
+                h = int(res[1])
+            elif isinstance(res, int):
+                # Handle single int (square resolution)
+                w = h = int(res)
+            else:
+                # Fallback to 512x512
+                w, h = 512, 512
         except Exception:
+            # If parsing fails, use safe defaults
             w, h = 512, 512
+
         if w > max_w:
             max_w = w
         if h > max_h:
@@ -288,6 +311,32 @@ def estimate_peak_vram_gb_from_config(
     latents_elems = batch_size * cin * frames * lat_h * lat_w
     latents_bytes = latents_elems * bytes_per * 2
 
+    # Video-specific runtime overhead for longer sequences
+    # This accounts for temporary buffers during video training that aren't present in image training
+    video_overhead_bytes = 0
+    if frames > 1:  # Only for video (multi-frame) training
+        # Control LoRA creates additional latent copies for concatenation
+        if enable_control_lora:
+            # Additional control latent buffer (before concatenation)
+            video_overhead_bytes += batch_size * 16 * frames * lat_h * lat_w * bytes_per
+
+        # Temporal processing buffers: frame concatenation, reshaping, and intermediate operations
+        # Scale with frame count - longer videos need more temporary buffers
+        # Conservative estimate: ~10-20% of latent memory for videos with many frames
+        if frames >= 25:
+            frame_overhead_factor = 0.15  # 15% for longer videos (25+ frames)
+        elif frames >= 9:
+            frame_overhead_factor = 0.10  # 10% for medium videos (9-24 frames)
+        else:
+            frame_overhead_factor = 0.05  # 5% for short videos (2-8 frames)
+
+        video_overhead_bytes += int(latents_bytes * frame_overhead_factor)
+
+        # DataLoader pinned memory overhead for video batches
+        # Video batches are larger and require pinned memory staging
+        dataloader_pinned_mb = 200 if frames >= 25 else 100  # MB
+        video_overhead_bytes += int(dataloader_pinned_mb * (1024**2))
+
     # Text embeddings
     text_bytes = batch_size * text_len * text_dim * bytes_per
 
@@ -428,6 +477,7 @@ def estimate_peak_vram_gb_from_config(
     total_bytes = (
         dual_factor * activations_bytes
         + latents_bytes
+        + video_overhead_bytes
         + text_bytes
         + training_overhead_bytes
         + model_bytes
@@ -496,6 +546,7 @@ def estimate_peak_vram_gb_from_config(
         "dual_factor": dual_factor,
         "activations_gb": activations_bytes / (1024**3),
         "latents_gb": latents_bytes / (1024**3),
+        "video_overhead_gb": video_overhead_bytes / (1024**3),
         "text_gb": text_bytes / (1024**3),
         "training_overhead_gb": training_overhead_bytes / (1024**3),
         "training_mode": training_mode,
@@ -627,26 +678,34 @@ def log_vram_estimation(
                 reduction_info,
             )
         )
-        logger.info(
-            "   Breakdown: activations={:.2f} GB, latents={:.2f} GB, text={:.2f} GB, model={:.2f} GB, training_overhead={:.2f} GB".format(
-                details["activations_gb"],
-                details["latents_gb"],
-                details["text_gb"],
-                details["model_gb"],
-                details["training_overhead_gb"],
-            )
-        )
+        # Build breakdown string with conditional video overhead
+        breakdown_parts = [
+            f"activations={details['activations_gb']:.2f} GB",
+            f"latents={details['latents_gb']:.2f} GB",
+        ]
+        if details.get("video_overhead_gb", 0.0) > 0.01:
+            breakdown_parts.append(f"video_overhead={details['video_overhead_gb']:.2f} GB")
+        breakdown_parts.extend([
+            f"text={details['text_gb']:.2f} GB",
+            f"model={details['model_gb']:.2f} GB",
+            f"training_overhead={details['training_overhead_gb']:.2f} GB",
+        ])
+        logger.info(f"   Breakdown: {', '.join(breakdown_parts)}")
     else:
         logger.info("   🔧 LoRA Training Mode: lightweight adapter training")
-        logger.info(
-            "   Breakdown: activations={:.2f} GB, latents={:.2f} GB, text={:.2f} GB, model={:.2f} GB, lora_overhead={:.2f} GB".format(
-                details["activations_gb"],
-                details["latents_gb"],
-                details["text_gb"],
-                details["model_gb"],
-                details["training_overhead_gb"],
-            )
-        )
+        # Build breakdown string with conditional video overhead
+        breakdown_parts = [
+            f"activations={details['activations_gb']:.2f} GB",
+            f"latents={details['latents_gb']:.2f} GB",
+        ]
+        if details.get("video_overhead_gb", 0.0) > 0.01:
+            breakdown_parts.append(f"video_overhead={details['video_overhead_gb']:.2f} GB")
+        breakdown_parts.extend([
+            f"text={details['text_gb']:.2f} GB",
+            f"model={details['model_gb']:.2f} GB",
+            f"lora_overhead={details['training_overhead_gb']:.2f} GB",
+        ])
+        logger.info(f"   Breakdown: {', '.join(breakdown_parts)}")
 
     # Optional TREAD summary
     if details.get("tread_enabled", False):

@@ -2428,6 +2428,37 @@ log_vram_validation = false
 # false - show both timing and hardware metrics every step
 alternate_perf_postfix = false
 
+# Enable advanced training diagnostics (gradient stability, convergence analysis, loss distributions)
+# Provides comprehensive metrics similar to WAN 2.2 training reports
+# DEFAULT: false (opt-in only, zero overhead when disabled)
+enable_advanced_metrics = false
+
+# Advanced metrics features to enable (optional, defaults to all features when enable_advanced_metrics = true)
+# Available features: "gradient_stability", "convergence", "noise_split", "oscillation_bounds"
+# "gradient_stability" - Track gradient norms with moving averages and threshold alerts
+# "convergence" - Multi-scale R² convergence trend analysis (10/25/50/100 step windows)
+# "noise_split" - HIGH/LOW noise loss split tracking (requires DualModelManager for WAN dual LoRA)
+# "oscillation_bounds" - Track upper/lower loss bounds to detect training stability patterns
+# Example: Enable selective features
+advanced_metrics_features = ["gradient_stability", "convergence", "oscillation_bounds"]
+
+# Maximum history length for advanced metrics (prevents unbounded memory growth)
+# Older data is discarded when history exceeds this limit. DEFAULT: 10000 steps (~390 KB memory)
+advanced_metrics_max_history = 10000
+
+# Gradient stability watch threshold (alert when gradient norm exceeds this value)
+# Used to detect gradient explosions or instability during training. DEFAULT: 0.5
+gradient_watch_threshold = 0.5
+
+# Gradient stability moving average window size (number of recent steps)
+# Larger values provide smoother gradient stability metrics. DEFAULT: 10 steps
+gradient_stability_window = 10
+
+# Convergence analysis window sizes for multi-scale R² trend analysis
+# Analyzes convergence at different time scales to detect short-term and long-term trends
+# DEFAULT: [10, 25, 50, 100] steps
+convergence_window_sizes = [10, 25, 50, 100]
+
 # Diagnostic attention metrics, if enabled, compute lightweight cross-attention statistics (entropy, top-k mass, token focus)
 # at a configurable interval and for a small number of layers to limit overhead.
 # They DO NOT store attention maps; only scalars are logged.

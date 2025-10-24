@@ -959,18 +959,18 @@ class WanNetworkTrainer:
                 import traceback
 
                 logger.debug(f"Full traceback: {traceback.format_exc()}")
-            
+
             # Log dataset statistics to TensorBoard (only on first run, not on resume)
             try:
                 from utils.dataset_stats_logger import log_dataset_stats_to_tensorboard
-                
+
                 # Note: global_step will be set after this block, so we check restored_step
                 initial_step = restored_step if restored_step is not None else 0
                 log_dataset_stats_to_tensorboard(
                     accelerator,
                     train_dataset_group,
                     val_dataset_group,
-                    global_step=initial_step
+                    global_step=initial_step,
                 )
             except Exception as e:
                 logger.warning(f"Failed to log dataset stats to TensorBoard: {e}")
@@ -1231,6 +1231,10 @@ class WanNetworkTrainer:
                 )
             except Exception as _sc_init_err:
                 logger.warning(f"Self-correction manager init failed: {_sc_init_err}")
+
+            # Store dual_model_manager in args for advanced metrics (if enabled)
+            if dual_model_manager is not None:
+                args.dual_model_manager = dual_model_manager
 
             global_step, network = self.training_core.run_training_loop(  # type: ignore
                 args=args,

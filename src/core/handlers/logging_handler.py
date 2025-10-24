@@ -20,6 +20,10 @@ from scheduling.timestep_logging import (
 
 logger = logging.getLogger(__name__)
 
+# Advanced metrics tracker (lazy initialization, only loaded if enabled)
+_advanced_metrics_tracker = None
+_advanced_metrics_initialized = False
+
 
 def collect_and_log_training_metrics(
     args: argparse.Namespace,
@@ -280,3 +284,55 @@ def collect_and_log_training_metrics(
         )
     except Exception:
         pass
+
+    # Advanced metrics tracking (lazy initialization, zero overhead when disabled)
+    global _advanced_metrics_tracker, _advanced_metrics_initialized
+
+    if not _advanced_metrics_initialized:
+        _advanced_metrics_initialized = True
+
+        # Only initialize if enabled in config
+        if getattr(args, 'enable_advanced_metrics', False):
+            try:
+                from core.advanced_metrics_tracker import AdvancedMetricsTracker
+
+                # Get dual_model_manager from args (if it was stored there)
+                dual_model_manager = getattr(args, 'dual_model_manager', None)
+
+                # Parse features from config (default: all features if None)
+                feature_list = getattr(args, 'advanced_metrics_features', None)
+                features = set(feature_list) if feature_list else None
+
+                _advanced_metrics_tracker = AdvancedMetricsTracker(
+                    enabled=True,
+                    features=features,
+                    max_history=getattr(args, 'advanced_metrics_max_history', 10000),
+                    dual_model_manager=dual_model_manager,
+                    gradient_watch_threshold=getattr(args, 'gradient_watch_threshold', 0.5),
+                    gradient_stability_window=getattr(args, 'gradient_stability_window', 10),
+                    convergence_window_sizes=getattr(args, 'convergence_window_sizes', [10, 25, 50, 100]),
+                )
+
+                logger.info(
+                    f"Advanced metrics enabled with features: {_advanced_metrics_tracker.features}"
+                )
+            except Exception as e:
+                logger.debug(f"Advanced metrics initialization failed, disabling: {e}")
+                _advanced_metrics_tracker = None
+
+    # Track and log advanced metrics if initialized
+    if _advanced_metrics_tracker is not None:
+        try:
+            advanced_logs = _advanced_metrics_tracker.track_step(
+                step=global_step,
+                loss=current_loss,
+                gradient_norm=gradient_norm,
+            )
+
+            if advanced_logs:
+                # Merge advanced metrics into logs dict for this step
+                logs.update(advanced_logs)
+                # Log the updated metrics
+                accelerator.log(advanced_logs, step=global_step)
+        except Exception as e:
+            logger.debug(f"Advanced metrics tracking error: {e}")
