@@ -6,6 +6,7 @@ from typing import Dict, Any, Tuple, List, Optional
 # Import resolution parser to handle flexible resolution formats like "480x", "720p", etc.
 try:
     from dataset.resolution_parser import validate_and_parse_resolution
+
     HAS_RESOLUTION_PARSER = True
 except ImportError:
     HAS_RESOLUTION_PARSER = False
@@ -42,7 +43,9 @@ def extract_training_shape_from_config(
         try:
             if HAS_RESOLUTION_PARSER and isinstance(res, str):
                 # Handle string formats like "480x", "720p", "1080p", "960x544"
-                parsed = validate_and_parse_resolution(res, return_constraint_info=False)
+                parsed = validate_and_parse_resolution(
+                    res, return_constraint_info=False
+                )
                 w, h = parsed
             elif isinstance(res, (list, tuple)) and len(res) >= 2:
                 # Handle [W, H] format
@@ -284,7 +287,7 @@ def estimate_peak_vram_gb_from_config(
     # especially with selective routing at later layers where activations are largest
     tread_effective_reduction = tread_avg_keep_ratio
     if tread_enabled and tread_routes_count > 0:
-        # For aggressive routing configurations (selection_ratio >= 0.1),
+        # Assumption: for aggressive routing configurations (selection_ratio >= 0.5),
         # the actual memory reduction is often 20-30% better than the average would suggest
         # because later layers where most memory is used get more aggressive routing
         max_selection_ratio = 0.0
@@ -684,12 +687,16 @@ def log_vram_estimation(
             f"latents={details['latents_gb']:.2f} GB",
         ]
         if details.get("video_overhead_gb", 0.0) > 0.01:
-            breakdown_parts.append(f"video_overhead={details['video_overhead_gb']:.2f} GB")
-        breakdown_parts.extend([
-            f"text={details['text_gb']:.2f} GB",
-            f"model={details['model_gb']:.2f} GB",
-            f"training_overhead={details['training_overhead_gb']:.2f} GB",
-        ])
+            breakdown_parts.append(
+                f"video_overhead={details['video_overhead_gb']:.2f} GB"
+            )
+        breakdown_parts.extend(
+            [
+                f"text={details['text_gb']:.2f} GB",
+                f"model={details['model_gb']:.2f} GB",
+                f"training_overhead={details['training_overhead_gb']:.2f} GB",
+            ]
+        )
         logger.info(f"   Breakdown: {', '.join(breakdown_parts)}")
     else:
         logger.info("   🔧 LoRA Training Mode: lightweight adapter training")
@@ -699,12 +706,16 @@ def log_vram_estimation(
             f"latents={details['latents_gb']:.2f} GB",
         ]
         if details.get("video_overhead_gb", 0.0) > 0.01:
-            breakdown_parts.append(f"video_overhead={details['video_overhead_gb']:.2f} GB")
-        breakdown_parts.extend([
-            f"text={details['text_gb']:.2f} GB",
-            f"model={details['model_gb']:.2f} GB",
-            f"lora_overhead={details['training_overhead_gb']:.2f} GB",
-        ])
+            breakdown_parts.append(
+                f"video_overhead={details['video_overhead_gb']:.2f} GB"
+            )
+        breakdown_parts.extend(
+            [
+                f"text={details['text_gb']:.2f} GB",
+                f"model={details['model_gb']:.2f} GB",
+                f"lora_overhead={details['training_overhead_gb']:.2f} GB",
+            ]
+        )
         logger.info(f"   Breakdown: {', '.join(breakdown_parts)}")
 
     # Optional TREAD summary

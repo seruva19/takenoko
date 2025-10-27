@@ -106,8 +106,20 @@ def get_noisy_model_input_and_timesteps_fvdm(
     t_min = original_min_timestep / T
     t_max = original_max_timestep / T
 
-    # Scale from [0,1] to [t_min, t_max] while preserving distribution shape
-    t_cont = t_cont * (t_max - t_min) + t_min
+    # 3.5. Apply min/max timestep constraints conditionally
+    # - WITH precomputed timesteps: Distribution already sliced to [t_min, t_max], skip scaling
+    # - WITHOUT precomputed timesteps: Need to scale [0,1] to [t_min, t_max]
+    from scheduling.timestep_distribution import should_use_precomputed_timesteps
+    
+    use_precomputed = should_use_precomputed_timesteps(args)
+    skip_constraint = bool(getattr(args, "skip_extra_timestep_constraint", False))
+    
+    if not use_precomputed and not skip_constraint:
+        # Apply constraint scaling ONLY when:
+        # - NOT using precomputed (map_uniform_to_sampling returns [0,1] values)
+        # - AND skip flag is False (default behavior)
+        # This prevents double-constraint with precomputed timesteps
+        t_cont = t_cont * (t_max - t_min) + t_min
 
     # 2.5. Optional: Integrate with AdaptiveTimestepManager for importance-based sampling
     resample_count_applied = 0
@@ -141,12 +153,12 @@ def get_noisy_model_input_and_timesteps_fvdm(
                         resample_indices = torch.nonzero(
                             low_importance_mask, as_tuple=True
                         )[0][:resample_count]
-                        # Resample these frames
-                        new_t_values = (
-                            torch.rand(resample_count, device=device, dtype=dtype)
-                            * (t_max - t_min)
-                            + t_min
-                        )
+                        # Resample these frames using same distribution and constraint logic
+                        new_t_uniform = torch.rand(resample_count, device=device, dtype=dtype)
+                        new_t_values = map_uniform_to_sampling(args, new_t_uniform, latents)
+                        # Apply same constraint logic as main timesteps
+                        if not use_precomputed and not skip_constraint:
+                            new_t_values = new_t_values * (t_max - t_min) + t_min
                         t_cont.view(-1)[resample_indices] = new_t_values
                         resample_count_applied = int(resample_count)
         except Exception:
