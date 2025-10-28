@@ -405,6 +405,11 @@ class WanFinetuneTrainer:
             # Set tread_mode on transformer for proper routing behavior
             tread_mode = getattr(args, "tread_mode", "full")
             setattr(transformer, "_tread_mode", tread_mode)
+            setattr(
+                transformer,
+                "row_tread_auto_fallback",
+                bool(getattr(args, "row_tread_auto_fallback", True)),
+            )
             logger.info(f"TREAD mode set to: {tread_mode}")
 
             tread_cfg = getattr(args, "tread_config", None)

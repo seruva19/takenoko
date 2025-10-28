@@ -652,6 +652,11 @@ class WanNetworkTrainer:
                             "_tread_mode",
                             getattr(args, "tread_mode", "full"),
                         )
+                        setattr(
+                            transformer,
+                            "row_tread_auto_fallback",
+                            bool(getattr(args, "row_tread_auto_fallback", True)),
+                        )
                     except Exception:
                         pass
 

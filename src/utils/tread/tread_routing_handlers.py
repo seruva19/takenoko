@@ -47,17 +47,20 @@ class TREADRoutingState:
     def cleanup_all(self):
         """Clean up all routing state variables."""
         cleanup_routing_variables(
-            frame_state=[self.frame_state],
-            row_state=[self.row_state],
-            spatial_auto_state=[self.spatial_auto_state],
-            orig_freqs_list=[self.orig_freqs_list],
-            row_orig_freqs_list=[self.row_orig_freqs_list],
-            spatial_auto_orig_freqs_list=[self.spatial_auto_orig_freqs_list],
-            e0_full_saved=[self.e0_full_saved],
-            row_e0_full_saved=[self.row_e0_full_saved],
-            spatial_auto_e0_full_saved=[self.spatial_auto_e0_full_saved],
-            saved_tokens=[self.saved_tokens],
+            self,
+            "frame_state",
+            "row_state",
+            "spatial_auto_state",
+            "orig_freqs_list",
+            "row_orig_freqs_list",
+            "spatial_auto_orig_freqs_list",
+            "e0_full_saved",
+            "row_e0_full_saved",
+            "spatial_auto_e0_full_saved",
+            "tread_mask_info",
+            "saved_tokens",
         )
+        self.routing_now = False
 
 
 def handle_routing_start(

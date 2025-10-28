@@ -128,14 +128,16 @@ def recompute_rotary_freqs(
     return orig_freqs_list
 
 
-def cleanup_routing_variables(**variables) -> None:
-    """Cleanup routing variables by setting them to None.
+def cleanup_routing_variables(state: Any, *attr_names: str) -> None:
+    """Cleanup routing state attributes by setting them to None.
 
     Parameters
     ----------
-    **variables
-        Named variables to set to None
+    state: Any
+        Object containing routing state attributes.
+    *attr_names: str
+        Attribute names on ``state`` to clear.
     """
-    for name, var_ref in variables.items():
-        if var_ref[0] is not None:
-            var_ref[0] = None
+    for attr in attr_names:
+        if hasattr(state, attr):
+            setattr(state, attr, None)
