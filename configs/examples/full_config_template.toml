@@ -223,13 +223,24 @@ rope_use_float32 = false
 # OPTIMIZER SETTINGS
 # =============================================================================
 
-# Optimizer to use: AdamW (default), AdamW8bit, AdaFactor. Also, you can use any optimizer by specifying
-# a fully-qualified class path (e.g., 'torch.optim.AdamW', 'bitsandbytes.optim.AdEMAMix8bit').
+# Optimizer to use: AdamW (default), AdamW8bit, AdaFactor, RavenAdamW. 
+# You can also use any optimizer by specifying a fully-qualified class path 
+# (e.g., 'torch.optim.AdamW', 'bitsandbytes.optim.AdEMAMix8bit').
 # Resolved dynamically in optimizer manager with provided optimizer_args.
+# Available optimizers:
+# - "AdamW": Standard PyTorch AdamW (full precision, GPU states)
+# - "AdamW8bit": bitsandbytes 8-bit AdamW (quantized states)
+# - "RavenAdamW": CPU-offloaded AdamW with reusable GPU buffers
+# - "AdaFactor": Memory-efficient adaptive optimizer with relative_step scheduling
+# - "Muon", "NorMuon": Second-order optimizers for matrix parameters
+# - "TemporalAdamW": AdamW with temporal gradient smoothing for video training
+# - "Prodigy": Adaptive learning rate optimizer
+# - "SOAP", "SophiaG", "Scion", etc. (see optimizer_manager.py)
 optimizer_type = "adamw8bit"
 
-# additional arguments for optimizer (like "weight_decay=0.01 betas=0.9,0.999 ...")
-# optimizer_args = ["weight_decay=0.01", "betas=0.9,0.999"] 
+# Additional arguments for optimizer (like "weight_decay=0.01 betas=0.9,0.999 ...")
+# Format: key=value pairs as strings. Values are parsed as Python literals.
+# optimizer_args = ["weight_decay=0.01", "betas=(0.9,0.999)"]
 
 # Learning rate
 learning_rate = 2.0e-5

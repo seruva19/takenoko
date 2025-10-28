@@ -106,9 +106,7 @@ class OptimizerManager:
                     )
                     extracted_params.extend(list(item["params"]))
                 elif isinstance(item, torch.nn.Parameter):
-                    logger.debug(
-                        f"Parameter {i}: shape {item.shape}, ndim {item.ndim}"
-                    )
+                    logger.debug(f"Parameter {i}: shape {item.shape}, ndim {item.ndim}")
                     extracted_params.append(item)
                 else:
                     logger.debug(f"Skipping item {i}: {type(item)}")
@@ -324,6 +322,14 @@ class OptimizerManager:
                 ) from err
 
             optimizer_class = TemporalAdamW8bit
+            optimizer = optimizer_class(trainable_params, lr=lr, **optimizer_kwargs)
+
+        elif optimizer_type == "RavenAdamW".lower():
+            logger.info(f"using RavenAdamW optimizer | {optimizer_kwargs}")
+
+            from optimizers.raven import RavenAdamW
+
+            optimizer_class = RavenAdamW
             optimizer = optimizer_class(trainable_params, lr=lr, **optimizer_kwargs)
 
         elif optimizer_type == "Muon".lower():
@@ -600,9 +606,7 @@ class OptimizerManager:
             ):
                 logger.info("Using custom parameter groups for Scion")
                 optimizer_class = Scion
-                optimizer = optimizer_class(
-                    trainable_params, lr=lr, momentum=momentum
-                )
+                optimizer = optimizer_class(trainable_params, lr=lr, momentum=momentum)
             else:
                 # Single parameter group with specified norm
                 logger.info(
@@ -620,7 +624,9 @@ class OptimizerManager:
                 )
 
         elif optimizer_type == "ScionLight".lower():
-            logger.info(f"using ScionLight optimizer (memory-efficient) | {optimizer_kwargs}")
+            logger.info(
+                f"using ScionLight optimizer (memory-efficient) | {optimizer_kwargs}"
+            )
 
             from optimizers.scion import ScionLight
 
@@ -640,9 +646,7 @@ class OptimizerManager:
             ):
                 logger.info("Using custom parameter groups for ScionLight")
                 optimizer_class = ScionLight
-                optimizer = optimizer_class(
-                    trainable_params, lr=lr, momentum=momentum
-                )
+                optimizer = optimizer_class(trainable_params, lr=lr, momentum=momentum)
             else:
                 # Single parameter group with specified norm
                 logger.info(

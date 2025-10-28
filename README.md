@@ -89,4 +89,5 @@ Keep in mind that work on some features is not yet complete due to time and hard
 | [NorMuon](https://github.com/CoffeeVampir3/NorMuon) | repo | - Neuron-wise Normalized Muon implementation | [CoffeeVampir3](https://github.com/CoffeeVampir3) | MIT | |
 | [TiM](https://github.com/WZDTHU/TiM) | repo | - Transition training objective (paired timesteps, transports, weighting, EMA) | [WZDTHU](https://github.com/WZDTHU) | Apache 2.0 | <sub>see also [paper](https://arxiv.org/abs/2509.04394)</sub> |
 | [rcm](https://github.com/NVlabs/rcm) | repo | rCM distillation algorithm reference | [NVlabs](https://github.com/NVlabs) | Apache 2.0 | <sub>see also [paper](https://arxiv.org/abs/2510.08431)</sub> |
+| [Aozora_SDXL_Training](https://github.com/Hysocs/Aozora_SDXL_Training) | repo | - Raven optimizer | [Hysocs](https://github.com/Hysocs) |  | |
 
