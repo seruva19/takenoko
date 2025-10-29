@@ -1390,6 +1390,18 @@ class WanFinetuneTrainer:
                     val_dataset_group=None,  # Finetune trainer doesn't have val group at this point
                     global_step=global_step,
                 )
+
+                # Generate bucket manifest text file (only on first run, not on resume)
+                from utils.bucket_manifest_generator import generate_bucket_manifest
+
+                generate_bucket_manifest(
+                    train_dataset_group,
+                    val_dataset_group=None,
+                    output_dir=args.output_dir,
+                    output_name=args.output_name,
+                    global_step=global_step,
+                    args=args,
+                )
             except Exception as e:
                 logger.warning(f"⚠️  TensorBoard test logging failed: {e}")
 

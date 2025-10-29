@@ -977,6 +977,18 @@ class WanNetworkTrainer:
                     val_dataset_group,
                     global_step=initial_step,
                 )
+
+                # Generate bucket manifest text file (only on first run, not on resume)
+                from utils.bucket_manifest_generator import generate_bucket_manifest
+
+                generate_bucket_manifest(
+                    train_dataset_group,
+                    val_dataset_group,
+                    args.output_dir,
+                    args.output_name,
+                    global_step=initial_step,
+                    args=args,
+                )
             except Exception as e:
                 logger.warning(f"Failed to log dataset stats to TensorBoard: {e}")
 
