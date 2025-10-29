@@ -19,11 +19,14 @@ Memory profile:
 Usage example:
     optimizer_type = "RavenAdamW"
     optimizer_args = [
-        "weight_decay=0.01",
-        "betas=(0.9,0.999)",
-        "debias_strength=1.0",           # Full bias correction (default)
-        "use_grad_centralization=false",  # Enable for conv/linear convergence boost
-        "gc_alpha=1.0"                    # Full gradient centering
+        "weight_decay=0.01",              # Decoupled weight decay (default: 0.01)
+        "betas=(0.9,0.999)",              # Momentum coefficients (default: (0.9, 0.999))
+        "eps=1e-8",                       # Numerical stability term (default: 1e-8)
+        "debias_strength=1.0",            # Bias correction strength 0.0-1.0 (default: 1.0)
+                                          # 1.0 = full correction, 0.0 = no correction
+        "use_grad_centralization=false",  # Enable gradient centering for conv/linear (default: false)
+                                          # Subtracts mean gradient per output filter/neuron
+        "gc_alpha=1.0"                    # Gradient centralization mixing 0.0-1.0 (default: 1.0)
     ]
 """
 
@@ -158,6 +161,21 @@ class RavenAdamW(Optimizer):
             for p in group["params"]:
                 if p.grad is None:
                     continue
+
+                # Ensure reusable buffers are on the same device as current parameter
+                # (Accelerate may move parameters after optimizer creation)
+                param_device = p.device
+                if self.reusable_exp_avg_gpu.device != param_device:
+                    logger.debug(
+                        f"Moving reusable buffers from {self.reusable_exp_avg_gpu.device} to {param_device}"
+                    )
+                    self.reusable_exp_avg_gpu = self.reusable_exp_avg_gpu.to(
+                        param_device
+                    )
+                    self.reusable_exp_avg_sq_gpu = self.reusable_exp_avg_sq_gpu.to(
+                        param_device
+                    )
+                    self.param_device = param_device
 
                 grad = p.grad.float()
 

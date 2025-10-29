@@ -14,7 +14,7 @@ Notes:
 - This optimizer intentionally does not guess LoRA parameters. Use param-group
   learning rates to scale LoRA groups as already done in the codebase.
 
-Example (Takenoko config TOML):
+Usage example:
     [train]
     optimizer_type = "TemporalAdamW"
     optimizer_args = [

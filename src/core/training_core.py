@@ -1552,6 +1552,25 @@ class TrainingCore:
                     if should_sampling or should_saving or should_validating:
                         if optimizer_eval_fn:
                             optimizer_eval_fn()
+
+                        # Conditionally save checkpoint before or after sampling/validation
+                        save_before = getattr(
+                            args, "save_checkpoint_before_sampling", False
+                        )
+
+                        if save_before:
+                            # Save checkpoint first, then sample and validate
+                            handle_step_saving(
+                                should_saving,
+                                accelerator,
+                                save_model,
+                                remove_model,
+                                args,
+                                network,
+                                global_step,
+                                epoch,
+                            )
+
                         # Handle training sampling
                         last_sampled_step = handle_training_sampling_with_accelerator(
                             should_sampling,
@@ -1591,17 +1610,18 @@ class TrainingCore:
                             self.timestep_distribution,
                         )
 
-                        # Handle step saving
-                        handle_step_saving(
-                            should_saving,
-                            accelerator,
-                            save_model,
-                            remove_model,
-                            args,
-                            network,
-                            global_step,
-                            epoch,
-                        )
+                        if not save_before:
+                            # Save checkpoint after sampling and validation (original behavior)
+                            handle_step_saving(
+                                should_saving,
+                                accelerator,
+                                save_model,
+                                remove_model,
+                                args,
+                                network,
+                                global_step,
+                                epoch,
+                            )
 
                         # Handle independent state-only saving at step level
                         from utils.train_utils import (

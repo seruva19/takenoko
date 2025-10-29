@@ -11,8 +11,7 @@ Design goals:
 - Avoid modifying Adam's internal bias correction by not changing betas over time;
   instead approximate adaptive momentum via gradient scaling.
 
-Example (Takenoko config TOML):
-    [train]
+Usage example:
     optimizer_type = "TemporalAdamW8bit"
     optimizer_args = [
       "betas=(0.9, 0.999)",

@@ -1176,6 +1176,87 @@ sara_cache_encoder_outputs = true
 sara_use_mixed_precision = true
 
 # =============================================================================
+# ⚠️ SPRINT (SPARSE-DENSE RESIDUAL FUSION) SETTINGS
+# =============================================================================
+
+# Enable Sprint sparse-dense residual fusion for efficient training
+enable_sprint = false
+
+# Token drop ratio (fraction of tokens to drop in middle blocks)
+# 0.75 = 75% dropping (keeps 25% of tokens)
+# Lower values (0.5-0.6) for more conservative speedup with less risk
+# Higher values (0.8-0.9) for maximum speedup (experimental)
+sprint_token_drop_ratio = 0.75
+
+# Number of encoder blocks (dense path, all tokens)
+# If not specified (null), automatically calculated as 25% of total blocks
+# For 32-block model: null = 8 blocks, manual override: 6-10 blocks
+# Encoder captures local details and noise information
+sprint_encoder_layers = 8
+
+# Number of middle blocks (sparse path, dropped tokens)
+# If not specified (null), automatically calculated as 50% of total blocks
+# For 32-block model: null = 16 blocks, manual override: 12-20 blocks
+# Middle blocks process global semantics with sparse tokens
+sprint_middle_layers = 16
+
+# Token sampling strategy for video (critical for temporal coherence)
+# "temporal_coherent" (recommended): Samples full/partial frames, maintains motion coherence
+# "spatial_coherent": Samples consistent spatial regions across frames, good for static scenes
+# "uniform": Random uniform sampling, fastest but may cause temporal artifacts
+sprint_sampling_strategy = "temporal_coherent"
+
+# Path-drop learning probability
+# During training, randomly replaces sparse path with MASK tokens at this probability
+# Helps the model learn to handle missing sparse information
+# 0.1 = 10% probability (default), 0.0 = disabled
+sprint_path_drop_prob = 0.1
+
+# Block partitioning strategy
+# "percentage" (default): Flexible, scales with model size using encoder_ratio and middle_ratio
+# "fixed": 2-N-2 partitioning (2 encoder, N middle, 2 decoder blocks)
+# Note: Manual sprint_encoder_layers and sprint_middle_layers always override this
+sprint_partitioning_strategy = "percentage"
+
+# Encoder ratio for percentage-based partitioning (ignored if sprint_encoder_layers is set)
+# 0.25 = 25% of blocks for encoder (e.g., 8 blocks for 32-layer model)
+# Only used when partitioning_strategy = "percentage" and sprint_encoder_layers is not set
+sprint_encoder_ratio = 0.25
+
+# Middle ratio for percentage-based partitioning (ignored if sprint_middle_layers is set)
+# 0.50 = 50% of blocks for middle (e.g., 16 blocks for 32-layer model)
+# Only used when partitioning_strategy = "percentage" and sprint_middle_layers is not set
+sprint_middle_ratio = 0.50
+
+# Two-stage training: token-dropping pretraining → full-token fine-tuning
+# Maximizes training efficiency while closing train-inference gap
+# Presumably, 5-10% fine-tuning steps achieves full quality recovery
+# Number of pretraining steps with token dropping
+# Set to 0 to use entire training as pretraining (no separate finetune stage)
+# Example: 10000 for long pretraining phase with maximum efficiency
+sprint_pretrain_steps = 0
+
+# Number of fine-tuning steps with full tokens (no dropping)
+# Set to 0 to disable fine-tuning stage (entire training uses token dropping)
+# Recommended: 5-10% of pretrain_steps (e.g., 1000 if pretrain=10000)
+# Fine-tuning closes train-inference gap and recovers any quality loss
+sprint_finetune_steps = 0
+
+# Number of warmup steps (linear ramp from 0 → sprint_token_drop_ratio)
+# Allows model to stabilize before aggressive token dropping begins
+# Set to 0 to disable warmup and start with full drop ratio immediately
+sprint_warmup_steps = 0
+
+# Number of cooldown steps during transition from pretraining to fine-tuning
+# Linear decay from sprint_token_drop_ratio → 0.0 over cooldown_steps
+# Smooth transition prevents quality degradation from abrupt change
+# Default 100 steps provides gentle transition
+sprint_cooldown_steps = 100
+
+# Enable Sprint diagnostic logging 
+sprint_enable_diagnostics = false
+
+# =============================================================================
 # ⚠️ FOPP SETTINGS
 # =============================================================================
 
@@ -2280,6 +2361,13 @@ save_state = true
 
 # save checkpoint every N steps
 save_every_n_steps = 50
+
+# Save checkpoints before generating samples/validation (default: false, saves after)
+# When true: checkpoint → sampling → validation
+# When false: sampling → validation → checkpoint (current behavior)
+# Useful if you want to prioritize checkpoint saving over potentially time-consuming sampling
+# Default: false to maintain existing behavior
+save_checkpoint_before_sampling = true
 
 # save training state (including optimizer states etc.) on train end even if --save_state is not specified
 # save_state_on_train_end = false 

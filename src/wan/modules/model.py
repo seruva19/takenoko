@@ -1010,6 +1010,11 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
         self._tread_router: TREADRouter | None = None
         self._tread_routes: list[dict] | None = None
 
+        # Sprint sparse-dense fusion (optional; enabled via config)
+        self.sprint_fusion: Optional[nn.Module] = None
+        self._sprint_global_step: Optional[int] = None
+        self._sprint_stage_name: Optional[str] = None
+
     def set_router(self, router: TREADRouter, routes: list[dict]) -> None:
         """Enable TREAD routing for this model.
 
@@ -1019,6 +1024,34 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
         """
         self._tread_router = router
         self._tread_routes = routes or []
+
+    def enable_sprint(
+        self,
+        token_drop_ratio: float = 0.75,
+        encoder_layers: Optional[int] = None,
+        middle_layers: Optional[int] = None,
+        sampling_strategy: str = "temporal_coherent",
+    ) -> None:
+        """
+        Enable Sprint sparse-dense residual fusion for efficient training.
+
+        Args:
+            token_drop_ratio: Ratio of tokens to drop (default 0.75 for 75% dropping)
+            encoder_layers: Number of encoder blocks (if None, auto-calculate as 25% of total)
+            middle_layers: Number of middle blocks (if None, auto-calculate as 50% of total)
+            sampling_strategy: Token sampling strategy - "uniform", "temporal_coherent", "spatial_coherent"
+        """
+        try:
+            from enhancements.sprint.model_integration import enable_sprint_with_validation
+            enable_sprint_with_validation(
+                model=self,
+                token_drop_ratio=token_drop_ratio,
+                encoder_layers=encoder_layers,
+                middle_layers=middle_layers,
+                sampling_strategy=sampling_strategy,
+            )
+        except ImportError:
+            logger.error("Sprint module not found. Please ensure enhancements.sprint is installed.")
 
     @property
     def dtype(self):
@@ -1471,104 +1504,145 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
         # Track input device for consistency check when CPU offloading is enabled
         input_device = x.device
 
-        for block_idx, block in enumerate(self.blocks):  # type: ignore
-            is_block_skipped = (
-                skip_block_indices is not None and block_idx in skip_block_indices
-            )
+        # ═══════════════════════════════════════════════════════════════════════════════
+        # SPRINT SPARSE-DENSE FUSION PATH
+        # ═══════════════════════════════════════════════════════════════════════════════
+        use_sprint = False
+        if self.sprint_fusion is not None:
+            try:
+                from enhancements.sprint.exports import can_use_sprint, apply_sprint_forward
+                use_sprint = can_use_sprint(
+                    sprint_fusion=self.sprint_fusion,
+                    is_training=self.training,
+                    skip_block_indices=skip_block_indices,
+                    sparse_attention=sparse_attention,
+                    controlnet_states=controlnet_states,
+                    tread_routes=self._tread_routes,
+                    blocks_to_swap=self.blocks_to_swap,
+                )
+                if use_sprint:
+                    # Get current drop ratio from fusion module
+                    current_drop_ratio = (
+                        1.0 - self.sprint_fusion.token_sampler.keep_ratio
+                        if (hasattr(self.sprint_fusion, 'token_sampler') and
+                            hasattr(self.sprint_fusion.token_sampler, 'keep_ratio'))
+                        else 0.75
+                    )
 
-            if self.blocks_to_swap and not is_block_skipped:
-                self.offloader.wait_for_block(block_idx)  # type: ignore
+                    x = apply_sprint_forward(
+                        sprint_fusion=self.sprint_fusion,
+                        x=x,
+                        blocks=self.blocks,  # type: ignore
+                        kwargs=kwargs,
+                        batch_idx=None,
+                        global_step=self._sprint_global_step,
+                        drop_ratio=current_drop_ratio,
+                        stage_name=self._sprint_stage_name,
+                    )
+            except Exception as e:
+                logger.error(f"Sprint forward pass failed: {e}. Falling back to standard path.")
+                use_sprint = False
 
-            # ═══════════════════════════════════════════════════════════════════════════════
-            # TREAD ROUTING START: Begin token routing at configured layer index
-            # ═══════════════════════════════════════════════════════════════════════════════
-            if (
-                use_routing
-                and route_ptr < len(routes)
-                and block_idx == int(routes[route_ptr]["start_layer_idx"])  # type: ignore
-            ):
-                assert router is not None
-                route_config = routes[route_ptr]
-                x = handle_routing_start(
-                    self,
-                    x,
-                    kwargs,
-                    tread_state,
-                    route_config,
-                    router,
-                    force_keep_mask,
-                    freqs_list,
+        # Standard block iteration path (only if Sprint not used)
+        if not use_sprint:
+            for block_idx, block in enumerate(self.blocks):  # type: ignore
+                is_block_skipped = (
+                    skip_block_indices is not None and block_idx in skip_block_indices
                 )
 
-            if not is_block_skipped:
-                # Switch attention to use batched_rotary when routing
-                tread_mode_mid = str(getattr(self, "_tread_mode", "full"))
-                if tread_state.routing_now and tread_mode_mid.startswith("frame_"):
-                    # Frame-based path uses standard freqs (already aligned by new grid)
-                    x = block(x, **kwargs)
-                elif (
-                    tread_state.routing_now
-                    and "batched_rotary" in kwargs
-                    and tread_mode_mid == "full"
-                ):
-                    # We pass batched_rotary down via the attention wrapper
-                    # by temporarily overriding freqs with None and adding batched_rotary
-                    x = block(
-                        x,
-                        e=kwargs["e"],
-                        seq_lens=kwargs["seq_lens"],
-                        grid_sizes=kwargs["grid_sizes"],
-                        freqs=None,
-                        context=kwargs["context"],
-                        context_lens=kwargs["context_lens"],
-                        sparse_attention=kwargs["sparse_attention"],
-                        batched_rotary=kwargs["batched_rotary"],
-                    )
-                else:
-                    x = block(x, **kwargs)
+                if self.blocks_to_swap and not is_block_skipped:
+                    self.offloader.wait_for_block(block_idx)  # type: ignore
 
-                # Inject ControlNet states if provided
-                if controlnet_states is not None and controlnet_weight != 0.0:
-                    if controlnet_stride <= 0:
-                        controlnet_idx = block_idx
-                    else:
-                        # downsample states along layers by stride
-                        if block_idx % max(1, int(controlnet_stride)) == 0:
-                            controlnet_idx = block_idx // int(max(1, controlnet_stride))
-                        else:
-                            controlnet_idx = None
-                    if controlnet_idx is not None and controlnet_idx < len(
-                        controlnet_states
-                    ):
-                        cn = controlnet_states[controlnet_idx]
-                        # Expect shape: (B, L_tokens, dim)
-                        if cn is not None and isinstance(cn, torch.Tensor):
-                            try:
-                                x = x + cn.to(dtype=x.dtype, device=x.device) * float(
-                                    controlnet_weight
-                                )
-                            except Exception:
-                                # Best-effort: ignore shape mismatch to avoid breaking non-control runs
-                                pass
-
-                # Capture intermediate representation if requested
+                # ═══════════════════════════════════════════════════════════════════════════════
+                # TREAD ROUTING START: Begin token routing at configured layer index
+                # ═══════════════════════════════════════════════════════════════════════════════
                 if (
-                    return_intermediate
-                    and target_block_idx is not None
-                    and block_idx == target_block_idx
+                    use_routing
+                    and route_ptr < len(routes)
+                    and block_idx == int(routes[route_ptr]["start_layer_idx"])  # type: ignore
                 ):
-                    # x shape is (B, L, C). Keep as-is for downstream flattening.
-                    intermediate_z = x
+                    assert router is not None
+                    route_config = routes[route_ptr]
+                    x = handle_routing_start(
+                        self,
+                        x,
+                        kwargs,
+                        tread_state,
+                        route_config,
+                        router,
+                        force_keep_mask,
+                        freqs_list,
+                    )
 
-            # ═══════════════════════════════════════════════════════════════════════════════
-            # TREAD ROUTING END: Reconstruct full tensors at configured layer index
-            # ═══════════════════════════════════════════════════════════════════════════════
-            if tread_state.routing_now and route_ptr < len(routes) and block_idx == int(routes[route_ptr]["end_layer_idx"]):  # type: ignore
-                x = handle_routing_end(self, x, kwargs, tread_state, freqs_list)
-                route_ptr += 1
+                if not is_block_skipped:
+                    # Switch attention to use batched_rotary when routing
+                    tread_mode_mid = str(getattr(self, "_tread_mode", "full"))
+                    if tread_state.routing_now and tread_mode_mid.startswith("frame_"):
+                        # Frame-based path uses standard freqs (already aligned by new grid)
+                        x = block(x, **kwargs)
+                    elif (
+                        tread_state.routing_now
+                        and "batched_rotary" in kwargs
+                        and tread_mode_mid == "full"
+                    ):
+                        # We pass batched_rotary down via the attention wrapper
+                        # by temporarily overriding freqs with None and adding batched_rotary
+                        x = block(
+                            x,
+                            e=kwargs["e"],
+                            seq_lens=kwargs["seq_lens"],
+                            grid_sizes=kwargs["grid_sizes"],
+                            freqs=None,
+                            context=kwargs["context"],
+                            context_lens=kwargs["context_lens"],
+                            sparse_attention=kwargs["sparse_attention"],
+                            batched_rotary=kwargs["batched_rotary"],
+                        )
+                    else:
+                        x = block(x, **kwargs)
 
-            if self.blocks_to_swap:
-                self.offloader.submit_move_blocks_forward(self.blocks, block_idx)  # type: ignore
+                    # Inject ControlNet states if provided
+                    if controlnet_states is not None and controlnet_weight != 0.0:
+                        if controlnet_stride <= 0:
+                            controlnet_idx = block_idx
+                        else:
+                            # downsample states along layers by stride
+                            if block_idx % max(1, int(controlnet_stride)) == 0:
+                                controlnet_idx = block_idx // int(max(1, controlnet_stride))
+                            else:
+                                controlnet_idx = None
+                        if controlnet_idx is not None and controlnet_idx < len(
+                            controlnet_states
+                        ):
+                            cn = controlnet_states[controlnet_idx]
+                            # Expect shape: (B, L_tokens, dim)
+                            if cn is not None and isinstance(cn, torch.Tensor):
+                                try:
+                                    x = x + cn.to(dtype=x.dtype, device=x.device) * float(
+                                        controlnet_weight
+                                    )
+                                except Exception:
+                                    # Best-effort: ignore shape mismatch to avoid breaking non-control runs
+                                    pass
+
+                    # Capture intermediate representation if requested
+                    if (
+                        return_intermediate
+                        and target_block_idx is not None
+                        and block_idx == target_block_idx
+                    ):
+                        # x shape is (B, L, C). Keep as-is for downstream flattening.
+                        intermediate_z = x
+
+                # ═══════════════════════════════════════════════════════════════════════════════
+                # TREAD ROUTING END: Reconstruct full tensors at configured layer index
+                # ═══════════════════════════════════════════════════════════════════════════════
+                if tread_state.routing_now and route_ptr < len(routes) and block_idx == int(routes[route_ptr]["end_layer_idx"]):  # type: ignore
+                    x = handle_routing_end(self, x, kwargs, tread_state, freqs_list)
+                    route_ptr += 1
+
+                if self.blocks_to_swap:
+                    self.offloader.submit_move_blocks_forward(self.blocks, block_idx)  # type: ignore
 
         # Ensure device consistency after CPU offloading operations
         if x.device != input_device:

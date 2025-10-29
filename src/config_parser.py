@@ -560,10 +560,14 @@ def create_args_from_config(
     # Advanced metrics (gradient stability, convergence, noise split, oscillation bounds)
     args.enable_advanced_metrics = config.get("enable_advanced_metrics", False)
     args.advanced_metrics_features = config.get("advanced_metrics_features", None)
-    args.advanced_metrics_max_history = config.get("advanced_metrics_max_history", 10000)
+    args.advanced_metrics_max_history = config.get(
+        "advanced_metrics_max_history", 10000
+    )
     args.gradient_watch_threshold = config.get("gradient_watch_threshold", 0.5)
     args.gradient_stability_window = config.get("gradient_stability_window", 10)
-    args.convergence_window_sizes = config.get("convergence_window_sizes", [10, 25, 50, 100])
+    args.convergence_window_sizes = config.get(
+        "convergence_window_sizes", [10, 25, 50, 100]
+    )
 
     # Control LoRA settings
     args.enable_control_lora = config.get("enable_control_lora", False)
@@ -613,6 +617,9 @@ def create_args_from_config(
 
     args.save_every_n_epochs = config.get("save_every_n_epochs", None)
     args.save_every_n_steps = config.get("save_every_n_steps", 1000)
+    args.save_checkpoint_before_sampling = bool(
+        config.get("save_checkpoint_before_sampling", True)
+    )
     args.save_last_n_epochs = config.get("save_last_n_epochs", None)
     args.save_last_n_epochs_state = config.get("save_last_n_epochs_state", None)
     args.save_last_n_steps = config.get("save_last_n_steps", None)
@@ -1192,6 +1199,15 @@ def create_args_from_config(
     args.sara_log_detailed_metrics = bool(
         config.get("sara_log_detailed_metrics", False)
     )
+
+    # Sprint configuration (parsed by Sprint module)
+    try:
+        from enhancements.sprint.config_parser import parse_sprint_config
+
+        parse_sprint_config(config, args)
+    except ImportError:
+        # Sprint module not available, set defaults
+        args.enable_sprint = False
 
     # Masked Training Configuration
     args.use_masked_training_with_prior = config.get(

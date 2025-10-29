@@ -398,12 +398,16 @@ class SamplingManager:
             )
             save_videos_grid(video, os.path.join(save_dir, save_path) + ".mp4")
 
-        if eqm_enabled and getattr(args, 'eqm_save_npz', False):
+        # Check if EqM mode is enabled for NPZ export
+        eqm_enabled = getattr(args, "enable_eqm_mode", False)
+        if eqm_enabled and getattr(args, "eqm_save_npz", False):
             try:
-                npz_dir = getattr(args, 'eqm_npz_dir', save_dir) or save_dir
+                npz_dir = getattr(args, "eqm_npz_dir", save_dir) or save_dir
                 prefix = f"{save_path}_step{steps}"
-                limit = getattr(args, 'eqm_npz_limit', None)
-                save_npz_from_samples(video.squeeze(0), npz_dir, prefix=prefix, limit=limit)
+                limit = getattr(args, "eqm_npz_limit", None)
+                save_npz_from_samples(
+                    video.squeeze(0), npz_dir, prefix=prefix, limit=limit
+                )
                 logger.info(f"EqM NPZ exported to {npz_dir}")
             except Exception as exc:
                 logger.warning(f"Failed to export EqM NPZ: {exc}")
@@ -696,12 +700,9 @@ class SamplingManager:
 
         if eqm_enabled:
             eqm_context = setup_eqm_mode(args)
-            if (
-                not eqm_context.warning_emitted
-                and (
-                    getattr(args, "enable_control_lora", False)
-                    or getattr(args, "enable_controlnet", False)
-                )
+            if not eqm_context.warning_emitted and (
+                getattr(args, "enable_control_lora", False)
+                or getattr(args, "enable_controlnet", False)
             ):
                 logger.warning(
                     "EqM sampling currently ignores ControlNet / Control LoRA signals."
@@ -774,18 +775,25 @@ class SamplingManager:
                                 f"Dual swap during inference skipped: {_inf_swap_err}"
                             )
                     # Prepare model input - concatenate control latents if available
-                    if hasattr(args, "enable_control_lora") and args.enable_control_lora:
+                    if (
+                        hasattr(args, "enable_control_lora")
+                        and args.enable_control_lora
+                    ):
                         # Always concatenate along the channel dimension to match training
                         channel_dim = 0  # CFHW format at sampling time
                         if control_latents is not None:
                             # Debug logging
                             logger.debug(f"Latent shape: {latent.shape}")
-                            logger.debug(f"Control latents shape: {control_latents.shape}")
+                            logger.debug(
+                                f"Control latents shape: {control_latents.shape}"
+                            )
                             # Ensure device/dtype alignment
                             cat_latent = torch.cat(
                                 [
                                     latent.to(device=device),
-                                    control_latents.to(device=device, dtype=latent.dtype),
+                                    control_latents.to(
+                                        device=device, dtype=latent.dtype
+                                    ),
                                 ],
                                 dim=channel_dim,
                             )
@@ -819,7 +827,9 @@ class SamplingManager:
                         # Apply T-LoRA rank mask at inference time if supported
                         try:
                             unwrapped_net = accelerator.unwrap_model(transformer)
-                            if hasattr(unwrapped_net, "update_rank_mask_from_timesteps"):
+                            if hasattr(
+                                unwrapped_net, "update_rank_mask_from_timesteps"
+                            ):
                                 unwrapped_net.update_rank_mask_from_timesteps(
                                     timestep, max_timestep=1000, device=device
                                 )
@@ -923,7 +933,9 @@ class SamplingManager:
 
         return result.latent
 
-    def _eqm_integrator_sample(self, *args, **kwargs) -> torch.Tensor:  # pragma: no cover
+    def _eqm_integrator_sample(
+        self, *args, **kwargs
+    ) -> torch.Tensor:  # pragma: no cover
         """Deprecated placeholder retained for backward compatibility."""
         raise NotImplementedError(
             "_eqm_integrator_sample has been superseded by research.eqm_mode.sampling_helper.run_eqm_sampling"

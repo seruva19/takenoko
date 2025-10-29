@@ -214,6 +214,19 @@ class ModelManager:
             pass
         # WanModel was constructed with use_fvdm above; no runtime mutation needed
 
+        # Enable Sprint sparse-dense fusion if requested
+        if bool(getattr(args, "enable_sprint", False)):
+            try:
+                transformer.enable_sprint(
+                    token_drop_ratio=float(getattr(args, "sprint_token_drop_ratio", 0.75)),
+                    encoder_layers=getattr(args, "sprint_encoder_layers", None),
+                    middle_layers=getattr(args, "sprint_middle_layers", None),
+                    sampling_strategy=str(getattr(args, "sprint_sampling_strategy", "temporal_coherent")),
+                )
+                logger.info("✅ Sprint sparse-dense fusion enabled for efficient training")
+            except Exception as e:
+                logger.error(f"Failed to enable Sprint: {e}")
+
         # If dual-model training is disabled, return as-is
         enable_dual = bool(getattr(args, "enable_dual_model_training", False))
         if not enable_dual:

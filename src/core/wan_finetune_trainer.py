@@ -1678,6 +1678,17 @@ class WanFinetuneTrainer:
                                         f"⚠️  Sampling failed at step {global_step}: {e}"
                                     )
 
+                        # Conditionally save checkpoint before or after sampling/validation
+                        save_before = getattr(
+                            args, "save_checkpoint_before_sampling", False
+                        )
+
+                        if save_before:
+                            # Handle step-based saving first (includes model and state)
+                            self.model_saving_utils.handle_step_saving(
+                                args, accelerator, training_model, global_step
+                            )
+
                         # Check if we should validate
                         should_validate = (
                             val_dataloader is not None
@@ -1725,10 +1736,11 @@ class WanFinetuneTrainer:
                                 )
                             )
 
-                        # Handle step-based saving (includes model and state)
-                        self.model_saving_utils.handle_step_saving(
-                            args, accelerator, training_model, global_step
-                        )
+                        if not save_before:
+                            # Handle step-based saving after sampling/validation (original behavior)
+                            self.model_saving_utils.handle_step_saving(
+                                args, accelerator, training_model, global_step
+                            )
 
                         # Handle additional state saving based on save_state_every_n_steps
                         if should_save_state_at_step(args, global_step):
