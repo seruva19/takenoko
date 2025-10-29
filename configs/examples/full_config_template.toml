@@ -223,14 +223,15 @@ rope_use_float32 = false
 # OPTIMIZER SETTINGS
 # =============================================================================
 
-# Optimizer to use: AdamW (default), AdamW8bit, AdaFactor, RavenAdamW. 
+# Optimizer to use: AdamW (default), AdamW8bit, AdaFactor, RavenAdamW, RavenAdamW8bit. 
 # You can also use any optimizer by specifying a fully-qualified class path 
 # (e.g., 'torch.optim.AdamW', 'bitsandbytes.optim.AdEMAMix8bit').
 # Resolved dynamically in optimizer manager with provided optimizer_args.
 # Available optimizers:
-# - "AdamW": Standard PyTorch AdamW (full precision, GPU states)
-# - "AdamW8bit": bitsandbytes 8-bit AdamW (quantized states)
-# - "RavenAdamW": CPU-offloaded AdamW with reusable GPU buffers
+# - "AdamW": Standard PyTorch AdamW
+# - "AdamW8bit": bitsandbytes 8-bit AdamW (quantized GPU states)
+# - "RavenAdamW": CPU-offloaded AdamW with BF16/FP32 states
+# - "RavenAdamW8bit": CPU-offloaded 8-bit quantized AdamW
 # - "AdaFactor": Memory-efficient adaptive optimizer with relative_step scheduling
 # - "Muon", "NorMuon": Second-order optimizers for matrix parameters
 # - "TemporalAdamW": AdamW with temporal gradient smoothing for video training
@@ -2086,6 +2087,15 @@ fvdm_eval_temporal_metrics = true
 
 # Steps between FVDM metric evaluation and logging
 fvdm_eval_frequency = 1000               
+
+# Compare FVDM timesteps to baseline schedule in TensorBoard (only active when enable_fvdm = true)
+log_timestep_distribution_compare_baseline = true
+
+# Steps between comparison histogram logs (match log_timestep_distribution_interval for aligned charts)
+log_timestep_distribution_compare_interval = 5000
+
+# Histogram bins for comparison charts (0 uses log_timestep_distribution_bins)
+log_timestep_distribution_compare_bins = 100
 
 # =============================================================================
 # ⚠️ RCM DISTILLATION PIPELINE SETTINGS

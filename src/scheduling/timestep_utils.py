@@ -712,13 +712,13 @@ def _apply_timestep_constraints(
     # Optional: if timesteps already lie within [t_min, t_max], and user requested
     # to skip extra constraining, return as-is to avoid double scaling that
     # compresses the distribution toward the upper bound.
-    if bool(getattr(args, "skip_extra_timestep_constraint", False)):
+    if args.skip_extra_timestep_constraint:
         eps = float(getattr(args, "timestep_constraint_epsilon", 1e-6))
         if torch.all(t >= (t_min - eps)) and torch.all(t <= (t_max + eps)):
             return t
 
     # Check if we should preserve the distribution shape
-    if not getattr(args, "preserve_distribution_shape", False):
+    if not args.preserve_distribution_shape:
         # Simple scaling approach (original behavior)
         return t * (t_max - t_min) + t_min  # scale to [t_min, t_max], default [0, 1]
     else:
@@ -943,8 +943,8 @@ def get_noisy_model_input_and_timesteps(
             try:
                 if (
                     should_use_precomputed_timesteps(args)
-                    and not bool(getattr(args, "preserve_distribution_shape", False))
-                    and not bool(getattr(args, "skip_extra_timestep_constraint", False))
+                    and not args.preserve_distribution_shape
+                    and not args.skip_extra_timestep_constraint
                 ):
                     t_min = (getattr(args, "min_timestep", 0) or 0) / 1000.0
                     t_max = (getattr(args, "max_timestep", 1000) or 1000) / 1000.0

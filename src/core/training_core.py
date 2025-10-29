@@ -44,9 +44,7 @@ from utils.train_utils import (
     should_sample_images,
     LossRecorder,
 )
-from scheduling.timestep_distribution import (
-    TimestepDistribution,
-)
+from scheduling.timestep_distribution import TimestepDistribution
 from scheduling.timestep_logging import (
     log_initial_timestep_distribution,
     log_show_timesteps_figure_unconditional,
@@ -869,10 +867,45 @@ class TrainingCore:
                     noise = torch.randn_like(latents)
 
                     if self.fvdm_manager.enabled:
-                        # FVDM is enabled - use FVDM manager
+                        # Initialize timestep distribution if needed (same as regular path)
+                        initialize_timestep_distribution(
+                            args, self.timestep_distribution
+                        )
+
+                        if (
+                            accelerator.is_main_process
+                            and not self._timestep_logging_initialized
+                            and getattr(args, "log_timestep_distribution_init", True)
+                            and args.log_with in ["tensorboard", "all"]
+                        ):
+                            try:
+                                log_initial_timestep_distribution(
+                                    accelerator, args, self.timestep_distribution
+                                )
+                            finally:
+                                self._timestep_logging_initialized = True
+
+                        try:
+                            if accelerator.is_main_process:
+                                log_show_timesteps_figure_unconditional(
+                                    accelerator,
+                                    args,
+                                    self.timestep_distribution,
+                                    noise_scheduler,
+                                )
+                        except Exception:
+                            pass
+
+                        # FVDM is enabled - use FVDM manager with full parameter alignment
                         noisy_model_input, timesteps, sigmas = (
                             self.fvdm_manager.get_noisy_input_and_timesteps(
-                                noise, latents, noise_scheduler, dit_dtype, step
+                                noise,
+                                latents,
+                                noise_scheduler,
+                                dit_dtype,
+                                step,
+                                timestep_distribution=self.timestep_distribution,
+                                presampled_uniform=None,  # Could be added later for advanced use
                             )
                         )
 
@@ -883,6 +916,15 @@ class TrainingCore:
                             timesteps,
                             accelerator.device,
                             dit_dtype,
+                        )
+
+                        self.fvdm_manager.log_timestep_distribution_comparison(
+                            accelerator=accelerator,
+                            latents=latents,
+                            timesteps=timesteps,
+                            global_step=global_step,
+                            noise_scheduler=noise_scheduler,
+                            timestep_distribution=self.timestep_distribution,
                         )
                     else:
                         # Initialize timestep distribution if needed

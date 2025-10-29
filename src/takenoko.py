@@ -821,15 +821,15 @@ class UnifiedTrainer:
             f"   Round to schedule steps: {bool(getattr(args, 'round_training_timesteps', False))}"
         )
         logger.info(
-            f"   Preserve distribution shape: {bool(getattr(args, 'preserve_distribution_shape', False))}"
+            f"   Preserve distribution shape: {args.preserve_distribution_shape}"
         )
         logger.info(
-            f"   Skip extra in-range constraint: {bool(getattr(args, 'skip_extra_timestep_constraint', False))}"
+            f"   Skip extra in-range constraint: {args.skip_extra_timestep_constraint}"
         )
         logger.info(
             f"   Constraint epsilon: {float(getattr(args, 'timestep_constraint_epsilon', 1e-6))}"
         )
-        if bool(getattr(args, "preserve_distribution_shape", False)):
+        if args.preserve_distribution_shape:
             logger.info(
                 "   Shape preservation settings:"
                 + f" weighting='{getattr(args, 'weighting_scheme', 'none')}',"

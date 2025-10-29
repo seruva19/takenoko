@@ -739,6 +739,15 @@ def create_args_from_config(
     args.log_timestep_distribution_pmf = config.get(
         "log_timestep_distribution_pmf", False
     )
+    args.log_timestep_distribution_compare_baseline = config.get(
+        "log_timestep_distribution_compare_baseline", True
+    )
+    args.log_timestep_distribution_compare_interval = int(
+        config.get("log_timestep_distribution_compare_interval", 5000)
+    )
+    args.log_timestep_distribution_compare_bins = int(
+        config.get("log_timestep_distribution_compare_bins", 100)
+    )
 
     # Throughput metrics logging settings
     args.log_throughput_metrics = config.get("log_throughput_metrics", True)

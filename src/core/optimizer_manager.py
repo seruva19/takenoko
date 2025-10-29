@@ -332,6 +332,20 @@ class OptimizerManager:
             optimizer_class = RavenAdamW
             optimizer = optimizer_class(trainable_params, lr=lr, **optimizer_kwargs)
 
+        elif optimizer_type == "RavenAdamW8bit".lower():
+            logger.info(f"using RavenAdamW8bit optimizer | {optimizer_kwargs}")
+
+            try:
+                from optimizers.raven_8bit import RavenAdamW8bit
+            except Exception as err:
+                raise ImportError(
+                    "RavenAdamW8bit requires bitsandbytes. Please install it:\n"
+                    "pip install bitsandbytes"
+                ) from err
+
+            optimizer_class = RavenAdamW8bit
+            optimizer = optimizer_class(trainable_params, lr=lr, **optimizer_kwargs)
+
         elif optimizer_type == "Muon".lower():
             logger.info(f"using Muon optimizer | {optimizer_kwargs}")
 

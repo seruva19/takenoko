@@ -459,6 +459,75 @@ def log_live_timestep_distribution(
             pass
 
 
+def log_timestep_distribution_comparison(
+    accelerator,
+    args,
+    actual_timesteps,
+    baseline_timesteps,
+    global_step: int,
+    prefix: str = "timestep/comparison",
+) -> None:
+    """Log paired timestep histograms comparing actual vs. baseline distributions."""
+
+    if not bool(getattr(args, "log_timestep_distribution_compare_baseline", False)):
+        return
+
+    interval = int(getattr(args, "log_timestep_distribution_compare_interval", 0))
+    if interval <= 0 or (global_step % interval) != 0:
+        return
+
+    writer = _get_tensorboard_writer(accelerator)
+    if writer is None:
+        return
+
+    import torch
+
+    actual = actual_timesteps.detach().to(dtype=torch.float32).view(-1)
+    baseline = baseline_timesteps.detach().to(dtype=torch.float32).view(-1)
+
+    if actual.numel() == 0 or baseline.numel() == 0:
+        return
+
+    num_bins = int(getattr(args, "log_timestep_distribution_compare_bins", 100))
+    if num_bins <= 0:
+        num_bins = int(getattr(args, "log_timestep_distribution_bins", 100))
+    num_bins = max(10, num_bins)
+
+    cpu_actual = actual.cpu()
+    cpu_baseline = baseline.cpu()
+
+    try:
+        writer.add_histogram(
+            f"{prefix}/actual", cpu_actual, global_step=global_step, bins=num_bins
+        )
+    except TypeError:
+        writer.add_histogram(f"{prefix}/actual", cpu_actual, global_step=global_step)
+
+    try:
+        writer.add_histogram(
+            f"{prefix}/baseline", cpu_baseline, global_step=global_step, bins=num_bins
+        )
+    except TypeError:
+        writer.add_histogram(
+            f"{prefix}/baseline", cpu_baseline, global_step=global_step
+        )
+
+    diff = (actual - baseline).abs()
+    actual_mean = float(actual.mean().item())
+    baseline_mean = float(baseline.mean().item())
+    abs_mean_delta = float(diff.mean().item())
+    abs_max_delta = float(diff.max().item())
+    actual_std = float(actual.std(unbiased=False).item())
+    baseline_std = float(baseline.std(unbiased=False).item())
+
+    writer.add_scalar(f"{prefix}/actual_mean", actual_mean, global_step)
+    writer.add_scalar(f"{prefix}/baseline_mean", baseline_mean, global_step)
+    writer.add_scalar(f"{prefix}/actual_std", actual_std, global_step)
+    writer.add_scalar(f"{prefix}/baseline_std", baseline_std, global_step)
+    writer.add_scalar(f"{prefix}/abs_mean_delta", abs_mean_delta, global_step)
+    writer.add_scalar(f"{prefix}/abs_max_delta", abs_max_delta, global_step)
+
+
 def log_loss_scatterplot(
     accelerator,
     args,

@@ -18,11 +18,20 @@ Usage:
 """
 
 import argparse
-import torch
 import logging
+import math
 from typing import Tuple, Any, Optional, Dict
-from utils.fvdm_metrics import FVDMTrainingMetrics, compute_fvdm_loss_components
+
+import torch
+
 import scheduling.fvdm as fvdm_core
+from scheduling.timestep_distribution import should_use_precomputed_timesteps
+from scheduling.timestep_logging import log_timestep_distribution_comparison
+from scheduling.timestep_utils import (
+    map_uniform_to_sampling,
+    _apply_timestep_constraints,
+)
+from utils.fvdm_metrics import FVDMTrainingMetrics, compute_fvdm_loss_components
 
 logger = logging.getLogger(__name__)
 
@@ -126,6 +135,8 @@ class FVDMManager:
         noise_scheduler: Any,
         dtype: torch.dtype,
         step: int = 0,
+        timestep_distribution: Optional[Any] = None,
+        presampled_uniform: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Get noisy input and timesteps using FVDM or fallback to standard method.
@@ -136,6 +147,8 @@ class FVDMManager:
             noise_scheduler: Noise scheduler
             dtype: Data type
             step: Current training step
+            timestep_distribution: Optional precomputed timestep distribution
+            presampled_uniform: Optional presampled uniform values for rejection sampling
 
         Returns:
             Tuple of (noisy_model_input, timesteps, sigmas)
@@ -164,6 +177,8 @@ class FVDMManager:
             dtype,
             current_step=step,
             adaptive_manager=self.adaptive_manager if self.integrate_adaptive else None,
+            timestep_distribution=timestep_distribution,
+            presampled_uniform=presampled_uniform,
         )
 
     def record_training_step(
@@ -277,6 +292,134 @@ class FVDMManager:
         except Exception as e:
             logger.warning(f"Failed to get FVDM metrics for logging: {e}")
             return {}
+
+    def log_timestep_distribution_comparison(
+        self,
+        accelerator: Any,
+        latents: torch.Tensor,
+        timesteps: torch.Tensor,
+        global_step: int,
+        noise_scheduler: Any,
+        timestep_distribution: Optional[Any],
+    ) -> None:
+        """Log paired timestep histograms comparing FVDM to the baseline sampler."""
+
+        if not self.enabled:
+            return
+
+        if not bool(
+            getattr(self.args, "log_timestep_distribution_compare_baseline", False)
+        ):
+            return
+
+        if not bool(getattr(self.args, "enable_fvdm", False)):
+            return
+
+        interval = int(
+            getattr(self.args, "log_timestep_distribution_compare_interval", 0)
+        )
+        if interval <= 0 or (global_step % interval) != 0:
+            return
+
+        try:
+            baseline_timesteps = self._generate_baseline_timesteps_for_logging(
+                accelerator=accelerator,
+                latents=latents,
+                target_shape=timesteps.shape,
+                noise_scheduler=noise_scheduler,
+                timestep_distribution=timestep_distribution,
+                global_step=global_step,
+                dtype=timesteps.dtype,
+            )
+        except Exception as exc:  # pragma: no cover - diagnostic aid
+            logger.debug(f"FVDM baseline timestep generation failed: {exc}")
+            return
+
+        try:
+            log_timestep_distribution_comparison(
+                accelerator,
+                self.args,
+                timesteps,
+                baseline_timesteps,
+                global_step,
+            )
+        except Exception as exc:  # pragma: no cover - logging must not break training
+            logger.debug(f"FVDM timestep comparison logging skipped: {exc}")
+
+    def _generate_baseline_timesteps_for_logging(
+        self,
+        accelerator: Any,
+        latents: torch.Tensor,
+        target_shape: torch.Size,
+        noise_scheduler: Any,
+        timestep_distribution: Optional[Any],
+        global_step: int,
+        dtype: torch.dtype,
+    ) -> torch.Tensor:
+        """Generate baseline timesteps that mirror the standard sampler."""
+
+        device = accelerator.device
+        batch_size = target_shape[0] if len(target_shape) > 0 else 0
+        if batch_size <= 0:
+            raise ValueError("No timesteps available for comparison logging")
+
+        use_precomputed = (
+            should_use_precomputed_timesteps(self.args)
+            and timestep_distribution is not None
+            and getattr(timestep_distribution, "is_initialized", False)
+            and hasattr(timestep_distribution, "sample")
+        )
+
+        if use_precomputed:
+            baseline_per_item = timestep_distribution.sample(batch_size, device)
+            baseline_per_item = baseline_per_item.view(batch_size).to(device=device)
+        else:
+            with torch.random.fork_rng(devices=[device]):
+                base_seed = int(getattr(self.args, "seed", 0) or 0)
+                step_seed = base_seed + int(global_step)
+                torch.manual_seed(step_seed)
+                if device.type == "cuda":
+                    torch.cuda.manual_seed_all(step_seed)
+                baseline_uniform = torch.rand(
+                    batch_size, device=device, dtype=torch.float32
+                )
+
+            baseline_per_item = map_uniform_to_sampling(
+                self.args,
+                baseline_uniform.to(device=device),
+                latents,
+            )
+
+        flat_cont = baseline_per_item.reshape(-1)
+        constrained = _apply_timestep_constraints(
+            flat_cont,
+            self.args,
+            flat_cont.shape[0],
+            device,
+            latents,
+            presampled_uniform=None,
+        )
+        constrained = constrained.view(batch_size)
+
+        view_shape = (batch_size,) + (1,) * (len(target_shape) - 1)
+        baseline_cont = constrained.view(view_shape).expand(target_shape)
+
+        baseline_timesteps = baseline_cont * 1000.0 + 1.0
+
+        if getattr(self.args, "round_training_timesteps", False):
+            try:
+                max_ts = int(
+                    getattr(
+                        getattr(noise_scheduler, "config", object()),
+                        "num_train_timesteps",
+                        1000,
+                    )
+                )
+            except Exception:
+                max_ts = 1000
+            baseline_timesteps = baseline_timesteps.round().clamp_(1, max_ts)
+
+        return baseline_timesteps.to(device=device, dtype=dtype)
 
     def get_status_summary(self) -> str:
         """Get a brief status summary for logging."""
