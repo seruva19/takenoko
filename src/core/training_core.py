@@ -755,10 +755,21 @@ class TrainingCore:
                 last_validated_step = global_step
             else:
                 last_validated_step = -1
+
+            # Check if fast validation would occur at the current global_step
+            if (
+                hasattr(args, "validate_fast_every_n_steps")
+                and args.validate_fast_every_n_steps is not None
+                and global_step % args.validate_fast_every_n_steps == 0
+            ):
+                last_fast_validated_step = global_step
+            else:
+                last_fast_validated_step = -1
         else:
             # Fresh training start
             last_sampled_step = -1
             last_validated_step = -1
+            last_fast_validated_step = -1
 
         # Initialize throughput tracker with configuration
         _initialize_throughput_tracker(args)
@@ -1593,8 +1604,11 @@ class TrainingCore:
                     should_validating = self.validation_core.should_validate(
                         args, global_step, val_dataloader, last_validated_step
                     )
+                    should_fast_validating = self.validation_core.should_validate_fast(
+                        args, global_step, val_dataloader, last_validated_step, last_fast_validated_step
+                    )
 
-                    if should_sampling or should_saving or should_validating:
+                    if should_sampling or should_saving or should_validating or should_fast_validating:
                         if optimizer_eval_fn:
                             optimizer_eval_fn()
 
@@ -1631,10 +1645,11 @@ class TrainingCore:
                             last_sampled_step,
                         )
 
-                        # Handle step validation
+                        # Handle step validation (regular and fast)
                         (
                             last_validated_step,
                             self._warned_no_val_pixels_for_perceptual,
+                            last_fast_validated_step,
                         ) = handle_step_validation(
                             should_validating,
                             self.validation_core,
@@ -1653,6 +1668,8 @@ class TrainingCore:
                             self._warned_no_val_pixels_for_perceptual,
                             last_validated_step,
                             self.timestep_distribution,
+                            should_fast_validating,
+                            last_fast_validated_step,
                         )
 
                         if not save_before:

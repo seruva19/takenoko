@@ -2164,6 +2164,20 @@ validate_every_n_steps = 500
 # Enable validation at the end of each epoch (default: false)
 validate_on_epoch_end = true
 
+# Run fast validation every N steps (optional, set to enable two-tier validation)
+# Example: 50 = run fast validation every 50 steps
+# Fast validation will NOT run on steps where regular validation runs
+# validate_fast_every_n_steps = 50
+
+# Fraction of validation dataset to use for fast validation (0.0-1.0)
+# Example: 0.1 = use 10% of validation batches, 0.05 = use 5%
+validation_fast_subset_fraction = 0.1
+
+# Randomly sample batches for fast validation instead of using first N batches
+# true = randomly select different batches each time (better coverage)
+# false = always use first N batches (faster, deterministic)
+validation_fast_random_subset = true
+
 # Validation timesteps mode:
 # - "fixed": use the list in validation_timesteps every time (default)
 # - "random": draw validation_timesteps_count integers uniformly within [validation_timesteps_min, validation_timesteps_max]

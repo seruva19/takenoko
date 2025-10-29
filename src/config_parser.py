@@ -652,6 +652,16 @@ def create_args_from_config(
     # integer jitter radius applied per base timestep when mode == "jitter"
     args.validation_timesteps_jitter = int(config.get("validation_timesteps_jitter", 0))
     args.use_unique_noise_per_batch = config.get("use_unique_noise_per_batch", True)
+
+    # Two-tier validation: fast validation runs more frequently on a subset of data
+    args.validate_fast_every_n_steps = config.get("validate_fast_every_n_steps", None)
+    args.validation_fast_subset_fraction = float(
+        config.get("validation_fast_subset_fraction", 0.1)
+    )
+    args.validation_fast_random_subset = bool(
+        config.get("validation_fast_random_subset", True)
+    )
+
     # SNR / perceptual validation toggles
     args.enable_perceptual_snr = config.get("enable_perceptual_snr", False)
     args.perceptual_snr_max_items = config.get("perceptual_snr_max_items", 4)

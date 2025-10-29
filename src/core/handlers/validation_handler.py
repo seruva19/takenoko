@@ -26,7 +26,9 @@ def handle_step_validation(
     warned_no_val_pixels_for_perceptual: bool,
     last_validated_step: int,
     timestep_distribution: Optional[Any] = None,
-) -> Tuple[int, bool]:
+    should_fast_validating: bool = False,
+    last_fast_validated_step: int = -1,
+) -> Tuple[int, bool, int]:
     """Handle validation during training step.
 
     Args:
@@ -46,12 +48,15 @@ def handle_step_validation(
         sampling_manager: Sampling manager instance
         warned_no_val_pixels_for_perceptual: Warning flag state
         last_validated_step: Last step when validation occurred
+        timestep_distribution: Timestep distribution (optional)
+        should_fast_validating: Whether fast validation should occur
+        last_fast_validated_step: Last step when fast validation occurred
 
     Returns:
-        Tuple of (new_last_validated_step, new_warned_flag)
+        Tuple of (new_last_validated_step, new_warned_flag, new_last_fast_validated_step)
     """
-    if not should_validating:
-        return last_validated_step, warned_no_val_pixels_for_perceptual
+    if not should_validating and not should_fast_validating:
+        return last_validated_step, warned_no_val_pixels_for_perceptual, last_fast_validated_step
 
     # Sync validation datasets before validation runs
     validation_core.sync_validation_epoch(
@@ -126,6 +131,16 @@ def handle_step_validation(
         global_step=global_step,
     )
 
+    # Determine subset_fraction and random_subset for fast validation
+    subset_fraction = None
+    random_subset = False
+    if should_fast_validating:
+        subset_fraction = getattr(args, "validation_fast_subset_fraction", 0.1)
+        random_subset = getattr(args, "validation_fast_random_subset", False)
+        if accelerator.is_main_process:
+            sampling_type = "randomly sampled" if random_subset else "first"
+            logger.info(f"⚡ Running fast validation with {subset_fraction*100:.0f}% of validation data ({sampling_type})")
+
     val_loss = validation_core.validate(
         accelerator,
         transformer,
@@ -136,6 +151,8 @@ def handle_step_validation(
         val_vae_to_use,
         global_step,
         timestep_distribution=timestep_distribution,
+        subset_fraction=subset_fraction,
+        random_subset=random_subset,
     )
     validation_core.log_validation_results(accelerator, val_loss, global_step)
 
@@ -159,7 +176,9 @@ def handle_step_validation(
                 logger.debug(f"Failed to unload temporary VAE after validation: {e}")
 
     # Track that validation occurred at this step
-    return global_step, new_warned_flag
+    new_last_validated_step = global_step if should_validating else last_validated_step
+    new_last_fast_validated_step = global_step if should_fast_validating else last_fast_validated_step
+    return new_last_validated_step, new_warned_flag, new_last_fast_validated_step
 
 
 def handle_epoch_end_validation(

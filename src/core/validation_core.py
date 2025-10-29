@@ -198,6 +198,8 @@ class ValidationCore:
         global_step: Optional[int] = None,
         show_progress: bool = True,
         timestep_distribution: Optional[Any] = None,
+        subset_fraction: Optional[float] = None,
+        random_subset: bool = False,
     ) -> tuple[float, float]:
         # Determine validation timesteps according to mode
         try:
@@ -396,6 +398,34 @@ class ValidationCore:
             unwrapped_model.switch_block_swap_for_training()
             return 0.0, 0.0
 
+        # Calculate max_batches from subset_fraction if provided (for fast validation)
+        max_batches = None
+        selected_batch_indices = None
+        if subset_fraction is not None and 0.0 < subset_fraction < 1.0:
+            try:
+                total_batches = len(val_dataloader)
+                max_batches = max(1, int(total_batches * subset_fraction))
+
+                if random_subset:
+                    # Randomly select batch indices for better coverage
+                    # Use global_step as seed for reproducibility within a run, but variety across runs
+                    import random
+                    rng = random.Random(global_step if global_step is not None else 42)
+                    selected_batch_indices = set(rng.sample(range(total_batches), max_batches))
+                    logger.info(
+                        f"Fast validation mode: randomly sampling {max_batches}/{total_batches} batches ({subset_fraction*100:.1f}%)"
+                    )
+                else:
+                    # Sequential selection (first N batches)
+                    logger.info(
+                        f"Fast validation mode: using first {max_batches}/{total_batches} batches ({subset_fraction*100:.1f}%)"
+                    )
+            except Exception:
+                # If dataloader doesn't support len(), we'll just process all batches
+                logger.warning("Cannot determine dataloader length; fast validation disabled")
+                max_batches = None
+                selected_batch_indices = None
+
         logger.info(
             f"Validating across {num_timesteps} timesteps: {self.validation_timesteps}"
         )
@@ -464,6 +494,17 @@ class ValidationCore:
                     )
 
                 for step, batch in enumerate(dataloader_pbar):
+                    # Handle fast validation batch selection
+                    if max_batches is not None:
+                        if selected_batch_indices is not None:
+                            # Random subset: skip batches not in selected set
+                            if step not in selected_batch_indices:
+                                continue
+                        else:
+                            # Sequential subset: stop after max_batches
+                            if step >= max_batches:
+                                break
+
                     latents = batch["latents"]
 
                     # Text embedding preparation
@@ -2104,6 +2145,44 @@ class ValidationCore:
             return True
 
         return False
+
+    def should_validate_fast(
+        self,
+        args: argparse.Namespace,
+        global_step: int,
+        val_dataloader: Optional[Any],
+        last_validated_step: int,
+        last_fast_validated_step: int,
+    ) -> bool:
+        """Check if fast validation should be performed at the current step.
+
+        Fast validation runs on a subset of data more frequently than regular validation.
+        Returns True only if:
+        - Fast validation is enabled (validate_fast_every_n_steps is set)
+        - This step is a fast validation checkpoint
+        - Fast validation hasn't already occurred at this step
+        - This is NOT a regular validation step (to avoid duplicate validation)
+        """
+        if val_dataloader is None:
+            return False
+
+        # Check if fast validation is enabled
+        if args.validate_fast_every_n_steps is None:
+            return False
+
+        # Check if fast validation already occurred at this step
+        if last_fast_validated_step == global_step:
+            return False
+
+        # Check if this is a fast validation checkpoint
+        if global_step % args.validate_fast_every_n_steps != 0:
+            return False
+
+        # Don't run fast validation if regular validation is already running this step
+        if self.should_validate(args, global_step, val_dataloader, last_validated_step):
+            return False
+
+        return True
 
     def log_validation_results(
         self,
