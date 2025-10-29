@@ -743,7 +743,7 @@ def create_args_from_config(
         "log_timestep_distribution_compare_baseline", True
     )
     args.log_timestep_distribution_compare_interval = int(
-        config.get("log_timestep_distribution_compare_interval", 5000)
+        config.get("log_timestep_distribution_compare_interval", 100)
     )
     args.log_timestep_distribution_compare_bins = int(
         config.get("log_timestep_distribution_compare_bins", 100)
