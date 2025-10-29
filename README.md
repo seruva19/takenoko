@@ -90,4 +90,4 @@ Keep in mind that work on some features is not yet complete due to time and hard
 | [TiM](https://github.com/WZDTHU/TiM) | repo | - Transition training objective (paired timesteps, transports, weighting, EMA) | [WZDTHU](https://github.com/WZDTHU) | Apache 2.0 | <sub>see also [paper](https://arxiv.org/abs/2509.04394)</sub> |
 | [rcm](https://github.com/NVlabs/rcm) | repo | rCM distillation algorithm reference | [NVlabs](https://github.com/NVlabs) | Apache 2.0 | <sub>see also [paper](https://arxiv.org/abs/2510.08431)</sub> |
 | [Aozora_SDXL_Training](https://github.com/Hysocs/Aozora_SDXL_Training) | repo | - Raven optimizer | [Hysocs](https://github.com/Hysocs) |  | |
-
+| [Sprint: Sparse-Dense Residual Fusion for Efficient Diffusion Transformers](https://arxiv.org/abs/2510.21986v1) | paper | - Sparse-dense residual fusion with token dropping<br>- Path-drop learning with token regularization<br>- Two-stage training scheduler | Dogyun Park, Moayed Haji-Ali, Yanyu Li, Willi Menapace, Sergey Tulyakov, Hyunwoo J. Kim, Aliaksandr Siarohin, Anil Kag | CC BY 4.0 | |
