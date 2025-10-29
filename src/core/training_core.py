@@ -98,7 +98,10 @@ from core.handlers.saving_handler import (
 )
 from core.handlers.adaptive_handler import handle_adaptive_timestep_sampling
 from core.handlers.self_correction_handler import handle_self_correction_update
-from core.handlers.vram_validation_handler import handle_vram_validation_if_enabled
+from core.handlers.vram_validation_handler import (
+    handle_vram_validation_if_enabled,
+    handle_windows_shared_memory_check,
+)
 
 from common.performance_logger import (
     start_step_timing,
@@ -1772,6 +1775,9 @@ class TrainingCore:
 
                 # Validate VRAM estimate vs actual (if enabled, only on first step)
                 handle_vram_validation_if_enabled(args, global_step, accelerator)
+
+                # Check for Windows shared GPU memory usage (if enabled, periodic)
+                handle_windows_shared_memory_check(args, global_step, accelerator)
 
                 if global_step >= args.max_train_steps:
                     break

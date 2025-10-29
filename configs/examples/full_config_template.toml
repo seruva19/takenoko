@@ -1490,6 +1490,35 @@ memory_tracking_export_on_oom = true
 memory_tracking_export_directory = "logs"
 
 # =============================================================================
+# WINDOWS SHARED GPU MEMORY DETECTION
+# =============================================================================
+
+# Enable Windows-specific shared GPU memory detection (Windows only)
+# Default: false (lightweight async monitoring, minimal overhead)
+enable_windows_vram_monitor = false
+
+# Check interval in training steps (default: 50)
+# How often to check for shared memory usage during training
+# Uses PEAK memory values to catch spikes between checks - you won't miss transient overflows!
+# Higher values = less overhead, lower values = more frequent reporting
+# Recommended: 50-100 for minimal impact on training speed
+windows_vram_check_interval = 50
+
+# Log warning when shared memory usage exceeds this threshold in GB (default: 0.5)
+# Only logs when shared memory usage is significant enough to impact performance
+# Set to 0 to log any shared memory usage
+windows_vram_warning_threshold_gb = 0.5
+
+# Enable detailed shared memory usage logging (default: false)
+# When enabled, logs detailed breakdown of VRAM vs shared memory
+# Useful for debugging memory issues, adds minimal overhead
+windows_vram_detailed_logging = false
+
+# Automatically suggest optimizations when shared memory detected (default: true)
+# Provides actionable recommendations like reducing batch size, enabling checkpointing, etc.
+windows_vram_auto_suggest_optimizations = true
+
+# =============================================================================
 # DUAL MODEL TRAINING SETTINGS
 # =============================================================================
 

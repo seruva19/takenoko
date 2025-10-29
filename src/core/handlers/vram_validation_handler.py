@@ -3,6 +3,8 @@ VRAM Estimation Validation Handler
 
 Handles VRAM estimation at training initialization and automatic validation
 of estimates against actual usage after first training step.
+
+Also integrates Windows-specific shared GPU memory detection.
 """
 
 import logging
@@ -104,3 +106,42 @@ def handle_vram_validation_if_enabled(
 
     except Exception as e:
         logger.debug(f"Failed to validate VRAM estimate: {e}")
+
+
+def handle_windows_shared_memory_check(
+    args,
+    global_step: int,
+    accelerator,
+) -> None:
+    """
+    Check for Windows shared GPU memory usage at training step.
+
+    This function is called periodically during training to detect when
+    Windows starts using system RAM as shared GPU memory (VRAM overflow).
+
+    Only runs if:
+    - Windows VRAM monitoring is enabled
+    - Main process
+    - CUDA is available
+
+    Args:
+        args: Training arguments containing config flags
+        global_step: Current training step
+        accelerator: Accelerator instance
+    """
+    # Only on main process
+    if not accelerator.is_main_process:
+        return
+
+    # Only if CUDA is available
+    if not torch.cuda.is_available():
+        return
+
+    try:
+        from memory.windows_vram_monitor import check_shared_memory_at_step
+
+        # Check at this step (monitor handles internal interval logic)
+        check_shared_memory_at_step(global_step)
+
+    except Exception as e:
+        logger.debug(f"Windows shared memory check failed: {e}")

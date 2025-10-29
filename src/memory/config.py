@@ -37,6 +37,12 @@ def parse_memory_optimization_config(
         "memory_tracking_verbosity": "standard",  # "minimal", "standard", "debug"
         "memory_tracking_export_on_oom": True,  # Export diagnostics on OOM errors
         "memory_tracking_export_directory": "logs",  # Directory for diagnostic exports
+        # Windows Shared GPU Memory Detection (Windows-specific)
+        "enable_windows_vram_monitor": False,  # Master switch for Windows shared memory detection
+        "windows_vram_check_interval": 50,  # Check interval in training steps
+        "windows_vram_warning_threshold_gb": 0.5,  # Warning threshold for shared memory usage
+        "windows_vram_detailed_logging": False,  # Enable detailed logging
+        "windows_vram_auto_suggest_optimizations": True,  # Auto-suggest optimizations
         # CUDA configuration defaults (handled by memory_utils.py but tracked here)
         # All optimizations DISABLED by default - no tuning applied unless explicitly enabled
         "cuda_allocator_enable": False,

@@ -1007,6 +1007,11 @@ class UnifiedTrainer:
 
         estimate_and_store_vram(self.args, self.config)
 
+        # Initialize Windows shared GPU memory monitor (if enabled)
+        from memory.windows_vram_monitor import initialize_windows_vram_monitor
+
+        initialize_windows_vram_monitor(self.args)
+
         try:
             # Route to RCM pipeline if enabled via config
             if getattr(getattr(self.args, "rcm", None), "enabled", False):
