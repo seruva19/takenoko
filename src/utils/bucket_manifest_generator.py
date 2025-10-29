@@ -213,7 +213,11 @@ def _write_dataset_manifest(
 
 def _collect_bucket_info(dataset_group) -> Dict[Tuple, Dict]:
     """
-    Collect bucket information from dataset group.
+    Collect bucket information from dataset group by reading the actual
+    bucketed data from each dataset's batch_manager.
+
+    This ensures the manifest shows the ACTUAL bucket resolutions that will
+    be used during training, not just the configured base resolutions.
 
     Returns:
         Dictionary mapping bucket keys to info dicts.
@@ -234,94 +238,61 @@ def _collect_bucket_info(dataset_group) -> Dict[Tuple, Dict]:
         return {}
 
     for dataset_idx, dataset in enumerate(dataset_group.datasets):
-        # Get resolution
-        resolution = getattr(dataset, "resolution", None)
-        if not resolution:
-            continue
-
-        width, height = resolution[0], resolution[1]
-
-        # Try to determine if this is a video dataset
-        target_frames = getattr(dataset, "target_frames", None)
-        is_video_dataset = target_frames is not None and len(target_frames) > 0
-
-        # Get batch size and repeats
+        # Get batch size and repeats from dataset
         batch_size = getattr(dataset, "batch_size", None)
         num_repeats = getattr(dataset, "num_repeats", 1)
 
-        # Try to get bucketed items for more precise information
-        bucketed_items = getattr(dataset, "bucketed_item_info", None)
+        # Read from dataset's batch_manager which has the actual bucketed items
+        batch_manager = getattr(dataset, "batch_manager", None)
 
-        if bucketed_items:
-            # Iterate through bucketed items to get exact bucket distribution
-            for bucket_resolution, items in bucketed_items.items():
-                bucket_width, bucket_height = bucket_resolution
+        if batch_manager and hasattr(batch_manager, "buckets"):
+            # Iterate through actual buckets from the batch manager
+            for bucket_reso, items in batch_manager.buckets.items():
+                # bucket_reso is already the actual bucket resolution tuple
+                # For images: (width, height)
+                # For videos: (width, height, frames)
+                bucket_key = bucket_reso
 
-                # Check if items have frame information
-                item_list = items if isinstance(items, list) else [items]
-
-                # Try to determine frame count for this bucket
-                frame_counts = set()
-                for item in item_list:
-                    if hasattr(item, "frame_count") and item.frame_count:
-                        frame_counts.add(item.frame_count)
-                    elif (
-                        hasattr(item, "target_frame_count") and item.target_frame_count
-                    ):
-                        frame_counts.add(item.target_frame_count)
-
-                # Create bucket key
-                if (
-                    frame_counts
-                    and len(frame_counts) == 1
-                    and list(frame_counts)[0] > 1
-                ):
-                    # Video bucket with specific frame count
-                    bucket_key = (bucket_width, bucket_height, list(frame_counts)[0])
-                elif is_video_dataset and target_frames:
-                    # Video bucket with target frames
-                    # Group by target frames if consistent
-                    for target_frame in target_frames:
-                        bucket_key = (bucket_width, bucket_height, target_frame)
-                        bucket_info[bucket_key]["count"] += len(item_list) // len(
-                            target_frames
-                        )
-                        bucket_info[bucket_key]["batch_size"] = batch_size
-                        bucket_info[bucket_key]["num_repeats"] = num_repeats
-                        bucket_info[bucket_key]["dataset_indices"].append(dataset_idx)
-                    continue
-                else:
-                    # Image bucket
-                    bucket_key = (bucket_width, bucket_height)
-
-                bucket_info[bucket_key]["count"] += len(item_list)
+                bucket_info[bucket_key]["count"] += len(items)
                 bucket_info[bucket_key]["batch_size"] = batch_size
                 bucket_info[bucket_key]["num_repeats"] = num_repeats
                 bucket_info[bucket_key]["dataset_indices"].append(dataset_idx)
         else:
-            # No bucketed items, use dataset-level information
-            try:
-                dataset_items = len(dataset)
-            except:
-                dataset_items = 0
+            # Fallback: dataset doesn't have batch_manager yet
+            # This shouldn't happen in normal training flow, but handle gracefully
+            logger.warning(
+                f"Dataset {dataset_idx} has no batch_manager. "
+                f"Bucket info may be incomplete."
+            )
 
-            if is_video_dataset and target_frames:
-                # Create entries for each target frame count
-                for target_frame in target_frames:
-                    bucket_key = (width, height, target_frame)
-                    bucket_info[bucket_key]["count"] += dataset_items // len(
-                        target_frames
-                    )
-                    bucket_info[bucket_key]["batch_size"] = batch_size
-                    bucket_info[bucket_key]["num_repeats"] = num_repeats
-                    bucket_info[bucket_key]["dataset_indices"].append(dataset_idx)
-            else:
-                # Image dataset
-                bucket_key = (width, height)
-                bucket_info[bucket_key]["count"] += dataset_items
-                bucket_info[bucket_key]["batch_size"] = batch_size
-                bucket_info[bucket_key]["num_repeats"] = num_repeats
-                bucket_info[bucket_key]["dataset_indices"].append(dataset_idx)
+            # Try to get from num_train_items at least
+            num_items = getattr(dataset, "num_train_items", 0)
+            if num_items > 0:
+                # Use configured resolution as fallback
+                resolution = getattr(dataset, "resolution", None)
+                target_frames = getattr(dataset, "target_frames", None)
+
+                if resolution:
+                    if target_frames and len(target_frames) > 0:
+                        # Video dataset - add frame count
+                        for frames in target_frames:
+                            bucket_key = (resolution[0], resolution[1], frames)
+                            # Estimate items per frame count
+                            bucket_info[bucket_key]["count"] += num_items // len(
+                                target_frames
+                            )
+                            bucket_info[bucket_key]["batch_size"] = batch_size
+                            bucket_info[bucket_key]["num_repeats"] = num_repeats
+                            bucket_info[bucket_key]["dataset_indices"].append(
+                                dataset_idx
+                            )
+                    else:
+                        # Image dataset
+                        bucket_key = (resolution[0], resolution[1])
+                        bucket_info[bucket_key]["count"] += num_items
+                        bucket_info[bucket_key]["batch_size"] = batch_size
+                        bucket_info[bucket_key]["num_repeats"] = num_repeats
+                        bucket_info[bucket_key]["dataset_indices"].append(dataset_idx)
 
     return dict(bucket_info)
 

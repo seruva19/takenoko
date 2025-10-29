@@ -2121,7 +2121,7 @@ fvdm_eval_frequency = 1000
 log_timestep_distribution_compare_baseline = true
 
 # Steps between comparison histogram logs (match log_timestep_distribution_interval for aligned charts)
-log_timestep_distribution_compare_interval = 5000
+log_timestep_distribution_compare_interval = 100
 
 # Histogram bins for comparison charts (0 uses log_timestep_distribution_bins)
 log_timestep_distribution_compare_bins = 100
