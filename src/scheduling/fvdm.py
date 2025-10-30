@@ -178,13 +178,8 @@ def get_noisy_model_input_and_timesteps_fvdm(
 
     if adaptive_integration_enabled:
         try:
-            # Convert to discrete timesteps for importance checking
-            timesteps_discrete_check = (t_cont * (T - 1)).round().long().clamp(0, T - 1)
-
-            # Get importance weights
-            importance_weights = adaptive_manager.get_adaptive_sampling_weights(
-                timesteps_discrete_check
-            )
+            # Use normalized timesteps for importance weighting to match manager contract
+            importance_weights = adaptive_manager.get_adaptive_sampling_weights(t_cont)
 
             # Occasionally bias toward important timesteps (30% of the time)
             if torch.rand((), device=device) < 0.3:
@@ -196,9 +191,11 @@ def get_noisy_model_input_and_timesteps_fvdm(
                         low_importance_mask.sum().item(), max(1, F // 4)
                     )
                     if resample_count > 0:
+                        # Work with flattened indices to align with reshaped assignment
+                        flat_mask = low_importance_mask.view(-1)
                         resample_indices = torch.nonzero(
-                            low_importance_mask, as_tuple=True
-                        )[0][:resample_count]
+                            flat_mask, as_tuple=False
+                        ).view(-1)[:resample_count]
                         # Resample these frames using same distribution and constraint logic as main path
                         if use_precomputed:
                             # Use precomputed distribution for resampling

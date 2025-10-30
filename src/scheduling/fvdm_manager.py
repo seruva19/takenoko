@@ -201,11 +201,10 @@ class FVDMManager:
             return
 
         try:
-            # Determine if this was async sampling (heuristic based on timestep variance)
-            timestep_variance = torch.var(timesteps.float(), dim=-1).mean()
-            is_async = (
-                timestep_variance.item() > 0.01
-            )  # Threshold for considering it async
+            # Determine if this was async sampling (heuristic based on normalized timestep variance)
+            normalized_timesteps = (timesteps.float() - 1.0) / 1000.0
+            timestep_variance = torch.var(normalized_timesteps, dim=-1).mean()
+            is_async = timestep_variance.item() > 0.02
 
             # Get current PTSS probability
             if getattr(self.args, "fvdm_adaptive_ptss", False):
