@@ -269,14 +269,40 @@ def create_args_from_config(
     args.prior_loss_weight = config.get("prior_loss_weight", 1.0)
 
     # DOP
-    args.diff_output_preservation = config.get("diff_output_preservation", False)
+    args.diff_output_preservation = bool(
+        config.get("diff_output_preservation", False)
+    )
     args.diff_output_preservation_trigger_word = config.get(
         "diff_output_preservation_trigger_word"
     )
     args.diff_output_preservation_class = config.get("diff_output_preservation_class")
-    args.diff_output_preservation_multiplier = config.get(
-        "diff_output_preservation_multiplier", 1.0
+    args.diff_output_preservation_multiplier = float(
+        config.get("diff_output_preservation_multiplier", 1.0)
     )
+
+    args.blank_prompt_preservation = bool(
+        config.get("blank_prompt_preservation", False)
+    )
+    _bpp_multiplier = config.get("blank_prompt_preservation_multiplier", 1.0)
+    try:
+        args.blank_prompt_preservation_multiplier = float(_bpp_multiplier)
+    except (TypeError, ValueError):
+        raise ValueError(
+            "blank_prompt_preservation_multiplier must be a numeric value"
+        ) from None
+    if args.blank_prompt_preservation_multiplier < 0.0:
+        raise ValueError("blank_prompt_preservation_multiplier must be >= 0.0")
+
+    if args.diff_output_preservation and args.blank_prompt_preservation:
+        raise ValueError(
+            "Cannot enable both diff_output_preservation and blank_prompt_preservation."
+        )
+
+    if args.blank_prompt_preservation:
+        logger.info(
+            "🧭 Blank prompt preservation enabled (multiplier %.3f)",
+            args.blank_prompt_preservation_multiplier,
+        )
 
     args.max_train_epochs = config.get("max_train_epochs")
     args.max_data_loader_n_workers = config.get("max_data_loader_n_workers", 8)

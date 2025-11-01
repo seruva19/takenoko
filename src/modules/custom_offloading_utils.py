@@ -565,15 +565,39 @@ class ModelOffloader(Offloader):
         if self.blocks_to_swap is None or self.blocks_to_swap == 0:
             return
 
-        # if backward is enabled, we do not swap blocks in forward pass more than blocks_to_swap, because it should be on GPU
-        if not self.forward_only and block_idx >= self.blocks_to_swap:
+        if not self.forward_only:
+            # if backward is enabled, we do not swap blocks in forward pass more than blocks_to_swap,
+            # because it should already be on GPU
+            if block_idx >= self.blocks_to_swap:
+                return
+
+            block_idx_to_cpu = block_idx
+            block_idx_to_cuda = self.num_blocks - self.blocks_to_swap + block_idx
+            block_idx_to_cuda = block_idx_to_cuda % self.num_blocks
+            self._submit_move_blocks(blocks, block_idx_to_cpu, block_idx_to_cuda)
             return
 
         block_idx_to_cpu = block_idx
-        block_idx_to_cuda = self.num_blocks - self.blocks_to_swap + block_idx
-        block_idx_to_cuda = (
-            block_idx_to_cuda % self.num_blocks
-        )  # this works for forward-only offloading
+
+        if self.blocks_to_swap < (self.num_blocks // 2):
+            # strategy 1: no wrap around
+            # If the current block is in the middle blocks that are not swapped, do nothing
+            if self.blocks_to_swap <= block_idx < self.num_blocks - self.blocks_to_swap:
+                return
+
+            if block_idx < self.blocks_to_swap:
+                # move the next block to cuda
+                block_idx_to_cuda = (
+                    self.num_blocks - self.blocks_to_swap + block_idx
+                ) % self.num_blocks
+            else:
+                # move the previous block to cuda
+                block_idx_to_cuda = block_idx - (self.num_blocks - self.blocks_to_swap)
+        else:
+            # strategy 2: with wrap around
+            block_idx_to_cuda = self.num_blocks - self.blocks_to_swap + block_idx
+            block_idx_to_cuda = block_idx_to_cuda % self.num_blocks
+
         self._submit_move_blocks(blocks, block_idx_to_cpu, block_idx_to_cuda)
 
 

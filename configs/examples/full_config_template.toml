@@ -1813,20 +1813,32 @@ srpo_vae_scale_factor = 8
 srpo_latent_channels = 16
 
 # =============================================================================
-# ⚠️ DOP (DIFFERENTIAL OUTPUT PRESERVATION) SETTINGS
+# ⚠️ OUTPUT PRESERVATION SETTINGS (DOP & BPP)
 # =============================================================================
 
-# Enable DOP regularization
+# Enable DOP (Differential Output Preservation) regularization. Preserves the base class knowledge
+# by disabling the LoRA and replacing trigger words with the class prompt for a secondary loss term.
+# Useful when training a concept against a broader class (e.g., "Alice" vs "woman").
 diff_output_preservation = false
 
 # The trigger word/phrase in captions to be replaced for DOP. This must exactly match the trigger in your dataset captions
-diff_output_preservation_trigger_word = "ohwx"
+diff_output_preservation_trigger_word = "tknk"
 
 # Generic class prompt to replace the trigger word for DOP. This is what the trigger will be replaced with during preservation
 diff_output_preservation_class = "a photo of a person"
 
 # Multiplier for the DOP loss (default: 1.0). Higher values = stronger preservation effect
 diff_output_preservation_multiplier = 1.0
+
+# Enable BPP (Blank Prompt Preservation) regularization. Preserves unconditional knowledge by comparing the
+# LoRA-enabled prediction on a blank prompt to the base model's blank prompt output. Recommended when targeting
+# CFG-based inference so the unconditional branch remains generic and guidance can amplify the concept trigger.
+# Cannot be enabled at the same time as diff_output_preservation.
+blank_prompt_preservation = false
+
+# Multiplier for the BPP loss (default: 1.0). Higher values strengthen blank prompt preservation. Set to 0.0 to disable
+# the extra step while keeping the flag commented for documentation.
+blank_prompt_preservation_multiplier = 1.0
 
 # =============================================================================
 # ⚠️ FLUXFLOW SETTINGS

@@ -7,8 +7,9 @@ the previous inlined implementation in `core/training_core.py`.
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Tuple, Callable, List
+from typing import Any, Dict, Optional, Tuple, Callable, List, ContextManager, cast
 
 import torch
 import torch.nn.functional as F
@@ -77,11 +78,18 @@ class LossComponents:
         The optical flow consistency loss, if enabled.
     repa_loss: Optional[torch.Tensor]
         The REPA alignment loss, if enabled.
+    sara_loss: Optional[torch.Tensor]
+        The SARA loss component, if enabled.
+    ortho_reg_p: Optional[torch.Tensor]
+        The orthogonal regularization loss component for p, if enabled.
+    ortho_reg_q: Optional[torch.Tensor]
+        The orthogonal regularization loss component for q, if enabled.
     """
 
     total_loss: torch.Tensor
     base_loss: Optional[torch.Tensor] = None
     dop_loss: Optional[torch.Tensor] = None
+    blank_prompt_loss: Optional[torch.Tensor] = None
     dispersive_loss: Optional[torch.Tensor] = None
     optical_flow_loss: Optional[torch.Tensor] = None
     repa_loss: Optional[torch.Tensor] = None
@@ -105,6 +113,7 @@ class TrainingLossComputer:
         self._last_contrastive_components = None
         # Add masked training manager (initialized later with args)
         self._masked_training_manager: Optional[MaskedTrainingManager] = None
+        self._cached_blank_prompt_embeds: Dict[torch.device, torch.Tensor] = {}
 
     # ---- Internal helpers ----
     def _compute_seq_len(self, latents: torch.Tensor) -> int:
@@ -188,6 +197,80 @@ class TrainingLossComputer:
         finally:
             # Restore
             accelerator.unwrap_model(network).multiplier = original_multiplier
+
+    def _autocast(
+        self,
+        accelerator: Any,
+        *,
+        device_type: str,
+        dtype: torch.dtype,
+    ) -> ContextManager[Any]:
+        accel_autocast = getattr(accelerator, "autocast", None)
+        if callable(accel_autocast):
+            return cast(ContextManager[Any], accel_autocast())
+        try:
+            return torch.autocast(device_type=device_type, dtype=dtype)
+        except (TypeError, RuntimeError):
+            return nullcontext()
+
+    def _get_blank_prompt_embeds(
+        self,
+        *,
+        accelerator: Any,
+        transformer: Any,
+        network_dtype: torch.dtype,
+    ) -> Optional[List[torch.Tensor]]:
+        if transformer is None:
+            logger.warning("Blank prompt preservation requested but transformer is None")
+            return None
+
+        if not hasattr(transformer, "encode_prompt"):
+            logger.warning(
+                "Transformer does not expose encode_prompt; skipping blank prompt preservation"
+            )
+            return None
+
+        device = accelerator.device
+        cached = self._cached_blank_prompt_embeds.get(device)
+        if cached is None:
+            try:
+                blank_embeds = transformer.encode_prompt("", negative_prompt=None, device=device)  # type: ignore[attr-defined]
+            except Exception as exc:
+                logger.warning(
+                    "Failed to encode blank prompt for preservation: %s", exc
+                )
+                return None
+
+            if isinstance(blank_embeds, torch.Tensor):
+                cached = blank_embeds.detach()
+            elif (
+                isinstance(blank_embeds, (list, tuple))
+                and len(blank_embeds) > 0
+                and isinstance(blank_embeds[0], torch.Tensor)
+            ):
+                try:
+                    cached = blank_embeds[0].detach()
+                except Exception:
+                    logger.warning(
+                        "Unexpected blank prompt encode structure; skipping preservation"
+                    )
+                    return None
+            elif isinstance(blank_embeds, (list, tuple)):
+                logger.warning(
+                    "encode_prompt returned unsupported sequence for blank preservation"
+                )
+                return None
+            else:
+                logger.warning(
+                    "encode_prompt returned unsupported type %s; skipping blank preservation",
+                    type(blank_embeds),
+                )
+                return None
+
+            self._cached_blank_prompt_embeds[device] = cached
+
+        embeds = cached.to(device=accelerator.device, dtype=network_dtype)
+        return [embeds]
 
     def initialize_masked_training(self, args) -> None:
         """Initialize masked training manager from args."""
@@ -345,6 +428,7 @@ class TrainingLossComputer:
                 )
 
                 if use_class_conditioning:
+                    assert labels is not None
                     try:
                         negative_indices = class_conditioned_negative_sampling(
                             labels, accelerator.device
@@ -760,17 +844,28 @@ class TrainingLossComputer:
 
         # ---- Diff Output Preservation (DOP) ----
         dop_loss_value: Optional[torch.Tensor] = None
-        if (
+        bpp_loss_value: Optional[torch.Tensor] = None
+        doing_dop = (
             getattr(args, "diff_output_preservation", False)
             and "t5_preservation" in batch
             and transformer is not None
             and network is not None
-        ):
+        )
+        doing_bpp = (
+            getattr(args, "blank_prompt_preservation", False)
+            and transformer is not None
+            and network is not None
+        )
+
+        if doing_dop:
             try:
+                assert transformer is not None
+                assert network is not None
                 dop_embeds = [
                     t.to(device=accelerator.device, dtype=network_dtype)
                     for t in batch["t5_preservation"]
                 ]
+
                 # Control-aware inputs, mirroring training path
                 control_latents_dop = self._maybe_get_control_latents(
                     args,
@@ -840,7 +935,11 @@ class TrainingLossComputer:
                     else noisy_model_input
                 )
                 # Match original behavior: compute DOP prediction under autocast
-                with accelerator.autocast():
+                with self._autocast(
+                    accelerator,
+                    device_type=noisy_model_input.device.type,
+                    dtype=network_dtype,
+                ):
                     dop_pred_list = transformer(
                         model_input_dop,
                         t=timesteps,
@@ -856,6 +955,76 @@ class TrainingLossComputer:
                 dop_loss_value = dop_loss_val.detach()
             except Exception as e:
                 logger.warning(f"DOP loss computation failed: {e}")
+
+        if doing_bpp:
+            try:
+                blank_context = self._get_blank_prompt_embeds(
+                    accelerator=accelerator,
+                    transformer=transformer,
+                    network_dtype=network_dtype,
+                )
+                if blank_context is None:
+                    raise RuntimeError("could not obtain blank prompt embeddings")
+
+                assert transformer is not None
+                assert network is not None
+
+                control_latents_bpp = self._maybe_get_control_latents(
+                    args,
+                    accelerator,
+                    batch,
+                    latents,
+                    network_dtype,
+                    vae,
+                    control_signal_processor,
+                )
+                model_input_control = None
+                if control_latents_bpp is not None:
+                    model_input_control = self._concat_control_if_available(
+                        noisy_model_input, control_latents_bpp
+                    )
+
+                prior_pred = self._compute_prior_pred_for_dop(
+                    args=args,
+                    accelerator=accelerator,
+                    transformer=transformer,
+                    network=network,
+                    latents=latents,
+                    noisy_model_input=noisy_model_input,
+                    timesteps=timesteps,
+                    dop_context=blank_context,
+                    model_input_control=model_input_control,
+                )
+
+                with self._autocast(
+                    accelerator,
+                    device_type=noisy_model_input.device.type,
+                    dtype=network_dtype,
+                ):
+                    seq_len = self._compute_seq_len(latents)
+                    model_input_bpp = (
+                        model_input_control
+                        if model_input_control is not None
+                        else noisy_model_input
+                    )
+                    bpp_pred_list = transformer(
+                        model_input_bpp,
+                        t=timesteps,
+                        context=blank_context,
+                        seq_len=seq_len,
+                        y=None,
+                    )
+                bpp_pred = torch.stack(bpp_pred_list, dim=0)
+
+                multiplier = float(
+                    getattr(args, "blank_prompt_preservation_multiplier", 1.0)
+                )
+                bpp_loss_val = F.mse_loss(bpp_pred, prior_pred) * multiplier
+                loss = loss + bpp_loss_val
+                bpp_loss_value = bpp_loss_val.detach()
+            except Exception as e:
+                logger.warning(f"Blank prompt preservation loss failed: {e}")
+                bpp_loss_value = None
 
         # ---- Optional Orthogonal LoRA regularization (T-LoRA orthogonal mode) ----
         ortho_p_val: Optional[torch.Tensor] = None
@@ -895,6 +1064,7 @@ class TrainingLossComputer:
             total_loss=loss,
             base_loss=base_loss.detach(),
             dop_loss=dop_loss_value,
+            blank_prompt_loss=bpp_loss_value,
             dispersive_loss=dispersive_loss_value,
             optical_flow_loss=optical_flow_loss_value,
             repa_loss=repa_loss_value,

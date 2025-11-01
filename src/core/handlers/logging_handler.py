@@ -127,6 +127,10 @@ def collect_and_log_training_metrics(
         logs["loss/dispersive"] = float(loss_components.dispersive_loss.item())
     if loss_components.dop_loss is not None:
         logs["loss/dop"] = float(loss_components.dop_loss.item())
+    if getattr(loss_components, "blank_prompt_loss", None) is not None:
+        logs["loss/blank_preservation"] = float(
+            loss_components.blank_prompt_loss.item()
+        )
     if loss_components.optical_flow_loss is not None:
         logs["loss/optical_flow"] = float(loss_components.optical_flow_loss.item())
     if loss_components.repa_loss is not None:

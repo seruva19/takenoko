@@ -6,6 +6,7 @@ from typing import Dict, Any, Union, Optional
 
 import numpy as np
 import torch
+from tqdm import tqdm
 
 from memory.safetensors_loader import load_file
 from utils.device_utils import synchronize_device
@@ -62,7 +63,11 @@ def mem_eff_save_file(
     offset = 0
     if metadata:
         header["__metadata__"] = validate_metadata(metadata)
-    for k, v in tensors.items():
+    for k, v in tqdm(
+        tensors.items(),
+        desc=f"Saving model to {filename}...",
+        total=len(tensors),
+    ):
         if v.numel() == 0:  # empty tensor
             header[k] = {
                 "dtype": _TYPES[v.dtype],
