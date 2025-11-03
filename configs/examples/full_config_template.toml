@@ -1342,9 +1342,9 @@ ramtorch_fp32_io = true
 # When enabled, provides advanced weight swapping with pinned memory and performance optimizations
 offload_enhanced_enabled = false
 
-# Use pinned memory staging buffers
+# Use reusable pinned CPU buffers for block swapping
 # Requires offload_enhanced_enabled = true
-# Enables persistent staging buffers for 96% shared VRAM reduction
+# Speeds up GPU/CPU transfers but increases Windows shared VRAM consumption
 offload_pinned_memory_enabled = false
 
 # Enable non-blocking memory transfers where possible
