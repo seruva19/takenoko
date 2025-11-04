@@ -127,23 +127,28 @@ def config_key_provided(args: argparse.Namespace, key: str) -> bool:
 
 
 class LossRecorder:
-    def __init__(self):
-        self.loss_list: list[float] = []
-        self.loss_total: float = 0.0
+    """Track running loss statistics for the active epoch."""
+
+    def __init__(self) -> None:
+        self._current_epoch: Optional[int] = None
+        self._loss_total: float = 0.0
+        self._loss_count: int = 0
 
     def add(self, *, epoch: int, step: int, loss: float) -> None:
-        if epoch == 0 or step >= len(self.loss_list):
-            self.loss_list.append(loss)
-        else:
-            while len(self.loss_list) <= step:
-                self.loss_list.append(0.0)
-            self.loss_total -= self.loss_list[step]
-            self.loss_list[step] = loss
-        self.loss_total += loss
+        if self._current_epoch != epoch:
+            # Reset totals when a new epoch begins (step index keeps API parity).
+            self._current_epoch = epoch
+            self._loss_total = 0.0
+            self._loss_count = 0
+
+        self._loss_total += float(loss)
+        self._loss_count += 1
 
     @property
     def moving_average(self) -> float:
-        return self.loss_total / len(self.loss_list)
+        if self._loss_count == 0:
+            return 0.0
+        return self._loss_total / self._loss_count
 
 
 def get_epoch_ckpt_name(model_name, epoch_no: int):
