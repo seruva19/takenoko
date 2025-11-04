@@ -37,6 +37,7 @@ def collect_and_log_training_metrics(
     mean_norm: Optional[float],
     maximum_norm: Optional[float],
     ema_loss_value: float,
+    ema_loss_debiased: Optional[float],
     network: Any,
     global_step: int,
     per_source_losses: Dict[str, float],
@@ -82,6 +83,7 @@ def collect_and_log_training_metrics(
         mean_norm,
         maximum_norm,
         ema_loss_value,
+        ema_loss_debiased,
         network,  # Pass the model for parameter stats
         global_step,  # Pass global_step for parameter stats
         per_source_losses,  # Pass per-source losses

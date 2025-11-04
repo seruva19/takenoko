@@ -39,19 +39,21 @@ def update_ema_loss(
     ema_loss: Optional[float],
     ema_step_count: int,
     ema_beta: float,
-    ema_bias_warmup_steps: int
-) -> Tuple[float, float, int]:
-    """Update EMA loss; warm-start and defer bias correction for early steps.
+    ema_bias_warmup_steps: int,
+    zero_started_ema_loss: Optional[float],
+) -> Tuple[float, float, float, int, float]:
+    """Update EMA loss with warm-start behaviour and optional warmup gating.
     
     Args:
         current_loss: Current loss value
         ema_loss: Current EMA loss (None for initialization)
         ema_step_count: Current step count
         ema_beta: EMA smoothing factor
-        ema_bias_warmup_steps: Steps to defer bias correction
+        ema_bias_warmup_steps: Steps to defer reporting the EMA
+        zero_started_ema_loss: EMA accumulator initialized at zero for bias correction
         
     Returns:
-        Tuple of (corrected_ema_loss, new_ema_loss, new_step_count)
+        Tuple of (reported_ema_loss, new_ema_loss, new_zero_started_ema, new_step_count, debiased_ema)
     """
     new_step_count = ema_step_count + 1
     
@@ -60,13 +62,23 @@ def update_ema_loss(
         new_ema_loss = float(current_loss)
     else:
         new_ema_loss = ema_beta * ema_loss + (1 - ema_beta) * float(current_loss)
-    
-    # Defer bias correction for a short warmup window to improve readability
-    if new_step_count <= max(0, int(ema_bias_warmup_steps)):
-        return float(new_ema_loss), new_ema_loss, new_step_count
-    
-    corrected_ema = new_ema_loss / (1 - ema_beta**new_step_count)
-    return float(corrected_ema), new_ema_loss, new_step_count
+
+    if zero_started_ema_loss is None:
+        new_zero_started_ema = (1 - ema_beta) * float(current_loss)
+    else:
+        new_zero_started_ema = (
+            ema_beta * zero_started_ema_loss + (1 - ema_beta) * float(current_loss)
+        )
+
+    denominator = 1 - ema_beta**max(new_step_count, 1)
+    debiased_ema = (
+        float(new_zero_started_ema / denominator) if denominator != 0 else float(current_loss)
+    )
+
+    # During warmup we still just report the raw EMA value for the warm-start metric
+    reported_ema = float(new_ema_loss)
+
+    return reported_ema, new_ema_loss, new_zero_started_ema, new_step_count, debiased_ema
 
 
 def update_iter_time_ema(

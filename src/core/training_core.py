@@ -145,6 +145,7 @@ class TrainingCore:
         self.ema_bias_warmup_steps: int = (
             100  # defer bias correction for early readability
         )
+        self.ema_loss_zero_started: Optional[float] = None
 
         # Parameter statistics tracking
         self.last_param_log_step: int = -1
@@ -242,21 +243,29 @@ class TrainingCore:
             args
         )
 
-    def update_ema_loss(self, current_loss: float) -> float:
+    def update_ema_loss(self, current_loss: float) -> Tuple[float, float]:
         """Update EMA loss; warm-start and defer bias correction for early steps."""
-        corrected_ema, new_ema_loss, new_step_count = _update_ema_loss(
+        (
+            reported_ema,
+            new_ema_loss,
+            new_zero_started_ema,
+            new_step_count,
+            debiased_ema,
+        ) = _update_ema_loss(
             current_loss,
             self.ema_loss,
             self.ema_step_count,
             self.ema_beta,
             self.ema_bias_warmup_steps,
+            self.ema_loss_zero_started,
         )
 
         # Update instance state
         self.ema_loss = new_ema_loss
+        self.ema_loss_zero_started = new_zero_started_ema
         self.ema_step_count = new_step_count
 
-        return corrected_ema
+        return reported_ema, debiased_ema
 
     def _update_iter_time_ema(self, last_iter_seconds: float) -> float:
         """Update EMA of iteration time in seconds.
@@ -1705,7 +1714,7 @@ class TrainingCore:
                 _record_training_step(bsz)
 
                 # Update EMA loss for TensorBoard logging
-                ema_loss_value = self.update_ema_loss(current_loss)
+                ema_loss_value, ema_loss_debiased = self.update_ema_loss(current_loss)
 
                 # Generate enhanced progress bar metrics safely if enabled
                 enhanced_logs, self._perf_display_toggle, self._iter_time_ema_sec = (
@@ -1745,6 +1754,7 @@ class TrainingCore:
                     mean_norm,
                     maximum_norm,
                     ema_loss_value,
+                    ema_loss_debiased,
                     network,
                     global_step,
                     per_source_losses,

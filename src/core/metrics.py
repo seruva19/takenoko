@@ -357,6 +357,7 @@ def generate_step_logs(
     mean_norm: Optional[float] = None,
     maximum_norm: Optional[float] = None,
     ema_loss: Optional[float] = None,
+    ema_loss_debiased: Optional[float] = None,
     model: Optional[Any] = None,
     global_step: Optional[int] = None,
     per_source_losses: Optional[Dict[str, float]] = None,
@@ -379,6 +380,9 @@ def generate_step_logs(
 
     if ema_loss is not None:
         logs["loss/ema"] = ema_loss
+
+    if ema_loss_debiased is not None:
+        logs["loss/ema_debiased"] = ema_loss_debiased
 
     if per_source_losses is not None:
         logs.update(per_source_losses)
