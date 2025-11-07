@@ -565,6 +565,14 @@ def create_args_from_config(
     # Extra training metrics (periodic)
     args.log_extra_train_metrics = config.get("log_extra_train_metrics", True)
     args.train_metrics_interval = config.get("train_metrics_interval", 50)
+
+    # Gradient norm and parameter statistics logging
+    args.log_gradient_norm = config.get("log_gradient_norm", False)
+    args.log_param_stats = config.get("log_param_stats", False)
+    args.param_stats_every_n_steps = config.get("param_stats_every_n_steps", 100)
+    args.max_param_stats_logged = config.get("max_param_stats_logged", 20)
+    args.log_per_source_loss = config.get("log_per_source_loss", False)
+
     # Prefer essential SNR metrics under `snr/` and move others to `snr_other/`
     args.snr_split_namespaces = config.get("snr_split_namespaces", True)
     # Prefer essential Validation metrics under `val/` and move others to `val_other/`

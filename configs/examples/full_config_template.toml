@@ -1,7 +1,7 @@
 # Takenoko Configuration File
 # This file contains all possible parameters for training with default values and comments
 # Remove the # at the beginning of lines to enable/configure parameters
-# "⚠️" means that either relevant functionality is not ready (under construction) or has not been fully tested yet
+# "⚠️" means that either relevant functionality is WIP (under construction) or has not been fully tested yet
 
 # =============================================================================
 # TARGET TRAINING
@@ -2569,6 +2569,25 @@ log_extra_train_metrics = true
 
 # Interval (in steps) to compute and log extra train metrics
 train_metrics_interval = 50
+
+# Enable gradient norm logging (logs total gradient norm before clipping)
+# Creates TensorBoard metric: grad_norm
+log_gradient_norm = false
+
+# Enable detailed parameter statistics logging
+# Logs per-parameter gradient norms and parameter norms for top N parameters
+# Creates TensorBoard metrics: grad_norm/*, param_norm/*, param_stats/*
+log_param_stats = false
+
+# Interval (in steps) to log parameter statistics
+param_stats_every_n_steps = 100
+
+# Number of top parameters to track by norm
+max_param_stats_logged = 20
+
+# Enable per-source loss logging (attempts to detect video vs image sources)
+# Creates TensorBoard metrics: loss/video, loss/image
+log_per_source_loss = false
 
 # Log a scatter plot of per-sample loss vs timestep to TensorBoard
 log_loss_scatterplot = true
