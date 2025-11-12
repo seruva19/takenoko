@@ -114,8 +114,6 @@ class TemporalConsistencyTrainingIntegration:
     ) -> torch.Tensor:
         """Single-call method to enhance training loss.
 
-        This is the ONLY method training_core needs to call.
-
         Args:
             base_loss: Original training loss
             model_pred: Model predictions

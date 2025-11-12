@@ -1955,7 +1955,27 @@ freq_temporal_weight_strategy = "exponential"
 freq_temporal_loss_reduction = "mean"              
 
 # Apply to latent space vs pixel space
-freq_temporal_apply_to_latent = true         
+freq_temporal_apply_to_latent = true
+
+# =============================================================================
+# ⚠️ DIFFERENTIAL GUIDANCE
+# =============================================================================
+
+# Enable differential guidance for training targets (experimental)
+# Amplifies the difference between model prediction and target to potentially accelerate convergence
+enable_differential_guidance = false
+
+# Scale factor for differential guidance amplification
+# Higher values = more aggressive overshoot. Default: 3.0
+differential_guidance_scale = 3.0
+
+# Optional: Start applying differential guidance after this training step
+# Set to 0 to apply from the beginning
+differential_guidance_start_step = 0
+
+# Optional: Stop applying differential guidance after this training step
+# Default: None (apply until end)
+# differential_guidance_end_step = 1500
 
 # =============================================================================
 # ⚠️ TRANSITION TRAINING SETTINGS

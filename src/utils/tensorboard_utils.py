@@ -316,17 +316,28 @@ def apply_direction_hints_to_logs(args: Any, logs: Dict[str, Any]) -> Dict[str, 
                     continue
 
                 # Skip if already has a direction emoji
-                if "📉" in k or "📈" in k:
+                stripped_key = k.split("/")[-1]
+                if "📉" in stripped_key or "📈" in stripped_key:
                     new_logs[k] = v
                     continue
 
                 hint = _infer_direction_hint(k)
                 if hint == "down":
-                    new_logs[f"{k} (📉 better)"] = v
+                    decorated_leaf = f"{stripped_key} (📉 better)"
                 elif hint == "up":
-                    new_logs[f"{k} (📈 better)"] = v
+                    decorated_leaf = f"{stripped_key} (📈 better)"
                 else:
                     new_logs[k] = v
+                    continue
+
+                if "/" in k:
+                    parts = k.split("/")
+                    parts[-1] = decorated_leaf
+                    new_key = "/".join(parts)
+                else:
+                    new_key = decorated_leaf
+
+                new_logs[new_key] = v
             except Exception:
                 new_logs[k] = v
 

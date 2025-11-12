@@ -23,7 +23,12 @@ from enhancements.temporal_consistency.training_integration import (
     enhance_loss_with_temporal_consistency,
 )
 
-# Slider training integration (clean interface)
+
+from enhancements.differential_guidance.training_integration import (
+    create_differential_guidance_integration,
+    transform_target_with_differential_guidance,
+)
+
 from enhancements.slider.slider_integration import compute_slider_loss_if_enabled
 import utils.fluxflow_augmentation as fluxflow_augmentation
 from transition.manager import TransitionTrainingManager
@@ -190,6 +195,9 @@ class TrainingCore:
         # Initialize temporal consistency enhancement
         self.temporal_consistency_integration = None
 
+        # Initialize differential guidance enhancement
+        self.differential_guidance_integration = None
+
     def set_ema_beta(self, beta: float) -> None:
         """Set the EMA smoothing factor. Higher values (closer to 1.0) = more smoothing."""
         validate_ema_beta(beta)
@@ -241,6 +249,12 @@ class TrainingCore:
 
         self.temporal_consistency_integration = create_temporal_consistency_integration(
             args
+        )
+
+    def initialize_differential_guidance(self, args: argparse.Namespace) -> None:
+        """Initialize differential guidance enhancement if enabled."""
+        self.differential_guidance_integration = (
+            create_differential_guidance_integration(args)
         )
 
     def update_ema_loss(self, current_loss: float) -> Tuple[float, float]:
@@ -1294,6 +1308,14 @@ class TrainingCore:
                                 per_source_losses = {}
 
                         if not eqm_enabled:
+                            # Apply differential guidance to target if enabled
+                            target = transform_target_with_differential_guidance(
+                                self.differential_guidance_integration,
+                                target=target,
+                                model_pred=model_pred,
+                                step=global_step,
+                            )
+
                             # Centralized training loss computation (includes DOP/REPA/Dispersive/OpticalFlow/Slider)
                             loss_components = compute_slider_loss_if_enabled(
                                 loss_computer=self.loss_computer,
@@ -1614,10 +1636,19 @@ class TrainingCore:
                         args, global_step, val_dataloader, last_validated_step
                     )
                     should_fast_validating = self.validation_core.should_validate_fast(
-                        args, global_step, val_dataloader, last_validated_step, last_fast_validated_step
+                        args,
+                        global_step,
+                        val_dataloader,
+                        last_validated_step,
+                        last_fast_validated_step,
                     )
 
-                    if should_sampling or should_saving or should_validating or should_fast_validating:
+                    if (
+                        should_sampling
+                        or should_saving
+                        or should_validating
+                        or should_fast_validating
+                    ):
                         if optimizer_eval_fn:
                             optimizer_eval_fn()
 

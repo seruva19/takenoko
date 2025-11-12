@@ -784,6 +784,14 @@ class WanFinetuneTrainer:
                 f"Failed to initialize temporal consistency enhancement: {e}"
             )
 
+        # Initialize differential guidance enhancement if available
+        try:
+            self.training_core.initialize_differential_guidance(args)
+        except Exception as e:
+            logger.warning(
+                f"Failed to initialize differential guidance enhancement: {e}"
+            )
+
         # Create shared epoch/step counters BEFORE dataset creation
         # These are used for multiprocessing-safe epoch tracking and bucket shuffling
         current_epoch = Value("i", 0)

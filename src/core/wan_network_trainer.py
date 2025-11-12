@@ -163,6 +163,14 @@ class WanNetworkTrainer:
                 f"Failed to initialize temporal consistency enhancement: {e}"
             )
 
+        # Initialize differential guidance enhancement if available
+        try:
+            self.training_core.initialize_differential_guidance(args)
+        except Exception as e:
+            logger.warning(
+                f"Failed to initialize differential guidance enhancement: {e}"
+            )
+
         # Initialize slider training based on network module
         try:
             from enhancements.slider.slider_integration import (
