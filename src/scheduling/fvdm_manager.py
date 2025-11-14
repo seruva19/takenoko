@@ -12,7 +12,7 @@ Usage:
     fvdm_manager = FVDMManager(args, device, adaptive_manager)
 
     # In training loop:
-    noisy_input, timesteps, sigmas = fvdm_manager.get_noisy_input_and_timesteps(...)
+    noisy_input, timesteps, sigmas, metadata = fvdm_manager.get_noisy_input_and_timesteps(...)
     fvdm_manager.record_training_step(...)
     additional_loss = fvdm_manager.get_additional_loss(...)
 """
@@ -93,6 +93,7 @@ class FVDMManager:
         self.integrate_adaptive = getattr(
             self.args, "fvdm_integrate_adaptive_timesteps", False
         )
+        self._last_sampling_metadata: Dict[str, Any] | None = None
 
         # Track current step for adaptive features
         self.current_step = 0
@@ -151,7 +152,7 @@ class FVDMManager:
             presampled_uniform: Optional presampled uniform values for rejection sampling
 
         Returns:
-            Tuple of (noisy_model_input, timesteps, sigmas)
+            Tuple of (noisy_model_input, timesteps, sigmas, sampling_metadata)
         """
         if not self.enabled:
             # Not enabled - this should not be called, but provide safe fallback
@@ -168,7 +169,12 @@ class FVDMManager:
         self.current_step = step
 
         # Call enhanced FVDM function
-        return fvdm_core.get_noisy_model_input_and_timesteps_fvdm(
+        (
+            noisy_model_input,
+            timesteps,
+            sigmas,
+            sampling_metadata,
+        ) = fvdm_core.get_noisy_model_input_and_timesteps_fvdm(
             self.args,
             noise,
             latents,
@@ -180,6 +186,8 @@ class FVDMManager:
             timestep_distribution=timestep_distribution,
             presampled_uniform=presampled_uniform,
         )
+        self._last_sampling_metadata = sampling_metadata
+        return noisy_model_input, timesteps, sigmas, sampling_metadata
 
     def record_training_step(
         self,
@@ -187,6 +195,9 @@ class FVDMManager:
         timesteps: torch.Tensor,
         loss: torch.Tensor,
         step: int,
+        *,
+        prediction: Optional[torch.Tensor] = None,
+        sampling_metadata: Optional[Dict[str, Any]] = None,
     ):
         """
         Record metrics for a training step.
@@ -202,9 +213,13 @@ class FVDMManager:
 
         try:
             # Determine if this was async sampling (heuristic based on normalized timestep variance)
-            normalized_timesteps = (timesteps.float() - 1.0) / 1000.0
-            timestep_variance = torch.var(normalized_timesteps, dim=-1).mean()
-            is_async = timestep_variance.item() > 0.02
+            metadata = sampling_metadata or self._last_sampling_metadata or {}
+            if "is_async" in metadata:
+                is_async = bool(metadata["is_async"])
+            else:
+                normalized_timesteps = (timesteps.float() - 1.0) / 1000.0
+                timestep_variance = torch.var(normalized_timesteps, dim=-1).mean()
+                is_async = timestep_variance.item() > 0.02
 
             # Get current PTSS probability
             if getattr(self.args, "fvdm_adaptive_ptss", False):
@@ -218,14 +233,21 @@ class FVDMManager:
             else:
                 ptss_p = getattr(self.args, "fvdm_ptss_p", 0.2)
 
+            frames_for_metrics = prediction if prediction is not None else frames
+            frames_for_metrics = frames_for_metrics.detach()
+
             # Record all metrics
-            self.metrics.record_metrics(frames, timesteps, is_async, ptss_p)
+            self.metrics.record_metrics(frames_for_metrics, timesteps, is_async, ptss_p)
 
         except Exception as e:
             logger.warning(f"Failed to record FVDM metrics: {e}")
 
     def get_additional_loss(
-        self, frames: torch.Tensor, timesteps: torch.Tensor
+        self,
+        frames: torch.Tensor,
+        timesteps: torch.Tensor,
+        *,
+        prediction: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
         """
         Compute additional FVDM loss components.
@@ -244,8 +266,9 @@ class FVDMManager:
             return torch.tensor(0.0, device=self.device), {}
 
         try:
+            loss_frames = prediction if prediction is not None else frames
             return compute_fvdm_loss_components(
-                frames,
+                loss_frames,
                 timesteps,
                 temporal_weight=self.temporal_loss_weight,
                 diversity_weight=self.diversity_loss_weight,

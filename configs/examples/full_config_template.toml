@@ -2136,6 +2136,13 @@ fvdm_ptss_warmup = 1000
 # Recommended values: 0.0 (disabled), 0.05-0.1 (mild), 0.2+ (strong)
 fvdm_temporal_consistency_weight = 0.1
 
+# Allow asynchronous PTSS sampling even when the temporal loss is enabled.
+# Default false to guarantee deterministic, fully synchronous timesteps whenever the coherence loss is active.
+fvdm_allow_async_with_temporal_loss = false
+
+# Pin the first frame of each clip to share a common timestep (keeps a visual anchor even when async sampling is active).
+fvdm_pin_first_frame = true
+
 # Weight for frame diversity regularization (0.0 = disabled)
 fvdm_frame_diversity_weight = 0.0         
 

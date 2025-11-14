@@ -1011,6 +1011,10 @@ def create_args_from_config(
     args.fvdm_temporal_consistency_weight = config.get(
         "fvdm_temporal_consistency_weight", 0.0
     )
+    args.fvdm_allow_async_with_temporal_loss = config.get(
+        "fvdm_allow_async_with_temporal_loss", False
+    )
+    args.fvdm_pin_first_frame = config.get("fvdm_pin_first_frame", True)
     args.fvdm_frame_diversity_weight = config.get("fvdm_frame_diversity_weight", 0.0)
     args.fvdm_integrate_adaptive_timesteps = config.get(
         "fvdm_integrate_adaptive_timesteps", False

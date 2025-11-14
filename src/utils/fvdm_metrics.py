@@ -218,6 +218,8 @@ class FVDMTrainingMetrics:
             ptss_probability: PTSS probability used
         """
         try:
+            frames = frames.detach()
+            timesteps = timesteps.detach()
             # Compute and store metrics
             temporal_loss = self.compute_temporal_consistency_loss(frames)
             diversity_score = self.compute_frame_diversity_score(frames)

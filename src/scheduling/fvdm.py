@@ -1,7 +1,7 @@
 import argparse
 import logging
 import torch
-from typing import Tuple, Any, Optional
+from typing import Tuple, Any, Optional, Dict
 from common.logger import get_logger
 
 logger = get_logger(__name__, level=logging.INFO)
@@ -51,7 +51,7 @@ def get_noisy_model_input_and_timesteps_fvdm(
     adaptive_manager: Optional[Any] = None,
     timestep_distribution: Optional[Any] = None,
     presampled_uniform: Optional[torch.Tensor] = None,
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Dict[str, Any]]:
     """
     Generate FVDM/PUSA vectorized noisy inputs and timesteps for a Flow Matching trainer.
 
@@ -59,6 +59,7 @@ def get_noisy_model_input_and_timesteps_fvdm(
     x_t = (1-t) * x_0 + t * x_1
     where x_0 is the clean latent and x_1 is the noise.
     The model's objective will be to predict the velocity v = x_1 - x_0.
+    Returns metadata describing the sampling decision so downstream metrics can reflect it.
     """
     global _ptss_params_logged_once
 
@@ -83,8 +84,20 @@ def get_noisy_model_input_and_timesteps_fvdm(
     else:
         ptss_p = getattr(args, "fvdm_ptss_p", 0.2)  # Default to paper-recommended value
 
+    temporal_weight = float(getattr(args, "fvdm_temporal_consistency_weight", 0.0) or 0.0)
+    allow_async_with_temporal = bool(
+        getattr(args, "fvdm_allow_async_with_temporal_loss", False)
+    )
+    force_sync_temporal = temporal_weight > 0 and not allow_async_with_temporal
+    if force_sync_temporal:
+        ptss_p = 0.0
+
+    pin_first_frame = bool(getattr(args, "fvdm_pin_first_frame", True))
+
     # Apply PTSS sampling
     is_async = torch.rand((), device=device) < ptss_p
+    if force_sync_temporal:
+        is_async = torch.tensor(False, device=device, dtype=torch.bool)
 
     # 2. Apply timestep_sampling distribution (LogSNR, uniform, etc.)
     # Import here to avoid circular dependency
@@ -118,6 +131,24 @@ def get_noisy_model_input_and_timesteps_fvdm(
             "mode_shift",
         ]
     )
+
+    def _sample_reference_timesteps() -> torch.Tensor:
+        """Sample a per-batch reference timestep (used for pinning first frame)."""
+        if use_precomputed:
+            reference = timestep_distribution.sample(B, device).to(dtype)
+        else:
+            ref_uniform = torch.rand((B,), device=device, dtype=dtype)
+            reference = map_uniform_to_sampling(args, ref_uniform, latents)
+
+        reference = _apply_timestep_constraints(
+            reference.view(-1),
+            args,
+            B,
+            device,
+            latents,
+            presampled_uniform=None,
+        )
+        return reference.view(B, 1)
 
     if use_precomputed:
         # Sample from precomputed distribution for all frames
@@ -176,6 +207,15 @@ def get_noisy_model_input_and_timesteps_fvdm(
         and adaptive_manager.enabled
     )
 
+    pinned_reference_applied = False
+    if is_async and pin_first_frame:
+        try:
+            reference = _sample_reference_timesteps()
+            t_cont[:, 0:1] = reference
+            pinned_reference_applied = True
+        except Exception as exc:  # pragma: no cover - diagnostics only
+            logger.debug(f"FVDM reference frame pin failed: {exc}")
+
     if adaptive_integration_enabled:
         try:
             # Use normalized timesteps for importance weighting to match manager contract
@@ -222,6 +262,10 @@ def get_noisy_model_input_and_timesteps_fvdm(
                         )
                         t_cont.view(-1)[resample_indices] = new_t_values
                         resample_count_applied = int(resample_count)
+                        if resample_count_applied > 0:
+                            logger.debug(
+                                "FVDM adaptive resample: %d frames updated", resample_count_applied
+                            )
         except Exception:
             # Graceful fallback - continue with original t_cont if integration fails
             pass
@@ -299,4 +343,12 @@ def get_noisy_model_input_and_timesteps_fvdm(
     if not isinstance(timesteps, torch.Tensor):
         timesteps = torch.tensor(timesteps, device=device)
 
-    return noisy_model_input, timesteps, sigma_cont
+    metadata: Dict[str, Any] = {
+        "is_async": bool(is_async.item() if isinstance(is_async, torch.Tensor) else is_async),
+        "ptss_probability": float(ptss_p),
+        "force_sync_temporal": bool(force_sync_temporal),
+        "resample_count": int(resample_count_applied),
+        "pinned_reference_frame": bool(pinned_reference_applied),
+    }
+
+    return noisy_model_input, timesteps, sigma_cont, metadata

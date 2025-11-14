@@ -903,6 +903,7 @@ class TrainingCore:
                     # Sample noise that we'll add to the latents
                     noise = torch.randn_like(latents)
 
+                    fvdm_sampling_metadata = None
                     if self.fvdm_manager.enabled:
                         # Initialize timestep distribution if needed (same as regular path)
                         initialize_timestep_distribution(
@@ -934,16 +935,19 @@ class TrainingCore:
                             pass
 
                         # FVDM is enabled - use FVDM manager with full parameter alignment
-                        noisy_model_input, timesteps, sigmas = (
-                            self.fvdm_manager.get_noisy_input_and_timesteps(
-                                noise,
-                                latents,
-                                noise_scheduler,
-                                dit_dtype,
-                                step,
-                                timestep_distribution=self.timestep_distribution,
-                                presampled_uniform=None,  # Could be added later for advanced use
-                            )
+                        (
+                            noisy_model_input,
+                            timesteps,
+                            sigmas,
+                            fvdm_sampling_metadata,
+                        ) = self.fvdm_manager.get_noisy_input_and_timesteps(
+                            noise,
+                            latents,
+                            noise_scheduler,
+                            dit_dtype,
+                            step,
+                            timestep_distribution=self.timestep_distribution,
+                            presampled_uniform=None,  # Could be added later for advanced use
                         )
 
                         # Compute weighting for FVDM timesteps
@@ -1364,12 +1368,16 @@ class TrainingCore:
                                 timesteps=timesteps,
                                 loss=loss_components["loss"],
                                 step=global_step,
+                                prediction=model_pred,
+                                sampling_metadata=fvdm_sampling_metadata,
                             )
 
                             # Compute and integrate FVDM additional loss components
                             fvdm_additional_loss, fvdm_loss_details = (
                                 self.fvdm_manager.get_additional_loss(
-                                    frames=latents, timesteps=timesteps
+                                    frames=latents,
+                                    timesteps=timesteps,
+                                    prediction=model_pred,
                                 )
                             )
 
