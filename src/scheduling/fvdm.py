@@ -7,6 +7,8 @@ from common.logger import get_logger
 logger = get_logger(__name__, level=logging.INFO)
 # One-time emission flag for PTSS parameter logging
 _ptss_params_logged_once = False
+_force_sync_notice_logged = False
+_pin_notice_logged = False
 
 
 def get_adaptive_ptss_p(
@@ -61,7 +63,7 @@ def get_noisy_model_input_and_timesteps_fvdm(
     The model's objective will be to predict the velocity v = x_1 - x_0.
     Returns metadata describing the sampling decision so downstream metrics can reflect it.
     """
-    global _ptss_params_logged_once
+    global _ptss_params_logged_once, _force_sync_notice_logged, _pin_notice_logged
 
     if latents.ndim != 5:
         raise ValueError(
@@ -84,15 +86,21 @@ def get_noisy_model_input_and_timesteps_fvdm(
     else:
         ptss_p = getattr(args, "fvdm_ptss_p", 0.2)  # Default to paper-recommended value
 
-    temporal_weight = float(getattr(args, "fvdm_temporal_consistency_weight", 0.0) or 0.0)
-    allow_async_with_temporal = bool(
-        getattr(args, "fvdm_allow_async_with_temporal_loss", False)
-    )
-    force_sync_temporal = temporal_weight > 0 and not allow_async_with_temporal
+    force_sync_temporal = bool(getattr(args, "fvdm_force_sync", False))
+    if force_sync_temporal and not _force_sync_notice_logged:
+        logger.info(
+            "?? FVDM force_sync=true — all frames in each clip will share the same timestep."
+        )
+        _force_sync_notice_logged = True
     if force_sync_temporal:
         ptss_p = 0.0
 
-    pin_first_frame = bool(getattr(args, "fvdm_pin_first_frame", True))
+    pin_first_frame = bool(getattr(args, "fvdm_pin_first_frame", False))
+    if pin_first_frame and not _pin_notice_logged:
+        logger.info(
+            "?? FVDM pin_first_frame=true — the first frame will reuse a shared reference timestep."
+        )
+        _pin_notice_logged = True
 
     # Apply PTSS sampling
     is_async = torch.rand((), device=device) < ptss_p
