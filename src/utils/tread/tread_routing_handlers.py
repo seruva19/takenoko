@@ -4,8 +4,18 @@ import torch
 import logging
 from typing import Dict, Any, Optional, List, Tuple, Union
 
-from .tread_helpers import handle_time_embedding_routing, recompute_rotary_freqs, cleanup_routing_variables
-from .tread_row import pack_row_routed_tokens, reconstruct_row_routed_tokens, RowRouteState
+from .tread_helpers import (
+    handle_time_embedding_routing,
+    recompute_rotary_freqs,
+    cleanup_routing_variables,
+    ensure_freqs_list_for_routing,
+)
+from .tread_row import (
+    pack_row_routed_tokens,
+    reconstruct_row_routed_tokens,
+    RowRouteState,
+    SpatialAutoRouteState,
+)
 from .tread_row import pack_spatial_auto_tokens, reconstruct_spatial_auto_tokens
 
 try:
@@ -33,7 +43,9 @@ class TREADRoutingState:
         self.row_e0_full_saved: Optional[torch.Tensor] = None
 
         # Spatial auto routing state
-        self.spatial_auto_state: Optional[Union[RowRouteState, FrameRouteState]] = None
+        self.spatial_auto_state: Optional[
+            Union[RowRouteState, FrameRouteState, SpatialAutoRouteState]
+        ] = None
         self.spatial_auto_orig_freqs_list: Optional[List[torch.Tensor]] = None
         self.spatial_auto_e0_full_saved: Optional[torch.Tensor] = None
 
@@ -216,6 +228,14 @@ def handle_routing_start(
         state.routing_now = True
 
         # Build a batched rotary tensor for routed tokens
+        effective_freqs = ensure_freqs_list_for_routing(
+            model, kwargs["grid_sizes"], freqs_list
+        )
+        if not effective_freqs:
+            raise RuntimeError(
+                "TREAD routing requires rotary caches but none were available. "
+                "Disable rope_on_the_fly or ensure grid caches are built."
+            )
         try:
             from .tread_frame import build_batched_rotary_from_freqs
         except ImportError:
@@ -225,7 +245,7 @@ def handle_routing_start(
         B = x.size(0)
         S_keep = x.size(1)
         shuf = build_batched_rotary_from_freqs(
-            freqs_list, state.tread_mask_info.ids_shuffle
+            effective_freqs, state.tread_mask_info.ids_shuffle
         )
         batched_rotary = shuf[:, :S_keep, :]
         kwargs["batched_rotary"] = batched_rotary

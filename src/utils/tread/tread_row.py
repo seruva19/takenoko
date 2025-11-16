@@ -50,6 +50,23 @@ class RowRouteState:
 _global_tread_rng: Optional[torch.Generator] = None
 
 
+@dataclass
+class SpatialAutoRouteState:
+    """Routing state for mixed spatial_auto batches."""
+
+    image_indices: torch.Tensor
+    video_indices: torch.Tensor
+    row_state: Optional["RowRouteState"]
+    frame_state: Optional["FrameRouteState"]
+    seq_lens_orig: torch.Tensor
+    seq_lens_proc: torch.Tensor
+    grid_sizes_orig: torch.Tensor
+    grid_sizes_proc: torch.Tensor
+    idx_proc_pad: torch.Tensor
+    row_lpmax: int
+    frame_lpmax: int
+
+
 def _compute_row_indices(
     num_rows: int,
     keep_ratio: float,
@@ -342,54 +359,129 @@ def pack_spatial_auto_tokens(
     keep_ratio: float,
     mode: str = "contiguous",
     rng_seed: Optional[int] = None,
-) -> Tuple[torch.Tensor, "RowRouteState | FrameRouteState"]:
+) -> Tuple[torch.Tensor, "RowRouteState | FrameRouteState | SpatialAutoRouteState"]:
     """Auto-detection spatial routing: F=1→rows, F>1→frames.
 
     This function implements hybrid routing that automatically chooses
     between row and frame routing based on content type.
-
-    Parameters
-    ----------
-    x: torch.Tensor
-        Token sequence (B, Lmax, C), padded to same Lmax across batch.
-    seq_lens: torch.Tensor
-        Actual sequence lengths (B,).
-    grid_sizes: torch.Tensor
-        Grid dimensions (B, 3) as [F, H, W].
-    keep_ratio: float
-        Fraction in (0,1] of frames/rows to keep.
-    mode: str
-        'contiguous', 'stride', or 'random'.
-    rng_seed: Optional[int]
-        Random seed for reproducible random selection.
-
-    Returns
-    -------
-    x_proc: torch.Tensor
-        Packed kept tokens (B, Lpmax, C).
-    state: RowRouteState | FrameRouteState
-        Routing state for reconstruction (type depends on content).
     """
-    # Check content type from first sample (assume batch homogeneity)
-    F_first = int(grid_sizes[0, 0].item())
+    device = x.device
+    frame_counts = grid_sizes[:, 0]
+    image_mask = frame_counts <= 1
+    video_mask = ~image_mask
 
-    if F_first > 1:
-        # Video content: use frame routing
+    num_images = int(image_mask.sum().item())
+    num_videos = int(video_mask.sum().item())
+
+    # Fast paths: uniform batch
+    if num_videos == 0:
+        logger.debug("Spatial auto: image-only batch detected, using row routing")
+        return pack_row_routed_tokens(
+            x,
+            seq_lens,
+            grid_sizes,
+            keep_ratio,
+            mode,
+            rng_seed,
+            auto_fallback=False,
+        )
+    if num_images == 0:
         if not _FRAME_ROUTING_AVAILABLE:
             raise ImportError("Frame routing not available for spatial_auto mode")
-
-        logger.debug(f"Spatial auto: F={F_first} frames detected, using frame routing")
+        logger.debug("Spatial auto: video-only batch detected, using frame routing")
         from .tread_frame import pack_frame_routed_tokens
+
         return pack_frame_routed_tokens(x, seq_lens, grid_sizes, keep_ratio, mode)
-    else:
-        # Image content: use row routing
-        logger.debug(f"Spatial auto: F={F_first} frame detected, using row routing")
-        return pack_row_routed_tokens(x, seq_lens, grid_sizes, keep_ratio, mode, rng_seed, auto_fallback=False)
+
+    # Mixed batch: process subsets separately, then merge in original order
+    if not _FRAME_ROUTING_AVAILABLE:
+        raise ImportError("Frame routing not available for mixed spatial_auto mode")
+
+    from .tread_frame import pack_frame_routed_tokens
+
+    image_indices = torch.nonzero(image_mask, as_tuple=False).flatten()
+    video_indices = torch.nonzero(video_mask, as_tuple=False).flatten()
+
+    # Process images with row routing
+    x_proc_images: torch.Tensor | None = None
+    row_state: RowRouteState | None = None
+    row_lpmax = 0
+    if num_images > 0:
+        x_img = x.index_select(0, image_indices)
+        seq_img = seq_lens.index_select(0, image_indices)
+        grids_img = grid_sizes.index_select(0, image_indices)
+        x_proc_images, row_state = pack_row_routed_tokens(
+            x_img,
+            seq_img,
+            grids_img,
+            keep_ratio,
+            mode,
+            rng_seed,
+            auto_fallback=False,
+        )
+        row_lpmax = x_proc_images.size(1)
+
+    # Process videos with frame routing
+    x_proc_videos: torch.Tensor | None = None
+    frame_state: "FrameRouteState | None" = None
+    frame_lpmax = 0
+    if num_videos > 0:
+        x_vid = x.index_select(0, video_indices)
+        seq_vid = seq_lens.index_select(0, video_indices)
+        grids_vid = grid_sizes.index_select(0, video_indices)
+        x_proc_videos, frame_state = pack_frame_routed_tokens(
+            x_vid, seq_vid, grids_vid, keep_ratio, mode
+        )
+        frame_lpmax = x_proc_videos.size(1)
+
+    Lpmax_total = max(row_lpmax, frame_lpmax)
+    x_proc_full = x.new_zeros((x.size(0), Lpmax_total, x.size(2)))
+    idx_proc_pad = x.new_full((x.size(0), Lpmax_total), -1, dtype=torch.long)
+    seq_lens_proc = torch.zeros_like(seq_lens)
+    grid_sizes_proc = torch.zeros_like(grid_sizes)
+
+    if row_state is not None and x_proc_images is not None:
+        for local_idx, global_idx in enumerate(image_indices.tolist()):
+            kept = int(row_state.seq_lens_proc[local_idx].item())
+            if kept > 0:
+                x_proc_full[global_idx, :kept, :] = x_proc_images[local_idx, :kept, :]
+                idx_vals = row_state.idx_proc_pad[local_idx]
+                valid = idx_vals >= 0
+                idx_proc_pad[global_idx, : valid.sum()] = idx_vals[valid]
+            seq_lens_proc[global_idx] = row_state.seq_lens_proc[local_idx]
+            grid_sizes_proc[global_idx] = row_state.grid_sizes_proc[local_idx]
+
+    if frame_state is not None and x_proc_videos is not None:
+        for local_idx, global_idx in enumerate(video_indices.tolist()):
+            kept = int(frame_state.seq_lens_proc[local_idx].item())
+            if kept > 0:
+                x_proc_full[global_idx, :kept, :] = x_proc_videos[local_idx, :kept, :]
+                idx_vals = frame_state.idx_proc_pad[local_idx]
+                valid = idx_vals >= 0
+                idx_proc_pad[global_idx, : valid.sum()] = idx_vals[valid]
+            seq_lens_proc[global_idx] = frame_state.seq_lens_proc[local_idx]
+            grid_sizes_proc[global_idx] = frame_state.grid_sizes_proc[local_idx]
+
+    state = SpatialAutoRouteState(
+        image_indices=image_indices.to(device=device),
+        video_indices=video_indices.to(device=device),
+        row_state=row_state,
+        frame_state=frame_state,
+        seq_lens_orig=seq_lens.clone(),
+        seq_lens_proc=seq_lens_proc,
+        grid_sizes_orig=grid_sizes.clone(),
+        grid_sizes_proc=grid_sizes_proc,
+        idx_proc_pad=idx_proc_pad,
+        row_lpmax=row_lpmax,
+        frame_lpmax=frame_lpmax,
+    )
+
+    return x_proc_full, state
 
 
 def reconstruct_spatial_auto_tokens(
     x_proc: torch.Tensor,
-    state: "RowRouteState | FrameRouteState"
+    state: "RowRouteState | FrameRouteState | SpatialAutoRouteState"
 ) -> torch.Tensor:
     """Reconstruct tokens for spatial_auto mode.
 
@@ -408,7 +500,43 @@ def reconstruct_spatial_auto_tokens(
     # Determine routing type from state type
     if isinstance(state, RowRouteState):
         return reconstruct_row_routed_tokens(x_proc, state)
-    else:
-        # Must be FrameRouteState
-        from .tread_frame import reconstruct_frame_routed_tokens
-        return reconstruct_frame_routed_tokens(x_proc, state)
+    if isinstance(state, SpatialAutoRouteState):
+        B = x_proc.size(0)
+        C = x_proc.size(2)
+        Lmax = int(state.seq_lens_orig.max().item())
+        x_full = x_proc.new_zeros((B, Lmax, C))
+
+        if state.row_state is not None and state.image_indices.numel() > 0:
+            Lp = state.row_lpmax
+            img_subset = x_proc.index_select(
+                0, state.image_indices.to(device=x_proc.device)
+            )[:, :Lp, :]
+            img_full = reconstruct_row_routed_tokens(img_subset, state.row_state)
+            for local_idx, global_idx in enumerate(
+                state.image_indices.tolist()
+            ):
+                Li = int(state.row_state.seq_lens_orig[local_idx].item())
+                x_full[global_idx, :Li, :] = img_full[local_idx, :Li, :]
+
+        if state.frame_state is not None and state.video_indices.numel() > 0:
+            from .tread_frame import reconstruct_frame_routed_tokens
+
+            Lp = state.frame_lpmax
+            vid_subset = x_proc.index_select(
+                0, state.video_indices.to(device=x_proc.device)
+            )[:, :Lp, :]
+            vid_full = reconstruct_frame_routed_tokens(
+                vid_subset, state.frame_state
+            )
+            for local_idx, global_idx in enumerate(
+                state.video_indices.tolist()
+            ):
+                Li = int(state.frame_state.seq_lens_orig[local_idx].item())
+                x_full[global_idx, :Li, :] = vid_full[local_idx, :Li, :]
+
+        return x_full
+
+    # Must be FrameRouteState
+    from .tread_frame import reconstruct_frame_routed_tokens
+
+    return reconstruct_frame_routed_tokens(x_proc, state)

@@ -141,3 +141,29 @@ def cleanup_routing_variables(state: Any, *attr_names: str) -> None:
     for attr in attr_names:
         if hasattr(state, attr):
             setattr(state, attr, None)
+
+
+def ensure_freqs_list_for_routing(
+    model, grid_sizes: torch.Tensor, freqs_list: Optional[List[torch.Tensor]]
+) -> List[torch.Tensor]:
+    """Ensure rotary caches exist when rope_on_the_fly is enabled.
+
+    When rope_on_the_fly=True, the model does not maintain per-(F,H,W) caches.
+    TREAD still needs batched rotary tensors, so lazily construct them.
+    """
+    if freqs_list and len(freqs_list) == grid_sizes.size(0):
+        return freqs_list
+
+    if not getattr(model, "rope_on_the_fly", False):
+        return freqs_list or []
+
+    ensured: List[torch.Tensor] = []
+    for fhw_tensor in grid_sizes:
+        fhw = tuple(int(v) for v in fhw_tensor.tolist())
+        if fhw not in model.freqs_fhw:
+            c = model.dim // model.num_heads // 2
+            from wan.modules.model import calculate_freqs_i
+
+            model.freqs_fhw[fhw] = calculate_freqs_i(fhw, c, model.freqs)
+        ensured.append(model.freqs_fhw[fhw])
+    return ensured

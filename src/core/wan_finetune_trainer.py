@@ -411,6 +411,11 @@ class WanFinetuneTrainer:
                 bool(getattr(args, "row_tread_auto_fallback", True)),
             )
             logger.info(f"TREAD mode set to: {tread_mode}")
+            if getattr(args, "rope_on_the_fly", False):
+                logger.warning(
+                    "TREAD routing is enabled while rope_on_the_fly=True; "
+                    "building temporary rotary caches for routing."
+                )
 
             tread_cfg = getattr(args, "tread_config", None)
             routes = tread_cfg.get("routes") if isinstance(tread_cfg, dict) else None

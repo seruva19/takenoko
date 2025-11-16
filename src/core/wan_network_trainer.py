@@ -667,6 +667,11 @@ class WanNetworkTrainer:
                         )
                     except Exception:
                         pass
+                    if getattr(args, "rope_on_the_fly", False):
+                        logger.warning(
+                            "TREAD routing is enabled while rope_on_the_fly=True; "
+                            "building temporary rotary caches for routing."
+                        )
 
                     logger.info("🛣️ TREAD routing enabled with %d route(s)", len(routes))
                 except Exception as e:
