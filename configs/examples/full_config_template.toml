@@ -236,6 +236,7 @@ rope_use_float32 = false
 # - "Muon", "NorMuon": Second-order optimizers for matrix parameters
 # - "TemporalAdamW": AdamW with temporal gradient smoothing for video training
 # - "Prodigy": Adaptive learning rate optimizer
+# - "AdaMuon": Muon-style orthogonal optimizer with element-wise adaptivity for ≥2D params
 # - "SOAP", "SophiaG", "Scion", etc. (see optimizer_manager.py)
 optimizer_type = "adamw8bit"
 

@@ -551,6 +551,128 @@ class OptimizerManager:
             logger.info(f"  - Newton-Schulz steps: {ns_steps}")
             logger.info(f"  - Aux Adam betas: {betas}")
 
+        elif optimizer_type == "Adamuon".lower():
+            logger.info(f"using AdaMuon optimizer | {optimizer_kwargs}")
+
+            from optimizers.adamuon import (
+                SingleDeviceAdaMuonWithAuxAdam,
+                apply_adamuon_config_overrides,
+            )
+
+            all_params = extract_params(trainable_params)
+
+            hidden_weights = [p for p in all_params if p.ndim >= 2]
+            hidden_gains_biases = [p for p in all_params if p.ndim < 2]
+
+            log_param_structure(
+                "AdaMuon",
+                "Aux Adam",
+                trainable_params,
+                all_params,
+                hidden_weights,
+                hidden_gains_biases,
+            )
+
+            if len(hidden_weights) == 0 and len(hidden_gains_biases) == 0:
+                raise ValueError("No trainable parameters found for AdaMuon optimizer!")
+
+            if len(hidden_weights) == 0:
+                logger.warning(
+                    "No hidden weight parameters (?2D) found for AdaMuon. Consider using a different optimizer."
+                )
+
+            if len(hidden_gains_biases) == 0:
+                logger.info(
+                    "No bias/gain parameters (<2D) found for AdaMuon. Optimizer will only update matrix weights."
+                )
+
+            apply_adamuon_config_overrides(args, optimizer_kwargs)
+
+            adamuon_lr = optimizer_kwargs.get(
+                "adamuon_lr", optimizer_kwargs.get("muon_lr", 0.001)
+            )
+            adamuon_adam_lr = optimizer_kwargs.get(
+                "adamuon_adam_lr", optimizer_kwargs.get("adam_lr", lr)
+            )
+            weight_decay = optimizer_kwargs.get(
+                "adamuon_weight_decay", optimizer_kwargs.get("weight_decay", 0.001)
+            )
+            betas_value = optimizer_kwargs.get(
+                "adamuon_betas", optimizer_kwargs.get("betas", (0.9, 0.95))
+            )
+            if isinstance(betas_value, list):
+                betas = tuple(betas_value)
+            else:
+                betas = betas_value
+            if not isinstance(betas, (tuple, list)) or len(betas) != 2:
+                raise ValueError(
+                    f"AdaMuon auxiliary Adam betas must be a length-2 sequence. Received: {betas_value}"
+                )
+            betas = tuple(betas)
+
+            momentum = optimizer_kwargs.get(
+                "adamuon_momentum", optimizer_kwargs.get("momentum", 0.95)
+            )
+            beta2 = optimizer_kwargs.get("adamuon_beta2", 0.95)
+            eps = optimizer_kwargs.get("adamuon_eps", 1e-8)
+            ns_steps = optimizer_kwargs.get(
+                "adamuon_ns_steps", optimizer_kwargs.get("ns_steps", 5)
+            )
+            scale_factor = optimizer_kwargs.get("adamuon_scale_factor", 0.2)
+            nesterov = optimizer_kwargs.get("adamuon_nesterov", True)
+            sign_stabilization = optimizer_kwargs.get(
+                "adamuon_sign_stabilization", True
+            )
+
+            param_groups = []
+
+            if len(hidden_weights) > 0:
+                param_groups.append(
+                    dict(
+                        params=hidden_weights,
+                        use_muon=True,
+                        lr=adamuon_lr,
+                        weight_decay=weight_decay,
+                        momentum=momentum,
+                        beta2=beta2,
+                        eps=eps,
+                        ns_steps=ns_steps,
+                        scale_factor=scale_factor,
+                        nesterov=nesterov,
+                        sign_stabilization=sign_stabilization,
+                    )
+                )
+
+            if len(hidden_gains_biases) > 0:
+                param_groups.append(
+                    dict(
+                        params=hidden_gains_biases,
+                        use_muon=False,
+                        lr=adamuon_adam_lr,
+                        betas=tuple(betas),
+                        weight_decay=weight_decay,
+                    )
+                )
+
+            if len(param_groups) == 0:
+                raise ValueError("No parameter groups created for AdaMuon optimizer!")
+
+            optimizer_class = SingleDeviceAdaMuonWithAuxAdam
+            optimizer = optimizer_class(param_groups)
+
+            logger.info("AdaMuon configuration:")
+            logger.info(f"  - AdaMuon LR: {adamuon_lr}")
+            logger.info(f"  - Aux Adam LR: {adamuon_adam_lr}")
+            logger.info(f"  - Weight decay: {weight_decay}")
+            logger.info(f"  - Momentum (beta1): {momentum}")
+            logger.info(f"  - Beta2: {beta2}")
+            logger.info(f"  - Epsilon: {eps}")
+            logger.info(f"  - Newton-Schulz steps: {ns_steps}")
+            logger.info(f"  - Scale factor: {scale_factor}")
+            logger.info(f"  - Nesterov: {nesterov}")
+            logger.info(f"  - Sign stabilization: {sign_stabilization}")
+            logger.info(f"  - Aux Adam betas: {betas}")
+
         elif optimizer_type == "Prodigy".lower():
             # Prodigy optimizer from prodigyopt
             try:
