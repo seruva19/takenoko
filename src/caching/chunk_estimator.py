@@ -46,23 +46,7 @@ def _safe_count_video_frames(video_path: str) -> int:
             return 0
 
 
-def estimate_latent_cache_chunks(
-    dataset_config_path: str, args: argparse.Namespace
-) -> int:
-    """Estimate total number of latent cache chunks across all video datasets.
-
-    Parameters
-    ----------
-    dataset_config_path: str
-        Path to the TOML dataset configuration used to construct datasets.
-    args: argparse.Namespace
-        Argument namespace with dataset-related options required by blueprint generation.
-
-    Returns
-    -------
-    int
-        Total number of frame windows (chunks) that latent caching would create.
-    """
+def _build_dataset_group(dataset_config_path: str, args: argparse.Namespace):
     blueprint_generator = BlueprintGenerator(ConfigSanitizer())
     user_config = config_utils.load_user_config(dataset_config_path)
     blueprint = blueprint_generator.generate(user_config, args)
@@ -77,27 +61,34 @@ def estimate_latent_cache_chunks(
         training=False,
         prior_loss_weight=getattr(args, "prior_loss_weight", 1.0),
     )
+    return dataset_group
 
-    total_chunks = 0
+
+def _collect_dataset_stats(dataset_group) -> List[dict[str, Any]]:
+    stats: List[dict[str, Any]] = []
     for ds in dataset_group.datasets:
         vdir: Optional[str] = getattr(ds, "video_directory", None)
         if not vdir:
             continue
 
         video_paths: List[str] = glob_videos(vdir)
-
-        # Resolve mode/params
         mode: str = getattr(ds, "frame_extraction", "head")
         target_frames = list(getattr(ds, "target_frames", [1]) or [1])
         frame_stride: int = int(getattr(ds, "frame_stride", 1) or 1)
         frame_sample: int = int(getattr(ds, "frame_sample", 1) or 1)
         max_frames = getattr(ds, "max_frames", None)
+        caption_ext = getattr(ds, "caption_extension", ".txt")
+        cache_dir = getattr(ds, "latents_cache_dir", None)
+
+        ds_cache_chunks = 0
+        ds_effective_chunks = 0
+        ds_cycle_lengths: List[int] = []
+        ds_video_count = 0
 
         for vp in video_paths:
             frame_count = _safe_count_video_frames(vp)
             if frame_count <= 0:
                 continue
-
             pairs = generate_crop_positions(
                 frame_count=frame_count,
                 target_frames=target_frames,
@@ -106,9 +97,55 @@ def estimate_latent_cache_chunks(
                 frame_sample=frame_sample,
                 max_frames=max_frames,
             )
-            total_chunks += len(pairs)
+            chunk_count = len(pairs)
+            if chunk_count == 0:
+                continue
 
-    return total_chunks
+            ds_cache_chunks += chunk_count
+            if mode == "epoch_slide":
+                ds_effective_chunks += 1
+                ds_cycle_lengths.append(chunk_count)
+            else:
+                ds_effective_chunks += chunk_count
+            ds_video_count += 1
+
+        if ds_cache_chunks == 0:
+            continue
+
+        entry: dict[str, Any] = {
+            "video_directory": vdir,
+            "chunks": ds_cache_chunks,
+            "effective_chunks": ds_effective_chunks,
+            "caption_extension": caption_ext,
+            "latents_cache_dir": cache_dir,
+            "mode": mode,
+            "videos": ds_video_count,
+        }
+
+        if mode == "epoch_slide":
+            entry["epoch_slide"] = True
+            entry["epoch_cycle_min"] = min(ds_cycle_lengths) if ds_cycle_lengths else 0
+            entry["epoch_cycle_max"] = max(ds_cycle_lengths) if ds_cycle_lengths else 0
+            entry["epoch_cycle_avg"] = (
+                sum(ds_cycle_lengths) / len(ds_cycle_lengths)
+                if ds_cycle_lengths
+                else 0.0
+            )
+        else:
+            entry["epoch_slide"] = False
+
+        stats.append(entry)
+
+    return stats
+
+
+def estimate_latent_cache_chunks(
+    dataset_config_path: str, args: argparse.Namespace
+) -> int:
+    """Estimate total number of latent cache chunks across all video datasets."""
+    dataset_group = _build_dataset_group(dataset_config_path, args)
+    stats = _collect_dataset_stats(dataset_group)
+    return sum(entry["chunks"] for entry in stats)
 
 
 def estimate_latent_cache_chunks_per_dataset(
@@ -119,62 +156,5 @@ def estimate_latent_cache_chunks_per_dataset(
     Returns a list of dicts with keys: 'video_directory', 'chunks', 'caption_extension',
     'latents_cache_dir'. Datasets without a video_directory are skipped.
     """
-    blueprint_generator = BlueprintGenerator(ConfigSanitizer())
-    user_config = config_utils.load_user_config(dataset_config_path)
-    blueprint = blueprint_generator.generate(user_config, args)
-
-    all_dataset_blueprints = list(blueprint.train_dataset_group.datasets)
-    if len(blueprint.val_dataset_group.datasets) > 0:
-        all_dataset_blueprints.extend(blueprint.val_dataset_group.datasets)
-
-    combined = config_utils.DatasetGroupBlueprint(all_dataset_blueprints)
-    dataset_group = config_utils.generate_dataset_group_by_blueprint(
-        combined,
-        training=False,
-        prior_loss_weight=getattr(args, "prior_loss_weight", 1.0),
-    )
-
-    breakdown: List[dict[str, Any]] = []
-    for ds in dataset_group.datasets:
-        vdir: Optional[str] = getattr(ds, "video_directory", None)
-        if not vdir:
-            continue
-
-        video_paths: List[str] = glob_videos(vdir)
-
-        # Resolve mode/params
-        mode: str = getattr(ds, "frame_extraction", "head")
-        target_frames = list(getattr(ds, "target_frames", [1]) or [1])
-        frame_stride: int = int(getattr(ds, "frame_stride", 1) or 1)
-        frame_sample: int = int(getattr(ds, "frame_sample", 1) or 1)
-        max_frames = getattr(ds, "max_frames", None)
-
-        # Get distinguishing info
-        caption_ext = getattr(ds, "caption_extension", ".txt")
-        cache_dir = getattr(ds, "latents_cache_dir", None)
-
-        ds_chunks = 0
-        for vp in video_paths:
-            frame_count = _safe_count_video_frames(vp)
-            if frame_count <= 0:
-                continue
-            pairs = generate_crop_positions(
-                frame_count=frame_count,
-                target_frames=target_frames,
-                mode=mode,
-                frame_stride=frame_stride,
-                frame_sample=frame_sample,
-                max_frames=max_frames,
-            )
-            ds_chunks += len(pairs)
-
-        breakdown.append(
-            {
-                "video_directory": vdir,
-                "chunks": ds_chunks,
-                "caption_extension": caption_ext,
-                "latents_cache_dir": cache_dir,
-            }
-        )
-
-    return breakdown
+    dataset_group = _build_dataset_group(dataset_config_path, args)
+    return _collect_dataset_stats(dataset_group)

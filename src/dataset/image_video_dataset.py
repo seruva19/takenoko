@@ -4,6 +4,7 @@ import os
 import json
 import random
 import time
+import re
 from typing import Any, Optional, Sequence, Tuple, Union, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -28,6 +29,8 @@ from common.logger import get_logger
 logger = get_logger(__name__, level=logging.INFO)
 
 TARGET_FPS_WAN = 16
+
+EPOCH_SLIDE_KEY_PATTERN = re.compile(r"_(\d+)-(\d+)$")
 
 
 def get_cache_postfix(target_model: Optional[str] = None) -> Tuple[str, str]:
@@ -419,6 +422,12 @@ class ImageDataset(BaseDataset):
         self.load_control = load_control
         self.control_suffix = control_suffix
         self.mask_path = mask_path
+        self.epoch_slide_enabled = False
+        self._epoch_slide_groups: dict[tuple[int, int], dict[str, list[ItemInfo]]] = {}
+        self._epoch_slide_prior_loss_weight: Optional[float] = None
+        self._epoch_slide_num_timestep_buckets: Optional[int] = None
+        self._epoch_slide_logged_info = False
+        self._epoch_slide_last_epoch_applied: Optional[int] = None
 
         if image_directory is not None:
             self.datasource = ImageDirectoryDatasource(
@@ -666,6 +675,7 @@ class ImageDataset(BaseDataset):
 
         # assign cache files to item info
         bucketed_item_info: dict[tuple[int, int], list[ItemInfo]] = {}
+        epoch_slide_groups: dict[tuple[int, int], dict[str, list[ItemInfo]]] = {}
         skipped_items = 0
         processed_items = 0
 
@@ -740,10 +750,16 @@ class ImageDataset(BaseDataset):
             else:
                 item_info.text_encoder_output_cache_path = None
 
-            bucket = bucketed_item_info.get(bucket_reso, [])
-            for _ in range(self.num_repeats):
-                bucket.append(item_info)
-            bucketed_item_info[bucket_reso] = bucket
+            if self.epoch_slide_enabled:
+                bucket_groups = epoch_slide_groups.setdefault(bucket_reso, {})
+                base_key = self._get_epoch_slide_group_key(item_key)
+                clips = bucket_groups.setdefault(base_key, [])
+                clips.append(item_info)
+            else:
+                bucket = bucketed_item_info.get(bucket_reso, [])
+                for _ in range(self.num_repeats):
+                    bucket.append(item_info)
+                bucketed_item_info[bucket_reso] = bucket
             processed_items += 1
 
         # Enhanced reporting
@@ -758,24 +774,48 @@ class ImageDataset(BaseDataset):
                     "   2. Or set require_text_encoder_cache=False (not recommended for training)"
                 )
 
-        # prepare batch manager
-        self.batch_manager = BucketBatchManager(
-            bucketed_item_info, self.batch_size, prior_loss_weight
-        )
-        # Store per-epoch timestep bucketing preference on the batch manager if supported
-        try:
-            if hasattr(self.batch_manager, "set_num_timestep_buckets"):
-                self.batch_manager.set_num_timestep_buckets(num_timestep_buckets)  # type: ignore
-            elif hasattr(self.batch_manager, "num_timestep_buckets"):
-                setattr(self.batch_manager, "num_timestep_buckets", num_timestep_buckets)  # type: ignore
-        except Exception:
-            pass
+        if self.epoch_slide_enabled:
+            self._epoch_slide_groups = {}
+            for bucket_reso, groups in epoch_slide_groups.items():
+                sorted_groups: dict[str, list[ItemInfo]] = {}
+                for base_key, items in groups.items():
+                    sorted_items = sorted(
+                        items,
+                        key=lambda info: self._get_epoch_slide_sort_value(
+                            info.item_key
+                        ),
+                    )
+                    sorted_groups[base_key] = sorted_items
+                self._epoch_slide_groups[bucket_reso] = sorted_groups
 
-        self.batch_manager.show_bucket_info()
+            self._epoch_slide_prior_loss_weight = prior_loss_weight
+            self._epoch_slide_num_timestep_buckets = num_timestep_buckets
+            self._rebuild_epoch_slide_batch_manager(log_bucket_info=True)
+        else:
+            # prepare batch manager
+            self.batch_manager = BucketBatchManager(
+                bucketed_item_info, self.batch_size, prior_loss_weight
+            )
+            # Store per-epoch timestep bucketing preference on the batch manager if supported
+            try:
+                if hasattr(self.batch_manager, "set_num_timestep_buckets"):
+                    self.batch_manager.set_num_timestep_buckets(
+                        num_timestep_buckets
+                    )  # type: ignore
+                elif hasattr(self.batch_manager, "num_timestep_buckets"):
+                    setattr(
+                        self.batch_manager,
+                        "num_timestep_buckets",
+                        num_timestep_buckets,
+                    )  # type: ignore
+            except Exception:
+                pass
 
-        self.num_train_items = sum(
-            [len(bucket) for bucket in bucketed_item_info.values()]
-        )
+            self.batch_manager.show_bucket_info()
+
+            self.num_train_items = sum(
+                [len(bucket) for bucket in bucketed_item_info.values()]
+            )
 
         # Final validation
         if self.num_train_items == 0:
@@ -784,12 +824,83 @@ class ImageDataset(BaseDataset):
                 f"Training will fail. Please check cache files and dataset configuration."
             )
         else:
-            logger.info(
-                f"[{dataset_id}] ✅ Training preparation complete: {self.num_train_items} items across {len(bucketed_item_info)} buckets"
+            bucket_count = (
+                len(self.batch_manager.bucket_resos)
+                if self.batch_manager is not None
+                else 0
             )
+            logger.info(
+                f"[{dataset_id}] ✅ Training preparation complete: {self.num_train_items} items across {bucket_count} buckets"
+            )
+
+    def _get_epoch_slide_group_key(self, item_key: str) -> str:
+        stem = os.path.splitext(os.path.basename(item_key))[0]
+        match = EPOCH_SLIDE_KEY_PATTERN.search(stem)
+        if not match:
+            return stem
+        return stem[: match.start()]
+
+    def _get_epoch_slide_sort_value(self, item_key: str) -> int:
+        stem = os.path.splitext(os.path.basename(item_key))[0]
+        match = EPOCH_SLIDE_KEY_PATTERN.search(stem)
+        if match:
+            try:
+                return int(match.group(1))
+            except ValueError:
+                return 0
+        return 0
+
+    def _rebuild_epoch_slide_batch_manager(self, log_bucket_info: bool = False) -> None:
+        if not self.epoch_slide_enabled or not self._epoch_slide_groups:
+            return
+
+        epoch = self.current_epoch
+        if self.shared_epoch is not None:
+            epoch = self.shared_epoch.value
+
+        if self._epoch_slide_last_epoch_applied == epoch and self.batch_manager is not None:
+            return
+
+        bucketed_item_info: dict[tuple[int, int], list[ItemInfo]] = {}
+        total_items = 0
+
+        for bucket_reso, groups in self._epoch_slide_groups.items():
+            bucket_items: list[ItemInfo] = []
+            for clips in groups.values():
+                if not clips:
+                    continue
+                index = epoch % len(clips)
+                selected = clips[index]
+                for _ in range(self.num_repeats):
+                    bucket_items.append(selected)
+            bucketed_item_info[bucket_reso] = bucket_items
+            total_items += len(bucket_items)
+
+        self.batch_manager = BucketBatchManager(
+            bucketed_item_info, self.batch_size, self._epoch_slide_prior_loss_weight or 1.0
+        )
+        if self._epoch_slide_num_timestep_buckets is not None:
+            try:
+                self.batch_manager.set_num_timestep_buckets(
+                    self._epoch_slide_num_timestep_buckets
+                )
+            except Exception:
+                pass
+
+        if log_bucket_info or not self._epoch_slide_logged_info:
+            self.batch_manager.show_bucket_info()
+            self._epoch_slide_logged_info = True
+
+        self.num_train_items = total_items
+        self._epoch_slide_last_epoch_applied = epoch
 
     def shuffle_buckets(self):
         dataset_id = self.get_dataset_identifier()
+        if self.epoch_slide_enabled:
+            self._rebuild_epoch_slide_batch_manager()
+        if self.batch_manager is None:
+            logger.warning(f"[{dataset_id}] shuffle_buckets() called before batch manager was initialized")
+            return
         # set random seed for this epoch
         random.seed(self.seed + self.current_epoch)  # type: ignore
         logger.info(
@@ -953,6 +1064,15 @@ class VideoDataset(BaseDataset):
         self.control_suffix = control_suffix
         self.mask_path = mask_path
 
+        self.epoch_slide_enabled = self.frame_extraction == "epoch_slide"
+        self._epoch_slide_groups: dict[
+            tuple[int, int], dict[str, list[ItemInfo]]
+        ] = {}
+        self._epoch_slide_prior_loss_weight: Optional[float] = None
+        self._epoch_slide_num_timestep_buckets: Optional[int] = None
+        self._epoch_slide_logged_info = False
+        self._epoch_slide_last_epoch_applied: Optional[int] = None
+
         if video_directory is not None:
             self.datasource = VideoDirectoryDataSource(
                 video_directory, caption_extension
@@ -992,6 +1112,11 @@ class VideoDataset(BaseDataset):
         self.batch_manager = None
         self.num_train_items = 0
         self.has_control = self.datasource.has_control
+
+    def set_current_epoch(self, epoch, force_shuffle=None, reason=None):
+        super().set_current_epoch(epoch, force_shuffle=force_shuffle, reason=reason)
+        if self.epoch_slide_enabled and self.shared_epoch is None:
+            self._rebuild_epoch_slide_batch_manager()
 
     def get_metadata(self):
         metadata = super().get_metadata()
@@ -1277,6 +1402,7 @@ class VideoDataset(BaseDataset):
         bucketed_item_info: dict[tuple[int, int, int], list[ItemInfo]] = (
             {}
         )  # (width, height, frame_count) -> [ItemInfo]
+        epoch_slide_groups: dict[tuple[int, int, int], dict[str, list[ItemInfo]]] = {}
         for cache_file in latent_cache_files:
             tokens = os.path.basename(cache_file).split("_")
 
@@ -1375,26 +1501,129 @@ class VideoDataset(BaseDataset):
             else:
                 item_info.text_encoder_output_cache_path = None
 
-            bucket = bucketed_item_info.get(bucket_reso, [])
-            for _ in range(self.num_repeats):
-                bucket.append(item_info)
-            bucketed_item_info[bucket_reso] = bucket
+            if self.epoch_slide_enabled:
+                bucket_groups = epoch_slide_groups.setdefault(bucket_reso, {})
+                base_key = self._get_epoch_slide_group_key(item_key)
+                clips = bucket_groups.setdefault(base_key, [])
+                clips.append(item_info)
+            else:
+                bucket = bucketed_item_info.get(bucket_reso, [])
+                for _ in range(self.num_repeats):
+                    bucket.append(item_info)
+                bucketed_item_info[bucket_reso] = bucket
 
-        # prepare batch manager
-        self.batch_manager = BucketBatchManager(bucketed_item_info, self.batch_size, prior_loss_weight)  # type: ignore
+        if self.epoch_slide_enabled:
+            self._epoch_slide_groups = {}
+            for bucket_reso, groups in epoch_slide_groups.items():
+                sorted_groups: dict[str, list[ItemInfo]] = {}
+                for base_key, items in groups.items():
+                    sorted_items = sorted(
+                        items,
+                        key=lambda info: self._get_epoch_slide_sort_value(
+                            info.item_key
+                        ),
+                    )
+                    sorted_groups[base_key] = sorted_items
+                self._epoch_slide_groups[bucket_reso] = sorted_groups
 
-        self.batch_manager.show_bucket_info()
+            self._epoch_slide_prior_loss_weight = prior_loss_weight
+            self._epoch_slide_num_timestep_buckets = None
+            self._rebuild_epoch_slide_batch_manager(log_bucket_info=True)
 
-        self.num_train_items = sum(
-            [len(bucket) for bucket in bucketed_item_info.values()]
-        )
+            bucket_count = (
+                len(self.batch_manager.bucket_resos)
+                if self.batch_manager is not None
+                else 0
+            )
+            logger.info(
+                f"[{dataset_id}] ✅ Training preparation complete: {self.num_train_items} items across {bucket_count} buckets"
+            )
+        else:
+            # prepare batch manager
+            self.batch_manager = BucketBatchManager(bucketed_item_info, self.batch_size, prior_loss_weight)  # type: ignore
+
+            self.batch_manager.show_bucket_info()
+
+            self.num_train_items = sum(
+                [len(bucket) for bucket in bucketed_item_info.values()]
+            )
+
+            bucket_count = (
+                len(self.batch_manager.bucket_resos)
+                if self.batch_manager is not None
+                else 0
+            )
 
         logger.info(
-            f"[{dataset_id}] Training preparation complete: {self.num_train_items} items across {len(bucketed_item_info)} buckets"
+            f"[{dataset_id}] Training preparation complete: {self.num_train_items} items across {bucket_count} buckets"
         )
+
+    def _get_epoch_slide_group_key(self, item_key: str) -> str:
+        stem = os.path.splitext(os.path.basename(item_key))[0]
+        match = EPOCH_SLIDE_KEY_PATTERN.search(stem)
+        if not match:
+            return stem
+        return stem[: match.start()]
+
+    def _get_epoch_slide_sort_value(self, item_key: str) -> int:
+        stem = os.path.splitext(os.path.basename(item_key))[0]
+        match = EPOCH_SLIDE_KEY_PATTERN.search(stem)
+        if match:
+            try:
+                return int(match.group(1))
+            except ValueError:
+                return 0
+        return 0
+
+    def _rebuild_epoch_slide_batch_manager(self, log_bucket_info: bool = False) -> None:
+        if not self.epoch_slide_enabled or not self._epoch_slide_groups:
+            return
+
+        epoch = self.current_epoch
+        if self.shared_epoch is not None:
+            epoch = self.shared_epoch.value
+
+        if (
+            self._epoch_slide_last_epoch_applied == epoch
+            and self.batch_manager is not None
+        ):
+            return
+
+        bucketed_item_info: dict[tuple[int, int, int], list[ItemInfo]] = {}
+        total_items = 0
+
+        for bucket_reso, groups in self._epoch_slide_groups.items():
+            bucket_items: list[ItemInfo] = []
+            for clips in groups.values():
+                if not clips:
+                    continue
+                index = epoch % len(clips)
+                selected = clips[index]
+                for _ in range(self.num_repeats):
+                    bucket_items.append(selected)
+            bucketed_item_info[bucket_reso] = bucket_items
+            total_items += len(bucket_items)
+
+        self.batch_manager = BucketBatchManager(
+            bucketed_item_info,
+            self.batch_size,
+            self._epoch_slide_prior_loss_weight or 1.0,
+        )
+
+        if log_bucket_info or not self._epoch_slide_logged_info:
+            self.batch_manager.show_bucket_info()
+            self._epoch_slide_logged_info = True
+
+        self.num_train_items = total_items
+        self._epoch_slide_last_epoch_applied = epoch
 
     def shuffle_buckets(self):
         dataset_id = self.get_dataset_identifier()
+        if self.epoch_slide_enabled:
+            self._rebuild_epoch_slide_batch_manager()
+        if self.batch_manager is None:
+            logger.warning(f"[{dataset_id}] shuffle_buckets() called before batch manager was initialized")
+            return
         # set random seed for this epoch
         random.seed(self.seed + self.current_epoch)  # type: ignore
         logger.info(

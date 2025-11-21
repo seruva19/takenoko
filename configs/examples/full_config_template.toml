@@ -3149,6 +3149,7 @@ num_repeats = 1
 # - multiple_overlapping: minimally cover the video with windows (may overlap), end-aligned, requires setting target_frames.
 # - adaptive: intelligently handles variable clip lengths - if shorter than target, takes whole clip; if longer, takes multiple fragments with possible overlap, max_frames caps the effective video length, requires setting target_frames.
 # - uniform_adaptive: uniform sampling that accepts short videos - if shorter than target, takes whole clip; if longer, uses uniform sampling, max_frames caps the effective video length, requires setting target_frames and frame_sample.
+# - epoch_slide: generates the same fragments as uniform_adaptive but only activates one fragment per video each epoch, cycling through frame_sample positions before repeating; useful for temporal coverage without multiplying dataset size.
 # - full: use up to max_frames (rounded to N*4+1) starting at 0, requires setting target_frames to be non-empty.
 # Uses max_frames to cap length (optional). If multiple target_frames are provided, one identical (0, use_frames) window is produced per entry; recommended target_frames = [1].
 frame_extraction = "uniform"

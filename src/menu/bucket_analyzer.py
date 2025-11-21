@@ -17,6 +17,7 @@ from dataset.config_utils import (
 )
 from dataset.buckets import BucketSelector
 from dataset.datasource_utils import glob_images, glob_videos
+from dataset.frame_extraction import generate_crop_positions
 import numpy as np
 from collections import Counter
 
@@ -67,130 +68,125 @@ class BucketAnalyzer:
     def analyze_video(self, video_path: str) -> Optional[List[Tuple[int, int]]]:
         """Analyze a single video and return bucket resolutions."""
         try:
-            # For videos, we need to consider target_frames
             target_frames = getattr(self.params, "target_frames", [1])
+            frame_extraction_mode = getattr(self.params, "frame_extraction", "head")
+            frame_sample = getattr(self.params, "frame_sample", 1)
+            frame_stride = getattr(self.params, "frame_stride", 1)
+            max_frames = getattr(self.params, "max_frames", None)
 
             if os.path.isfile(video_path):
-                # Get actual frame count to estimate segments
                 container = av.open(video_path)
                 video_stream = container.streams.video[0]
-                # Use stream frame count if available, otherwise count frames
                 try:
                     frame_count = video_stream.frames
                     if frame_count == 0:
                         raise ValueError("Stream reports 0 frames")
-                except:
-                    # Fallback: count frames manually
+                except Exception:
                     frame_count = 0
                     for _ in container.decode(video=0):
                         frame_count += 1
 
-                # Get first frame for resolution
                 container.seek(0)
                 first_frame = next(container.decode(video=0)).to_image()
                 container.close()
 
                 if first_frame and frame_count > 0:
                     original_size = first_frame.size
-                    bucket_reso = self.bucket_selector.get_bucket_resolution(
-                        original_size
+                    return self._record_video_segments(
+                        video_path=video_path,
+                        original_size=original_size,
+                        frame_count=frame_count,
+                        entry_type="video",
+                        mode=frame_extraction_mode,
+                        target_frames=target_frames,
+                        frame_sample=frame_sample,
+                        frame_stride=frame_stride,
+                        max_frames=max_frames,
                     )
-
-                    # Import frame extraction to calculate actual segments
-                    from dataset.frame_extraction import generate_crop_positions
-
-                    buckets = []
-                    for num_frames in target_frames:
-                        # Calculate how many segments will be extracted
-                        frame_extraction_mode = getattr(
-                            self.params, "frame_extraction", "head"
-                        )
-                        frame_sample = getattr(self.params, "frame_sample", 1)
-                        frame_stride = getattr(self.params, "frame_stride", 1)
-                        max_frames = getattr(self.params, "max_frames", None)
-
-                        segments = generate_crop_positions(
-                            frame_count=frame_count,
-                            target_frames=[num_frames],
-                            mode=frame_extraction_mode,
-                            frame_stride=frame_stride,
-                            frame_sample=frame_sample,
-                            max_frames=max_frames,
-                        )
-
-                        num_segments = len(segments)
-
-                        # Add one entry per segment (actual training items)
-                        for seg_idx in range(num_segments):
-                            self.bucket_stats[bucket_reso].append(
-                                {
-                                    "path": video_path,
-                                    "original_size": original_size,
-                                    "type": "video",
-                                    "frames": num_frames,
-                                    "total_frames": frame_count,
-                                    "segment_idx": seg_idx,
-                                    "total_segments": num_segments,
-                                }
-                            )
-                            buckets.append(bucket_reso)
-
-                    return buckets
             else:
-                # Directory of images treated as video
                 image_files = glob_images(video_path)
                 if image_files:
                     with Image.open(image_files[0]) as img:
                         original_size = img.size
-                        bucket_reso = self.bucket_selector.get_bucket_resolution(
-                            original_size
-                        )
-
-                        # Import frame extraction to calculate actual segments
-                        from dataset.frame_extraction import generate_crop_positions
-
-                        frame_count = len(image_files)
-                        buckets = []
-                        for num_frames in target_frames:
-                            # Calculate how many segments will be extracted
-                            frame_extraction_mode = getattr(
-                                self.params, "frame_extraction", "head"
-                            )
-                            frame_sample = getattr(self.params, "frame_sample", 1)
-                            frame_stride = getattr(self.params, "frame_stride", 1)
-                            max_frames = getattr(self.params, "max_frames", None)
-
-                            segments = generate_crop_positions(
-                                frame_count=frame_count,
-                                target_frames=[num_frames],
-                                mode=frame_extraction_mode,
-                                frame_stride=frame_stride,
-                                frame_sample=frame_sample,
-                                max_frames=max_frames,
-                            )
-
-                            num_segments = len(segments)
-
-                            # Add one entry per segment (actual training items)
-                            for seg_idx in range(num_segments):
-                                self.bucket_stats[bucket_reso].append(
-                                    {
-                                        "path": video_path,
-                                        "original_size": original_size,
-                                        "type": "video_dir",
-                                        "frames": num_frames,
-                                        "total_frames": frame_count,
-                                        "segment_idx": seg_idx,
-                                        "total_segments": num_segments,
-                                    }
-                                )
-                                buckets.append(bucket_reso)
-
-                        return buckets
-
+                    frame_count = len(image_files)
+                    return self._record_video_segments(
+                        video_path=video_path,
+                        original_size=original_size,
+                        frame_count=frame_count,
+                        entry_type="video_dir",
+                        mode=frame_extraction_mode,
+                        target_frames=target_frames,
+                        frame_sample=frame_sample,
+                        frame_stride=frame_stride,
+                        max_frames=max_frames,
+                    )
         except Exception as e:
             print(f"   ⚠️  Failed to analyze {Path(video_path).name}: {e}")
             return None
+
+    def _record_video_segments(
+        self,
+        video_path: str,
+        original_size: Tuple[int, int],
+        frame_count: int,
+        entry_type: str,
+        mode: str,
+        target_frames: List[int],
+        frame_sample: int,
+        frame_stride: int,
+        max_frames: Optional[int],
+    ) -> List[Tuple[int, int]]:
+        bucket_reso = self.bucket_selector.get_bucket_resolution(original_size)
+        segments = generate_crop_positions(
+            frame_count=frame_count,
+            target_frames=target_frames,
+            mode=mode,
+            frame_stride=frame_stride,
+            frame_sample=frame_sample,
+            max_frames=max_frames,
+        )
+
+        if not segments:
+            return []
+
+        buckets: List[Tuple[int, int]] = []
+        total_segments = len(segments)
+
+        if mode == "epoch_slide":
+            # Only one effective sample per epoch; store metadata for cycle analysis
+            seg_length = segments[0][1]
+            self.bucket_stats[bucket_reso].append(
+                {
+                    "path": video_path,
+                    "original_size": original_size,
+                    "type": entry_type,
+                    "frames": seg_length,
+                    "total_frames": frame_count,
+                    "segment_idx": 0,
+                    "total_segments": total_segments,
+                    "effective_segments": 1,
+                    "epoch_slide": True,
+                }
+            )
+            buckets.append(bucket_reso)
+        else:
+            for seg_idx, (_, seg_length) in enumerate(segments):
+                self.bucket_stats[bucket_reso].append(
+                    {
+                        "path": video_path,
+                        "original_size": original_size,
+                        "type": entry_type,
+                        "frames": seg_length,
+                        "total_frames": frame_count,
+                        "segment_idx": seg_idx,
+                        "total_segments": total_segments,
+                        "effective_segments": 1,
+                        "epoch_slide": False,
+                    }
+                )
+                buckets.append(bucket_reso)
+
+        return buckets
 
     def scan_dataset(self) -> int:
         """Scan all items in the dataset. Returns number of items scanned."""
@@ -249,11 +245,14 @@ class BucketAnalyzer:
         temporal_stats = {
             "frame_counts": [],
             "segment_counts": Counter(),
-            "total_segments": 0,
+            "effective_segments": 0,
+            "physical_segments": 0,
             "videos_analyzed": 0,
             "short_videos": 0,  # < min(target_frames)
             "long_videos": 0,  # > max(target_frames)
             "perfect_fit": 0,  # == target_frames
+            "epoch_slide_videos": 0,
+            "epoch_slide_cycles": Counter(),
         }
 
         target_frames = getattr(self.params, "target_frames", [1])
@@ -271,6 +270,7 @@ class BucketAnalyzer:
                         temporal_stats["frame_counts"].append(total_frames)
                         temporal_stats["segment_counts"][total_segments] += 1
                         temporal_stats["videos_analyzed"] += 1
+                        temporal_stats["physical_segments"] += total_segments
 
                         if total_frames < min_target:
                             temporal_stats["short_videos"] += 1
@@ -279,7 +279,13 @@ class BucketAnalyzer:
                         elif total_frames in target_frames:
                             temporal_stats["perfect_fit"] += 1
 
-                    temporal_stats["total_segments"] += 1
+                        if item.get("epoch_slide"):
+                            temporal_stats["epoch_slide_videos"] += 1
+                            temporal_stats["epoch_slide_cycles"][total_segments] += 1
+
+                    temporal_stats["effective_segments"] += item.get(
+                        "effective_segments", 1
+                    )
 
         if not temporal_stats["frame_counts"]:
             return None
@@ -298,7 +304,7 @@ class BucketAnalyzer:
 
         # Calculate segment efficiency
         temporal_stats["avg_segments_per_video"] = (
-            temporal_stats["total_segments"] / temporal_stats["videos_analyzed"]
+            temporal_stats["physical_segments"] / temporal_stats["videos_analyzed"]
             if temporal_stats["videos_analyzed"] > 0
             else 0
         )
@@ -413,8 +419,13 @@ def print_dataset_summary(
         stats = temporal_stats["stats"]
         print(f"\nFrame Count Distribution:")
         print(f"  Videos analyzed: {temporal_stats['videos_analyzed']}")
-        print(f"  Total segments: {temporal_stats['total_segments']}")
-        print(f"  Avg segments/video: {temporal_stats['avg_segments_per_video']:.2f}")
+        print(
+            f"  Effective per-epoch segments: {temporal_stats['effective_segments']}"
+        )
+        print(
+            f"  Physical segments (cached windows): {temporal_stats['physical_segments']}"
+        )
+        print(f"  Avg windows/video: {temporal_stats['avg_segments_per_video']:.2f}")
         print(f"\n  Min frames: {stats['min_frames']}")
         print(f"  Max frames: {stats['max_frames']}")
         print(f"  Mean frames: {stats['mean_frames']:.1f} ± {stats['std_frames']:.1f}")
@@ -443,6 +454,18 @@ def print_dataset_summary(
             print(f"  {num_segments} segment(s): {count} videos ({pct:.1f}%)")
         if len(sorted_segments) > 10:
             print(f"  ... and {len(sorted_segments) - 10} more segment counts")
+
+        if temporal_stats["epoch_slide_videos"] > 0:
+            print(f"\nEpoch Slide Coverage:")
+            total_epoch_videos = temporal_stats["epoch_slide_videos"]
+            print(f"  Videos using epoch_slide: {total_epoch_videos}")
+            for cycle_len, count in sorted(
+                temporal_stats["epoch_slide_cycles"].items()
+            ):
+                pct = count / total_epoch_videos * 100
+                print(
+                    f"  Cycle length {cycle_len} windows: {count} videos ({pct:.1f}%)"
+                )
 
     # Show most common buckets with examples
     if summary["buckets"]:
@@ -656,8 +679,11 @@ def print_unified_summary_tables(
             total_videos = sum(
                 ds["temporal_stats"]["videos_analyzed"] for ds in video_datasets
             )
-            total_segments = sum(
-                ds["temporal_stats"]["total_segments"] for ds in video_datasets
+            total_effective = sum(
+                ds["temporal_stats"]["effective_segments"] for ds in video_datasets
+            )
+            total_physical = sum(
+                ds["temporal_stats"]["physical_segments"] for ds in video_datasets
             )
             all_frame_counts = []
             all_short = sum(
@@ -676,8 +702,11 @@ def print_unified_summary_tables(
                 frame_counts = np.array(all_frame_counts)
                 print(f"\nAggregate Frame Distribution:")
                 print(f"  Total videos: {total_videos}")
-                print(f"  Total segments: {total_segments}")
-                print(f"  Avg segments/video: {total_segments/total_videos:.2f}")
+                print(f"  Effective per-epoch segments: {total_effective}")
+                print(f"  Physical segments (cached windows): {total_physical}")
+                print(
+                    f"  Avg windows/video: {total_physical/total_videos:.2f}"
+                )
                 print(f"  Min frames: {int(np.min(frame_counts))}")
                 print(f"  Max frames: {int(np.max(frame_counts))}")
                 print(
@@ -697,7 +726,7 @@ def print_unified_summary_tables(
                 # Per-dataset comparison table
                 print(f"\nPer-Dataset Temporal Comparison:")
                 print(
-                    f"{'Dataset':<15} {'Videos':<10} {'Segments':<10} {'Avg S/V':<10} {'Mean±Std Frames':<25} {'Short%':<10} {'Long%':<10}"
+                    f"{'Dataset':<15} {'Videos':<10} {'Phys Seg':<10} {'Eff Seg':<10} {'Avg Win/Vid':<12} {'Mean±Std Frames':<25} {'Short%':<10} {'Long%':<10}"
                 )
                 print("-" * 120)
 
@@ -710,8 +739,9 @@ def print_unified_summary_tables(
                     print(
                         f"D{ds_idx}({ds_type_short}){'':9} "
                         f"{ts['videos_analyzed']:<10} "
-                        f"{ts['total_segments']:<10} "
-                        f"{ts['avg_segments_per_video']:<10.2f} "
+                        f"{ts['physical_segments']:<10} "
+                        f"{ts['effective_segments']:<10} "
+                        f"{ts['avg_segments_per_video']:<12.2f} "
                         f"{np.mean(frames):.1f}±{np.std(frames):.1f}{'':13} "
                         f"{ts['short_videos']/ts['videos_analyzed']*100:>6.1f}%    "
                         f"{ts['long_videos']/ts['videos_analyzed']*100:>6.1f}%"

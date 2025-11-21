@@ -48,6 +48,7 @@ def generate_crop_positions(
         if frame_count < target_frame and normalized_mode not in [
             "adaptive",
             "uniform_adaptive",
+            "epoch_slide",
         ]:
             # Not enough frames to extract this window size (except for adaptive and uniform_adaptive modes)
             continue
@@ -125,7 +126,7 @@ def generate_crop_positions(
                         )
                         crop_pos_and_frames.append((start, target_frame))
 
-        elif normalized_mode == "uniform_adaptive":
+        elif normalized_mode in ("uniform_adaptive", "epoch_slide"):
             # Uniform-like method that accepts short videos (like adaptive)
             # Apply max_frames cap to effective frame count if specified
             effective_frame_count = frame_count
@@ -139,7 +140,7 @@ def generate_crop_positions(
             if effective_frame_count < target_frame:
                 # If effective clip is shorter than target, take it as whole
                 crop_pos_and_frames.append((0, effective_frame_count))
-            else:
+            elif normalized_mode == "uniform_adaptive":
                 # Use uniform sampling on the effective length
                 samples = frame_sample or 1
                 starts = np.linspace(
@@ -147,6 +148,36 @@ def generate_crop_positions(
                 )
                 for i in starts:
                     crop_pos_and_frames.append((int(i), target_frame))
+            else:  # epoch_slide
+                # Sliding windows with configurable overlap across epochs
+                overlap = int(frame_stride or 0)
+                overlap = max(0, min(overlap, target_frame - 1))
+                step = max(target_frame - overlap, 1)
+
+                positions: List[int] = []
+                current_start = 0
+                final_start = effective_frame_count - target_frame
+                while current_start < final_start:
+                    positions.append(current_start)
+                    current_start += step
+                if not positions or positions[-1] != final_start:
+                    positions.append(final_start)
+
+                if frame_sample is None:
+                    samples = len(positions)
+                else:
+                    samples = int(frame_sample)
+
+                if samples <= 0 or samples >= len(positions):
+                    sampled_positions = positions
+                else:
+                    sampled_indices = sorted(
+                        set(np.linspace(0, len(positions) - 1, samples, dtype=int))
+                    )
+                    sampled_positions = [positions[idx] for idx in sampled_indices]
+                for pos in sampled_positions:
+                    crop_pos_and_frames.append((int(pos), target_frame))
+
 
         elif normalized_mode == "full":
             if max_frames is None or max_frames <= 0:

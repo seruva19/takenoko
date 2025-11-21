@@ -86,27 +86,39 @@ class OperationsMenu(BaseMenu):
                 estimate_latent_cache_chunks_per_dataset,
             )
 
-            total_chunks = estimate_latent_cache_chunks(
-                self.trainer.args.dataset_config, self.trainer.args
-            )
             per_ds = estimate_latent_cache_chunks_per_dataset(
                 self.trainer.args.dataset_config, self.trainer.args
             )
+            total_chunks = sum(entry["chunks"] for entry in per_ds)
+            total_effective = sum(
+                entry.get("effective_chunks", entry["chunks"]) for entry in per_ds
+            )
 
             # Use print() instead of logging.info() for better visibility in menu context
-            print(
-                f"\n🧮 Estimated latent cache chunks: {total_chunks} (across all video datasets)"
-            )
+            print(f"\n🧮 Estimated latent cache chunks (cache workload): {total_chunks}")
+            if total_effective != total_chunks:
+                print(
+                    f"🌀 Estimated per-epoch video batches (epoch_slide applied): {total_effective}"
+                )
+            else:
+                print(f"🌀 Estimated per-epoch video batches: {total_effective}")
 
             # Show each dataset with distinguishing information
             for idx, entry in enumerate(per_ds, 1):
                 vdir = entry["video_directory"]
                 chunks = entry["chunks"]
+                effective = entry.get("effective_chunks", chunks)
                 caption_ext = entry.get("caption_extension", ".txt")
                 cache_dir = entry.get("latents_cache_dir")
 
                 # Build info string with distinguishing details
-                info_parts = [f"{chunks} chunks"]
+                info_parts = [f"{chunks} cache"]
+                if effective != chunks:
+                    cycle = entry.get("epoch_cycle_max")
+                    per_epoch = f"{effective} per-epoch"
+                    if cycle:
+                        per_epoch += f", cycle≤{cycle} epochs"
+                    info_parts.append(per_epoch)
                 if caption_ext and caption_ext != ".txt":
                     info_parts.append(f"captions={caption_ext}")
                 if cache_dir:
