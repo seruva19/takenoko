@@ -1,5 +1,6 @@
 import torch
 import torch.distributed as dist
+from optimizers.optimizer_utils import apply_weight_decay
 
 
 def zeropower_via_newtonschulz5(G, steps: int):
@@ -102,7 +103,15 @@ class Muon(torch.optim.Optimizer):
                     update = muon_update(
                         p.grad, state["momentum_buffer"], beta=group["momentum"]
                     )
-                    p.mul_(1 - group["lr"] * group["weight_decay"])
+
+                    apply_weight_decay(
+                        p,
+                        update.reshape(p.shape),
+                        group["lr"],
+                        group["weight_decay"],
+                        group.get("weight_decay_type", "default"),
+                        group.get("initial_lr", group.get("lr")),
+                    )
                     p.add_(update.reshape(p.shape), alpha=-group["lr"])
                 dist.all_gather(
                     params_pad[base_i : base_i + dist.get_world_size()],
@@ -140,7 +149,15 @@ class SingleDeviceMuon(torch.optim.Optimizer):
                 update = muon_update(
                     p.grad, state["momentum_buffer"], beta=group["momentum"]
                 )
-                p.mul_(1 - group["lr"] * group["weight_decay"])
+
+                apply_weight_decay(
+                    p,
+                    update.reshape(p.shape),
+                    group["lr"],
+                    group["weight_decay"],
+                    group.get("weight_decay_type", "default"),
+                    group.get("initial_lr", group.get("lr")),
+                )
                 p.add_(update.reshape(p.shape), alpha=-group["lr"])
 
         return loss
@@ -194,7 +211,15 @@ class MuonWithAuxAdam(torch.optim.Optimizer):
                 group["momentum"] = group.get("momentum", 0.95)
                 group["weight_decay"] = group.get("weight_decay", 0)
                 assert set(group.keys()) == set(
-                    ["params", "lr", "momentum", "weight_decay", "use_muon"]
+                    [
+                        "params",
+                        "lr",
+                        "momentum",
+                        "weight_decay",
+                        "use_muon",
+                        "initial_lr",
+                        "weight_decay_type",
+                    ]
                 )
             else:
                 # defaults
@@ -203,7 +228,16 @@ class MuonWithAuxAdam(torch.optim.Optimizer):
                 group["eps"] = group.get("eps", 1e-10)
                 group["weight_decay"] = group.get("weight_decay", 0)
                 assert set(group.keys()) == set(
-                    ["params", "lr", "betas", "eps", "weight_decay", "use_muon"]
+                    [
+                        "params",
+                        "lr",
+                        "betas",
+                        "eps",
+                        "weight_decay",
+                        "use_muon",
+                        "initial_lr",
+                        "weight_decay_type",
+                    ]
                 )
         super().__init__(param_groups, dict())
 
@@ -233,8 +267,16 @@ class MuonWithAuxAdam(torch.optim.Optimizer):
                         update = muon_update(
                             p.grad, state["momentum_buffer"], beta=group["momentum"]
                         )
-                        p.mul_(1 - group["lr"] * group["weight_decay"])
-                        p.add_(update.reshape(p.shape), alpha=-group["lr"])
+                        p.grad = update.reshape(p.shape)
+                        apply_weight_decay(
+                            p,
+                            p.grad,
+                            group["lr"],
+                            group["weight_decay"],
+                            group.get("weight_decay_type", "default"),
+                            group.get("initial_lr", group.get("lr")),
+                        )
+                        p.add_(p.grad, alpha=-group["lr"])
                     dist.all_gather(
                         params_pad[base_i : base_i + dist.get_world_size()],
                         params_pad[base_i + dist.get_rank()],
@@ -248,7 +290,7 @@ class MuonWithAuxAdam(torch.optim.Optimizer):
                     if len(state) == 0:
                         state["exp_avg"] = torch.zeros_like(p)
                         state["exp_avg_sq"] = torch.zeros_like(p)
-                        state["step"] = 0
+                    state["step"] = 0
                     state["step"] += 1
                     update = adam_update(
                         p.grad,
@@ -258,7 +300,15 @@ class MuonWithAuxAdam(torch.optim.Optimizer):
                         group["betas"],
                         group["eps"],
                     )
-                    p.mul_(1 - group["lr"] * group["weight_decay"])
+
+                    apply_weight_decay(
+                        p,
+                        update,
+                        group["lr"],
+                        group["weight_decay"],
+                        group.get("weight_decay_type", "default"),
+                        group.get("initial_lr", group.get("lr")),
+                    )
                     p.add_(update, alpha=-group["lr"])
 
         return loss
@@ -278,7 +328,15 @@ class SingleDeviceMuonWithAuxAdam(torch.optim.Optimizer):
                 group["momentum"] = group.get("momentum", 0.95)
                 group["weight_decay"] = group.get("weight_decay", 0)
                 assert set(group.keys()) == set(
-                    ["params", "lr", "momentum", "weight_decay", "use_muon"]
+                    [
+                        "params",
+                        "lr",
+                        "momentum",
+                        "weight_decay",
+                        "use_muon",
+                        "initial_lr",
+                        "weight_decay_type",
+                    ]
                 )
             else:
                 # defaults
@@ -287,7 +345,16 @@ class SingleDeviceMuonWithAuxAdam(torch.optim.Optimizer):
                 group["eps"] = group.get("eps", 1e-10)
                 group["weight_decay"] = group.get("weight_decay", 0)
                 assert set(group.keys()) == set(
-                    ["params", "lr", "betas", "eps", "weight_decay", "use_muon"]
+                    [
+                        "params",
+                        "lr",
+                        "betas",
+                        "eps",
+                        "weight_decay",
+                        "use_muon",
+                        "initial_lr",
+                        "weight_decay_type",
+                    ]
                 )
         super().__init__(param_groups, dict())
 
@@ -311,7 +378,15 @@ class SingleDeviceMuonWithAuxAdam(torch.optim.Optimizer):
                     update = muon_update(
                         p.grad, state["momentum_buffer"], beta=group["momentum"]
                     )
-                    p.mul_(1 - group["lr"] * group["weight_decay"])
+
+                    apply_weight_decay(
+                        p,
+                        update.reshape(p.shape),
+                        group["lr"],
+                        group["weight_decay"],
+                        group.get("weight_decay_type", "default"),
+                        group.get("initial_lr", group.get("lr")),
+                    )
                     p.add_(update.reshape(p.shape), alpha=-group["lr"])
             else:
                 for p in group["params"]:
@@ -332,7 +407,15 @@ class SingleDeviceMuonWithAuxAdam(torch.optim.Optimizer):
                         group["betas"],
                         group["eps"],
                     )
-                    p.mul_(1 - group["lr"] * group["weight_decay"])
+
+                    apply_weight_decay(
+                        p,
+                        update,
+                        group["lr"],
+                        group["weight_decay"],
+                        group.get("weight_decay_type", "default"),
+                        group.get("initial_lr", group.get("lr")),
+                    )
                     p.add_(update, alpha=-group["lr"])
 
         return loss

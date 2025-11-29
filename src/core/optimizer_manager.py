@@ -399,6 +399,7 @@ class OptimizerManager:
                 "momentum", 0.9
             )  # Lower momentum for stability
             ns_steps = optimizer_kwargs.get("ns_steps", 3)  # Fewer Newton-Schulz steps
+            weight_decay_type = optimizer_kwargs.get("weight_decay_type", "default")
 
             # Only include parameter groups that have parameters
             param_groups = []
@@ -411,6 +412,8 @@ class OptimizerManager:
                         lr=muon_lr,
                         weight_decay=weight_decay,
                         momentum=momentum,  # Add momentum for Muon group
+                        initial_lr=muon_lr,
+                        weight_decay_type=weight_decay_type,
                     )
                 )
 
@@ -422,6 +425,8 @@ class OptimizerManager:
                         lr=adam_lr,
                         betas=betas,
                         weight_decay=weight_decay,
+                        initial_lr=adam_lr,
+                        weight_decay_type=weight_decay_type,
                     )
                 )
 
@@ -507,6 +512,7 @@ class OptimizerManager:
             ns_steps = optimizer_kwargs.get(
                 "normuon_ns_steps", optimizer_kwargs.get("ns_steps", 3)
             )
+            weight_decay_type = optimizer_kwargs.get("weight_decay_type", "default")
 
             param_groups = []
 
@@ -521,6 +527,8 @@ class OptimizerManager:
                         beta2=beta2,
                         eps=eps,
                         ns_steps=ns_steps,
+                        initial_lr=normuon_lr,
+                        weight_decay_type=weight_decay_type,
                     )
                 )
 
@@ -532,6 +540,8 @@ class OptimizerManager:
                         lr=normuon_adam_lr,
                         betas=tuple(betas),
                         weight_decay=weight_decay,
+                        initial_lr=normuon_adam_lr,
+                        weight_decay_type=weight_decay_type,
                     )
                 )
 
@@ -623,6 +633,7 @@ class OptimizerManager:
             sign_stabilization = optimizer_kwargs.get(
                 "adamuon_sign_stabilization", True
             )
+            weight_decay_type = optimizer_kwargs.get("weight_decay_type", "default")
 
             param_groups = []
 
@@ -640,6 +651,8 @@ class OptimizerManager:
                         scale_factor=scale_factor,
                         nesterov=nesterov,
                         sign_stabilization=sign_stabilization,
+                        initial_lr=adamuon_lr,
+                        weight_decay_type=weight_decay_type,
                     )
                 )
 
@@ -651,6 +664,8 @@ class OptimizerManager:
                         lr=adamuon_adam_lr,
                         betas=tuple(betas),
                         weight_decay=weight_decay,
+                        initial_lr=adamuon_adam_lr,
+                        weight_decay_type=weight_decay_type,
                     )
                 )
 

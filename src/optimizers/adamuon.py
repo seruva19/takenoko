@@ -28,6 +28,7 @@ import torch
 
 from common.logger import get_logger
 from optimizers.muon import adam_update, zeropower_via_newtonschulz5
+from optimizers.optimizer_utils import apply_weight_decay
 
 logger = get_logger(__name__)
 
@@ -278,6 +279,8 @@ class SingleDeviceAdaMuonWithAuxAdam(torch.optim.Optimizer):
                     "nesterov",
                     "scale_factor",
                     "sign_stabilization",
+                    "initial_lr",
+                    "weight_decay_type",
                 }
             else:
                 group["lr"] = group.get("lr", 3e-4)
@@ -291,6 +294,8 @@ class SingleDeviceAdaMuonWithAuxAdam(torch.optim.Optimizer):
                     "eps",
                     "weight_decay",
                     "use_muon",
+                    "initial_lr",
+                    "weight_decay_type",
                 }
         super().__init__(param_groups, dict())
 
@@ -333,7 +338,15 @@ class SingleDeviceAdaMuonWithAuxAdam(torch.optim.Optimizer):
                         scale_factor=group["scale_factor"],
                         sign_stabilization=bool(group["sign_stabilization"]),
                     )
-                    p.mul_(1 - group["lr"] * group["weight_decay"])
+
+                    apply_weight_decay(
+                        p,
+                        update,
+                        group["lr"],
+                        group["weight_decay"],
+                        group.get("weight_decay_type", "default"),
+                        group.get("initial_lr", group.get("lr")),
+                    )
                     p.add_(update, alpha=-group["lr"])
             else:
                 for p in group["params"]:
@@ -355,7 +368,15 @@ class SingleDeviceAdaMuonWithAuxAdam(torch.optim.Optimizer):
                         group["betas"],
                         group["eps"],
                     )
-                    p.mul_(1 - group["lr"] * group["weight_decay"])
+
+                    apply_weight_decay(
+                        p,
+                        update,
+                        group["lr"],
+                        group["weight_decay"],
+                        group.get("weight_decay_type", "default"),
+                        group.get("initial_lr", group.get("lr")),
+                    )
                     p.add_(update, alpha=-group["lr"])
 
         return loss

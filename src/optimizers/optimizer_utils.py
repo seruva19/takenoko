@@ -299,3 +299,35 @@ def stochastic_grad_accummulation(param):
     else:
         param._accum_grad = param.grad.clone()
         del param.grad
+
+
+def apply_weight_decay(
+    p: torch.Tensor,
+    grad_update: torch.Tensor,
+    lr: float,
+    weight_decay: float,
+    weight_decay_type: str = "default",
+    initial_lr: Optional[float] = None,
+):
+    """Apply decoupled weight decay with optional scheduled/cautious variants."""
+    if weight_decay == 0:
+        return
+
+    # Determine effective weight decay
+    effective_wd = weight_decay
+    if "scheduled" in weight_decay_type:
+        if initial_lr is not None:
+            effective_wd = weight_decay * (lr / initial_lr)
+
+    # Determine if we should apply decay (for cautious mode)
+    mask = None
+    if "cautious" in weight_decay_type:
+        mask = (p * grad_update) >= 0
+
+    decay_factor = 1.0 - lr * effective_wd
+
+    if mask is not None:
+        if decay_factor < 1.0:
+            p.mul_(torch.where(mask, decay_factor, 1.0))
+    else:
+        p.mul_(decay_factor)

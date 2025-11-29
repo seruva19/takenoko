@@ -5,6 +5,7 @@ import torch
 
 from common.logger import get_logger
 from optimizers.muon import adam_update, zeropower_via_newtonschulz5
+from optimizers.optimizer_utils import apply_weight_decay
 
 logger = get_logger(__name__)
 
@@ -89,9 +90,7 @@ def _coerce_pair(name: str, value: Any) -> Tuple[float, float]:
     raise ValueError(f"{name} must contain exactly two numeric values.")
 
 
-def apply_normuon_config_overrides(
-    args: Any, optimizer_kwargs: Dict[str, Any]
-) -> None:
+def apply_normuon_config_overrides(args: Any, optimizer_kwargs: Dict[str, Any]) -> None:
     """Populate optimizer kwargs with NorMuon config overrides when provided."""
 
     config_source = _fetch_override_source(args)
@@ -243,7 +242,14 @@ class SingleDeviceNorMuon(torch.optim.Optimizer):
                     ns_steps=group["ns_steps"],
                 )
 
-                p.mul_(1 - group["lr"] * group["weight_decay"])
+                apply_weight_decay(
+                    p,
+                    update,
+                    group["lr"],
+                    group["weight_decay"],
+                    group.get("weight_decay_type", "default"),
+                    group.get("initial_lr", group.get("lr")),
+                )
                 p.add_(update, alpha=-group["lr"])
 
         return loss
@@ -276,6 +282,8 @@ class SingleDeviceNorMuonWithAuxAdam(torch.optim.Optimizer):
                     "weight_decay",
                     "use_muon",
                     "ns_steps",
+                    "initial_lr",
+                    "weight_decay_type",
                 }
             else:
                 group["lr"] = group.get("lr", 3e-4)
@@ -289,6 +297,8 @@ class SingleDeviceNorMuonWithAuxAdam(torch.optim.Optimizer):
                     "eps",
                     "weight_decay",
                     "use_muon",
+                    "initial_lr",
+                    "weight_decay_type",
                 }
         super().__init__(param_groups, dict())
 
@@ -326,7 +336,15 @@ class SingleDeviceNorMuonWithAuxAdam(torch.optim.Optimizer):
                         eps=group["eps"],
                         ns_steps=group["ns_steps"],
                     )
-                    p.mul_(1 - group["lr"] * group["weight_decay"])
+
+                    apply_weight_decay(
+                        p,
+                        update,
+                        group["lr"],
+                        group["weight_decay"],
+                        group.get("weight_decay_type", "default"),
+                        group.get("initial_lr", group.get("lr")),
+                    )
                     p.add_(update, alpha=-group["lr"])
             else:
                 for p in group["params"]:
@@ -348,7 +366,15 @@ class SingleDeviceNorMuonWithAuxAdam(torch.optim.Optimizer):
                         group["betas"],
                         group["eps"],
                     )
-                    p.mul_(1 - group["lr"] * group["weight_decay"])
+
+                    apply_weight_decay(
+                        p,
+                        update,
+                        group["lr"],
+                        group["weight_decay"],
+                        group.get("weight_decay_type", "default"),
+                        group.get("initial_lr", group.get("lr")),
+                    )
                     p.add_(update, alpha=-group["lr"])
 
         return loss
