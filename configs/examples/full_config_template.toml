@@ -1072,6 +1072,37 @@ repa_ensemble_mode = "individual"
 # Projection sharing (false = individual heads per encoder, true = shared head)
 repa_shared_projection = false
 
+# Spatial alignment via interpolation (default: true)
+# When diffusion and encoder have different token counts:
+# - true: Spatially interpolate features to match (preserves per-patch alignment)
+# - false: Pool features globally (loses spatial information)
+# Recommended: true for better alignment quality
+repa_spatial_align = true
+
+# =============================================================================
+# ⚠️ CREPA (CROSS-FRAME REPRESENTATIONAL ALIGNMENT) SETTINGS
+# =============================================================================
+
+# Extends REPA with temporal neighbor alignment for better video consistency
+# Recommended: true for video fine-tuning, false for image training
+crepa_enabled = false
+
+# Adjacency range for temporal alignment (default: 1 => neighbors at t-1 and t+1)
+# Higher values capture longer-term dependencies but increase compute cost
+crepa_adjacency = 1
+
+# Temperature for temporal weighting (default: 1.0)
+# Controls how quickly alignment weight decays with distance
+# Lower values (e.g., 0.5) focus strongly on immediate neighbors
+# Higher values (e.g., 2.0) distribute weight more evenly
+crepa_temperature = 1.0
+
+# Normalize CREPA loss by number of frames (default: true)
+# - true: Mean over frames (consistent loss scale across video lengths)
+# - false: Sum over frames (longer videos get stronger alignment signal)
+# Recommended: true for stable training with varying video lengths
+crepa_normalize_by_frames = true
+
 # =============================================================================
 # ⚠️ SARA (STRUCTURAL AND ADVERSARIAL REPRESENTATION ALIGNMENT) SETTINGS
 # =============================================================================

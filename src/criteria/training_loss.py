@@ -221,7 +221,9 @@ class TrainingLossComputer:
         network_dtype: torch.dtype,
     ) -> Optional[List[torch.Tensor]]:
         if transformer is None:
-            logger.warning("Blank prompt preservation requested but transformer is None")
+            logger.warning(
+                "Blank prompt preservation requested but transformer is None"
+            )
             return None
 
         if not hasattr(transformer, "encode_prompt"):
@@ -386,7 +388,9 @@ class TrainingLossComputer:
         transition_directional_tensor = None
         transition_directional_weight = 0.0
         if transition_enabled:
-            transition_directional_tensor = transition_loss_context.get("directional_loss")
+            transition_directional_tensor = transition_loss_context.get(
+                "directional_loss"
+            )
             try:
                 transition_directional_weight = float(
                     transition_loss_context.get("directional_weight", 0.0)
@@ -788,9 +792,37 @@ class TrainingLossComputer:
                 if "pixels" in batch:
                     clean_pixels = torch.stack(
                         batch["pixels"], dim=0
-                    )  # (B, C, F, H, W)
-                    first_frame_pixels = clean_pixels[:, :, 0, :, :]
-                    repa_val = repa_helper.get_repa_loss(first_frame_pixels, vae)
+                    )  # (B, C, F, H, W) or (B, C, H, W)
+
+                    # Handle video temporal alignment
+                    if clean_pixels.dim() == 5:
+                        # Calculate effective temporal tokens in DiT
+                        # Latents: (B, C, F_lat, H_lat, W_lat)
+                        # Patch size: (pt, ph, pw)
+                        # Temporal tokens = F_lat // pt
+                        lat_f = latents.shape[2]
+                        pt = self.config.patch_size[0]
+                        target_f = max(1, lat_f // pt)
+
+                        pix_f = clean_pixels.shape[2]
+
+                        if pix_f > target_f:
+                            # Subsample pixels to match DiT temporal resolution
+                            # Use linspace to pick representative frames
+                            indices = (
+                                torch.linspace(0, pix_f - 1, target_f)
+                                .long()
+                                .to(clean_pixels.device)
+                            )
+                            clean_pixels = clean_pixels.index_select(2, indices)
+                        elif pix_f < target_f:
+                            # This shouldn't happen in standard training, but if it does (e.g. image trained as video),
+                            # we might duplicate frames? Or just let repa_helper handle mismatch via pooling.
+                            # For safety, we leave it; repa_helper will likely global pool.
+                            pass
+
+                    # Pass full (resampled) tensor; repa_helper handles slicing or CREPA logic
+                    repa_val = repa_helper.get_repa_loss(clean_pixels, vae)
                     loss = loss + repa_val
                     repa_loss_value = repa_val.detach()
                 else:

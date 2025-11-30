@@ -236,43 +236,46 @@ class RepaHelper(nn.Module):
                 )  # (B, H*W, C)
 
         # Project the captured hidden state from the diffusion model
+        # captured_features: (B, N_tokens, D_diffusion)
+        # projected_features: (B, N_tokens, D_encoder)
         projected_features = self.projection_head(self.captured_features)
 
-        # Ensure both tensors have the same shape for comparison
-        if projected_features.shape != target_features.shape:
-            # Try to match the shapes by taking the mean over spatial dimensions if needed
-            if projected_features.dim() == 3 and target_features.dim() == 3:
-                # Both are (B, N, D), but N might be different
-                if projected_features.shape[1] != target_features.shape[1]:
-                    # Take mean over the spatial dimension to get (B, D)
+        # REPA loss computation:
+        # For each sample in batch:
+        #   1. Normalize projected and target features per-patch
+        #   2. Compute per-patch cosine similarity
+        #   3. Average over patches (mean_flat)
+        # Then average over batch and encoders
+
+        similarity_fn = getattr(self.args, "repa_similarity_fn", "cosine")
+
+        if similarity_fn == "cosine":
+            # Check if shapes match for per-patch similarity
+            if projected_features.shape == target_features.shape:
+                # Ideal case: same number of patches
+                # Normalize per-patch: (B, N_patches, D)
+                projected_norm = F.normalize(projected_features, dim=-1)
+                target_norm = F.normalize(target_features, dim=-1)
+
+                # Per-patch cosine similarity, then mean over patches and batch
+                # This matches: mean_flat(-(z_j * z_tilde_j).sum(dim=-1))
+                patch_sim = (projected_norm * target_norm).sum(dim=-1)  # (B, N_patches)
+                loss = -patch_sim.mean()  # mean over patches and batch
+            else:
+                # Fallback: pool to (B, D) if patch counts differ
+                if projected_features.dim() == 3:
                     projected_features = projected_features.mean(dim=1)
+                if target_features.dim() == 3:
                     target_features = target_features.mean(dim=1)
-            elif projected_features.dim() == 2 and target_features.dim() == 3:
-                # projected_features is (B, D), target_features is (B, N, D)
-                target_features = target_features.mean(dim=1)  # (B, D)
-            elif projected_features.dim() == 3 and target_features.dim() == 2:
-                # projected_features is (B, N, D), target_features is (B, D)
-                projected_features = projected_features.mean(dim=1)  # (B, D)
 
-        # Calculate similarity loss (negative cosine similarity is common)
-        if self.args.repa_similarity_fn == "cosine":
-            # Ensure both tensors are 2D for cosine similarity
-            if projected_features.dim() > 2:
-                projected_features = projected_features.mean(dim=1)
-            if target_features.dim() > 2:
-                target_features = target_features.mean(dim=1)
+                projected_norm = F.normalize(projected_features, dim=-1)
+                target_norm = F.normalize(target_features, dim=-1)
 
-            # Normalize both tensors for cosine similarity
-            projected_features = F.normalize(projected_features, dim=-1)
-            target_features = F.normalize(target_features, dim=-1)
-
-            # Cosine similarity: dot product of normalized vectors
-            similarity = (projected_features * target_features).sum(dim=-1)
-            loss = -similarity.mean()  # Negative because we want to maximize similarity
-
+                similarity = (projected_norm * target_norm).sum(dim=-1)
+                loss = -similarity.mean()
         else:
             raise NotImplementedError(
-                f"REPA similarity function '{self.args.repa_similarity_fn}' not implemented."
+                f"REPA similarity function '{similarity_fn}' not implemented."
             )
 
         # Clear captured features for the next step
