@@ -4,6 +4,7 @@ import torch.nn.functional as F
 from torchvision import transforms
 from typing import Optional, Any, Union, List, Dict, Tuple
 import logging
+import math
 from common.logger import get_logger
 
 from enhancements.repa.encoder_manager import (
@@ -13,6 +14,47 @@ from enhancements.repa.encoder_manager import (
 )
 
 logger = get_logger(__name__, level=logging.INFO)
+
+
+def interpolate_features_spatial(
+    features: torch.Tensor, target_tokens: int
+) -> torch.Tensor:
+    """
+    Spatially interpolate token features to match target token count.
+
+    Assumes tokens are arranged in a square grid (sqrt(N) x sqrt(N)).
+
+    Args:
+        features: (B, N_tokens, D) tensor
+        target_tokens: Target number of tokens
+
+    Returns:
+        Interpolated features with shape (B, target_tokens, D)
+    """
+    B, N, D = features.shape
+
+    # Compute spatial dimensions (assume square)
+    src_size = int(math.sqrt(N))
+    tgt_size = int(math.sqrt(target_tokens))
+
+    if src_size * src_size != N or tgt_size * tgt_size != target_tokens:
+        # Non-square token counts, fall back to 1D interpolation
+        features_1d = features.permute(0, 2, 1)  # (B, D, N)
+        interpolated = F.interpolate(
+            features_1d, size=target_tokens, mode="linear", align_corners=False
+        )
+        return interpolated.permute(0, 2, 1)  # (B, target_tokens, D)
+
+    # Reshape to 2D spatial grid: (B, N, D) -> (B, D, H, W)
+    features_2d = features.permute(0, 2, 1).view(B, D, src_size, src_size)
+
+    # Bilinear interpolation to target size
+    interpolated_2d = F.interpolate(
+        features_2d, size=(tgt_size, tgt_size), mode="bilinear", align_corners=False
+    )
+
+    # Reshape back: (B, D, H', W') -> (B, N', D)
+    return interpolated_2d.view(B, D, -1).permute(0, 2, 1)
 
 
 class MultiEncoderProjectionHead(nn.Module):
@@ -140,6 +182,17 @@ class EnhancedRepaHelper(nn.Module):
 
         # Multi-layer alignment support
         self.alignment_depths = self._parse_alignment_depths()
+
+        # CREPA settings
+        self.crepa_enabled = getattr(args, "crepa_enabled", False)
+        self.crepa_adjacency = getattr(args, "crepa_adjacency", 1)
+        self.crepa_temperature = getattr(args, "crepa_temperature", 1.0)
+        self.crepa_normalize_by_frames = getattr(
+            args, "crepa_normalize_by_frames", True
+        )
+
+        # Spatial alignment settings
+        self.spatial_align = getattr(args, "repa_spatial_align", True)
 
         # Placeholders for hooks and captured features
         self.hook_handles: List[Any] = []
@@ -280,15 +333,33 @@ class EnhancedRepaHelper(nn.Module):
         if not any(feat is not None for feat in self.captured_features):
             return torch.tensor(0.0, device=clean_pixels.device)
 
-        # If clean_pixels is a video batch (B, C, F, H, W), take the first frame
-        if clean_pixels.dim() == 5:
-            clean_pixels = clean_pixels[:, :, 0, :, :]  # Take the first frame
-
         total_loss = torch.tensor(0.0, device=clean_pixels.device)
+
+        # Determine if we are in video mode with CREPA enabled
+        is_video = clean_pixels.dim() == 5
+        use_crepa = is_video and self.crepa_enabled
+
+        if is_video and not use_crepa:
+            # Legacy behavior: Take the first frame for standard REPA on video
+            # This avoids massive compute overhead if user didn't ask for full video alignment
+            clean_pixels = clean_pixels[:, :, 0, :, :]
+
+        # Helper to process features
+        # If video (B, C, F, H, W), we flatten to (B*F, C, H, W) for encoder
+        if is_video and use_crepa:
+            B, C, F_frames, H, W = clean_pixels.shape
+            # Flatten frames into batch dimension
+            images_input = clean_pixels.permute(0, 2, 1, 3, 4).reshape(
+                B * F_frames, C, H, W
+            )
+        else:
+            images_input = clean_pixels
+            B = clean_pixels.shape[0]
+            F_frames = 1
 
         with torch.no_grad():
             # Convert pixels from [-1, 1] to [0, 1] and then to [0, 255]
-            images = ((clean_pixels + 1) / 2.0).clamp(0, 1) * 255.0
+            images = ((images_input + 1) / 2.0).clamp(0, 1) * 255.0
 
             # Get target representations from all encoders
             target_features_list = []
@@ -324,17 +395,19 @@ class EnhancedRepaHelper(nn.Module):
                         f"Expected tensor output from encoder {i}, got {type(target_features)}"
                     )
 
-                # Ensure we have the right shape: (B, N, D) where N is number of patches/tokens, D is feature dim
+                # Ensure we have the right shape: (N_samples, N_tokens, D)
                 if target_features.dim() == 2:
-                    # If we got (B, D), add a dimension to make it (B, 1, D)
                     target_features = target_features.unsqueeze(1)
                 elif target_features.dim() > 3:
-                    # If we got (B, C, H, W), flatten spatial dimensions
-                    B, C, H, W = target_features.shape
-                    target_features = target_features.view(B, C, H * W).transpose(
-                        1, 2
-                    )  # (B, H*W, C)
+                    # If we got (N_samples, C, H, W), flatten spatial dimensions
+                    N_s, C_feat, H_feat, W_feat = target_features.shape
+                    target_features = target_features.view(
+                        N_s, C_feat, H_feat * W_feat
+                    ).transpose(1, 2)
 
+                # For CREPA, we generally want global frame representations (or at least aligned structure)
+                # Standard REPA usually pools if shapes don't match.
+                # We'll handle pooling in the loop.
                 target_features_list.append(target_features)
 
         # Compute loss for each alignment layer and encoder combination
@@ -353,41 +426,181 @@ class EnhancedRepaHelper(nn.Module):
             for encoder_idx, (projected_features, target_features) in enumerate(
                 zip(projected_features_list, target_features_list)
             ):
-                # Ensure both tensors have compatible shapes
-                if projected_features.shape != target_features.shape:
-                    # Match shapes by taking mean over spatial dimensions if needed
-                    if projected_features.dim() == 3 and target_features.dim() == 3:
-                        if projected_features.shape[1] != target_features.shape[1]:
-                            projected_features = projected_features.mean(dim=1)
-                            target_features = target_features.mean(dim=1)
-                    elif projected_features.dim() == 2 and target_features.dim() == 3:
-                        target_features = target_features.mean(dim=1)
-                    elif projected_features.dim() == 3 and target_features.dim() == 2:
-                        projected_features = projected_features.mean(dim=1)
+                # Handle CREPA reshaping if needed
+                if is_video and use_crepa:
+                    # diffusion_features / projected_features are likely (B, SeqLen, D)
+                    # We need to reshape to (B, F, TokensPerFrame, D) or (B*F, TokensPerFrame, D)
+                    # We assume SeqLen is divisible by F
 
-                # Calculate similarity loss
+                    # projected_features: (B, SeqLen, D_proj)
+                    # target_features: (B*F, N_enc_tokens, D_enc)
+
+                    # First, check if we need to pool target features (common in REPA)
+                    # If shapes mismatch, we usually global pool.
+
+                    # Reshape projected to match target batch-wise
+                    # (B, SeqLen, D) -> (B, F, Tokens, D) -> (B*F, Tokens, D)
+                    if (
+                        projected_features.shape[0] == B
+                        and projected_features.dim() == 3
+                    ):
+                        seq_len = projected_features.shape[1]
+                        if seq_len % F_frames != 0:
+                            # Fallback: cannot align frames, treat as one blob (might fail)
+                            pass
+                        else:
+                            tokens_per_frame = seq_len // F_frames
+                            projected_features = projected_features.view(
+                                B, F_frames, tokens_per_frame, -1
+                            )
+                            projected_features = projected_features.view(
+                                B * F_frames, tokens_per_frame, -1
+                            )
+
+                # Official REPA computes per-patch similarity, then averages.
+                # projected: (N_samples, N_proj_tokens, D)
+                # target: (N_samples, N_enc_tokens, D)
+                # If token counts differ, we can either:
+                # 1. Spatially interpolate to match (preserves spatial alignment)
+                # 2. Pool to (N_samples, D) (fallback)
+
                 similarity_fn = getattr(self.args, "repa_similarity_fn", "cosine")
 
                 if similarity_fn == "cosine":
-                    # Ensure both tensors are 2D for cosine similarity
-                    if projected_features.dim() > 2:
-                        projected_features = projected_features.mean(dim=1)
-                    if target_features.dim() > 2:
-                        target_features = target_features.mean(dim=1)
+                    # Check if shapes match
+                    shapes_match = (
+                        projected_features.shape == target_features.shape
+                        and projected_features.dim() == target_features.dim()
+                    )
 
-                    # Normalize both tensors for cosine similarity
-                    projected_features = F.normalize(projected_features, dim=-1)
-                    target_features = F.normalize(target_features, dim=-1)
+                    if (
+                        not shapes_match
+                        and projected_features.dim() == 3
+                        and target_features.dim() == 3
+                    ):
+                        # Token counts differ - try spatial interpolation if enabled
+                        if self.spatial_align:
+                            # Interpolate to the smaller token count (usually encoder's)
+                            proj_tokens = projected_features.shape[1]
+                            tgt_tokens = target_features.shape[1]
 
-                    # Cosine similarity: dot product of normalized vectors
-                    similarity = (projected_features * target_features).sum(dim=-1)
-                    encoder_loss = (
-                        -similarity.mean()
-                    )  # Negative because we want to maximize similarity
+                            if proj_tokens != tgt_tokens:
+                                # Interpolate the larger one to match the smaller
+                                if proj_tokens > tgt_tokens:
+                                    projected_features = interpolate_features_spatial(
+                                        projected_features, tgt_tokens
+                                    )
+                                else:
+                                    target_features = interpolate_features_spatial(
+                                        target_features, proj_tokens
+                                    )
+                            shapes_match = True  # Now they match
+
+                    if not shapes_match:
+                        # Fallback: Pool to (N_samples, D)
+                        if projected_features.dim() == 3:
+                            projected_features = projected_features.mean(dim=1)
+                        if target_features.dim() == 3:
+                            target_features = target_features.mean(dim=1)
+
+                        projected_norm = F.normalize(projected_features, dim=-1)
+                        target_norm = F.normalize(target_features, dim=-1)
+
+                        if use_crepa and is_video:
+                            # CREPA with pooled features: (B*F, D) -> (B, F, D)
+                            h_f = projected_norm.view(B, F_frames, -1)
+                            y_f = target_norm.view(B, F_frames, -1)
+
+                            # Self-frame similarity
+                            self_sim = (h_f * y_f).sum(dim=-1)  # (B, F)
+
+                            # Neighbor similarities
+                            neighbor_sim = torch.zeros_like(self_sim)
+                            d = self.crepa_adjacency
+                            tau = self.crepa_temperature
+                            weight = math.exp(-d / tau)
+
+                            if d < F_frames:
+                                left_sim = (h_f[:, d:, :] * y_f[:, :-d, :]).sum(dim=-1)
+                                neighbor_sim[:, d:] += weight * left_sim
+                                right_sim = (h_f[:, :-d, :] * y_f[:, d:, :]).sum(dim=-1)
+                                neighbor_sim[:, :-d] += weight * right_sim
+
+                            total_sim = self_sim + neighbor_sim
+                            if self.crepa_normalize_by_frames:
+                                # Normalize by frames for consistent scale across video lengths
+                                encoder_loss = -total_sim.mean()
+                            else:
+                                # Sum over frames (stronger signal for longer videos)
+                                encoder_loss = -total_sim.sum(dim=1).mean()
+                        else:
+                            # Standard REPA (pooled)
+                            similarity = (projected_norm * target_norm).sum(dim=-1)
+                            encoder_loss = -similarity.mean()
+                    else:
+                        # Official REPA: per-patch similarity (no pooling needed)
+                        # Normalize per-patch: (N_samples, N_patches, D)
+                        projected_norm = F.normalize(projected_features, dim=-1)
+                        target_norm = F.normalize(target_features, dim=-1)
+
+                        # Per-patch cosine similarity: (N_samples, N_patches)
+                        patch_sim = (projected_norm * target_norm).sum(dim=-1)
+
+                        if use_crepa and is_video:
+                            # CREPA: Cross-frame Representation Alignment (Eq. 6)
+                            # L = -E[ Σ_f (sim(ȳ_f, h_f) + Σ_{k∈K} e^{-|k-f|/τ} · sim(ȳ_k, h_f)) ]
+
+                            # Reshape: (B*F, N_patches, D) -> (B, F, N_patches, D)
+                            N_patches = projected_norm.shape[1]
+                            h_f = projected_norm.view(B, F_frames, N_patches, -1)
+                            y_f = target_norm.view(B, F_frames, N_patches, -1)
+
+                            # Self-frame: mean over patches first, then we have (B, F)
+                            self_sim = (h_f * y_f).sum(dim=-1).mean(dim=-1)  # (B, F)
+
+                            # Neighbor similarities
+                            neighbor_sim = torch.zeros_like(self_sim)
+                            d = self.crepa_adjacency
+                            tau = self.crepa_temperature
+                            weight = math.exp(-d / tau)
+
+                            if d < F_frames:
+                                # Left neighbor
+                                left_sim = (
+                                    (h_f[:, d:, :, :] * y_f[:, :-d, :, :])
+                                    .sum(dim=-1)
+                                    .mean(dim=-1)
+                                )
+                                neighbor_sim[:, d:] += weight * left_sim
+                                # Right neighbor
+                                right_sim = (
+                                    (h_f[:, :-d, :, :] * y_f[:, d:, :, :])
+                                    .sum(dim=-1)
+                                    .mean(dim=-1)
+                                )
+                                neighbor_sim[:, :-d] += weight * right_sim
+
+                            total_sim = self_sim + neighbor_sim
+                            if self.crepa_normalize_by_frames:
+                                # Normalize by frames for consistent scale across video lengths
+                                encoder_loss = -total_sim.mean()
+                            else:
+                                # Sum over frames (stronger signal for longer videos)
+                                encoder_loss = -total_sim.sum(dim=1).mean()
+                        else:
+                            # Standard REPA: mean over patches, then mean over samples
+                            # This matches official: mean_flat(-(z_j * z_tilde_j).sum(dim=-1))
+                            encoder_loss = -patch_sim.mean()
 
                 elif similarity_fn == "mse":
-                    # Mean squared error between projected and target features
+                    # Mean squared error
                     encoder_loss = F.mse_loss(projected_features, target_features)
+                    # Note: CREPA isn't typically defined with MSE in the paper, but we could extrapolate.
+                    # For now, ignoring CREPA for MSE to stay safe, or implement if requested.
+                    if use_crepa:
+                        logger.warning_once(
+                            "CREPA is currently only implemented for cosine similarity."
+                        )
 
                 else:
                     raise NotImplementedError(
@@ -466,7 +679,9 @@ class EnhancedRepaHelper(nn.Module):
                                 target_features = target_features[key]
                                 break
                         else:
-                            target_features = target_features[list(target_features.keys())[0]]
+                            target_features = target_features[
+                                list(target_features.keys())[0]
+                            ]
 
                 # Ensure we have the right shape: (B, N, D) where N is number of patches/tokens, D is feature dim
                 if target_features.dim() == 2:
@@ -482,9 +697,15 @@ class EnhancedRepaHelper(nn.Module):
                 target_features_list.append(target_features)
 
                 # Log encoder-specific metrics
-                metrics[f"repa/encoder_{encoder_type}/feature_norm"] = torch.norm(target_features).mean()
-                metrics[f"repa/encoder_{encoder_type}/feature_mean"] = target_features.mean()
-                metrics[f"repa/encoder_{encoder_type}/feature_std"] = target_features.std()
+                metrics[f"repa/encoder_{encoder_type}/feature_norm"] = torch.norm(
+                    target_features
+                ).mean()
+                metrics[f"repa/encoder_{encoder_type}/feature_mean"] = (
+                    target_features.mean()
+                )
+                metrics[f"repa/encoder_{encoder_type}/feature_std"] = (
+                    target_features.std()
+                )
 
         # Compute loss for each alignment layer and encoder combination
         num_valid_layers = sum(1 for feat in self.captured_features if feat is not None)
@@ -539,20 +760,36 @@ class EnhancedRepaHelper(nn.Module):
                     )  # Negative because we want to maximize similarity
 
                     # Log detailed similarity metrics
-                    metrics[f"repa/layer_{self.alignment_depths[layer_idx]}/encoder_{encoder_type}/similarity_mean"] = similarity.mean()
-                    metrics[f"repa/layer_{self.alignment_depths[layer_idx]}/encoder_{encoder_type}/similarity_std"] = similarity.std()
-                    metrics[f"repa/layer_{self.alignment_depths[layer_idx]}/encoder_{encoder_type}/similarity_min"] = similarity.min()
-                    metrics[f"repa/layer_{self.alignment_depths[layer_idx]}/encoder_{encoder_type}/similarity_max"] = similarity.max()
+                    metrics[
+                        f"repa/layer_{self.alignment_depths[layer_idx]}/encoder_{encoder_type}/similarity_mean"
+                    ] = similarity.mean()
+                    metrics[
+                        f"repa/layer_{self.alignment_depths[layer_idx]}/encoder_{encoder_type}/similarity_std"
+                    ] = similarity.std()
+                    metrics[
+                        f"repa/layer_{self.alignment_depths[layer_idx]}/encoder_{encoder_type}/similarity_min"
+                    ] = similarity.min()
+                    metrics[
+                        f"repa/layer_{self.alignment_depths[layer_idx]}/encoder_{encoder_type}/similarity_max"
+                    ] = similarity.max()
 
                 elif similarity_fn == "mse":
                     # Mean squared error between projected and target features
                     encoder_loss = F.mse_loss(projected_features, target_features)
 
                     # Log MSE metrics
-                    mse_per_sample = F.mse_loss(projected_features, target_features, reduction='none')
-                    mse_per_sample = mse_per_sample.mean(dim=tuple(range(1, mse_per_sample.dim())))
-                    metrics[f"repa/layer_{self.alignment_depths[layer_idx]}/encoder_{encoder_type}/mse_mean"] = mse_per_sample.mean()
-                    metrics[f"repa/layer_{self.alignment_depths[layer_idx]}/encoder_{encoder_type}/mse_std"] = mse_per_sample.std()
+                    mse_per_sample = F.mse_loss(
+                        projected_features, target_features, reduction="none"
+                    )
+                    mse_per_sample = mse_per_sample.mean(
+                        dim=tuple(range(1, mse_per_sample.dim()))
+                    )
+                    metrics[
+                        f"repa/layer_{self.alignment_depths[layer_idx]}/encoder_{encoder_type}/mse_mean"
+                    ] = mse_per_sample.mean()
+                    metrics[
+                        f"repa/layer_{self.alignment_depths[layer_idx]}/encoder_{encoder_type}/mse_std"
+                    ] = mse_per_sample.std()
 
                 else:
                     raise NotImplementedError(
@@ -563,7 +800,9 @@ class EnhancedRepaHelper(nn.Module):
                 encoder_losses.append(encoder_loss)
 
                 # Log per-encoder loss for this layer
-                metrics[f"repa/layer_{self.alignment_depths[layer_idx]}/encoder_{encoder_type}/loss"] = encoder_loss
+                metrics[
+                    f"repa/layer_{self.alignment_depths[layer_idx]}/encoder_{encoder_type}/loss"
+                ] = encoder_loss
 
             # Average over encoders for this layer
             layer_loss = layer_loss / len(self.encoders)
@@ -572,8 +811,12 @@ class EnhancedRepaHelper(nn.Module):
 
             # Log layer-specific metrics
             metrics[f"repa/layer_{self.alignment_depths[layer_idx]}/loss"] = layer_loss
-            metrics[f"repa/layer_{self.alignment_depths[layer_idx]}/encoder_loss_mean"] = torch.stack(encoder_losses).mean()
-            metrics[f"repa/layer_{self.alignment_depths[layer_idx]}/encoder_loss_std"] = torch.stack(encoder_losses).std()
+            metrics[
+                f"repa/layer_{self.alignment_depths[layer_idx]}/encoder_loss_mean"
+            ] = torch.stack(encoder_losses).mean()
+            metrics[
+                f"repa/layer_{self.alignment_depths[layer_idx]}/encoder_loss_std"
+            ] = torch.stack(encoder_losses).std()
 
         # Average over alignment layers
         if num_valid_layers > 0:
@@ -589,8 +832,12 @@ class EnhancedRepaHelper(nn.Module):
         # Add summary metrics
         metrics["repa/total_loss"] = weighted_total_loss
         metrics["repa/unweighted_loss"] = total_loss
-        metrics["repa/num_valid_layers"] = torch.tensor(float(num_valid_layers), device=clean_pixels.device)
-        metrics["repa/loss_lambda"] = torch.tensor(loss_lambda, device=clean_pixels.device)
+        metrics["repa/num_valid_layers"] = torch.tensor(
+            float(num_valid_layers), device=clean_pixels.device
+        )
+        metrics["repa/loss_lambda"] = torch.tensor(
+            loss_lambda, device=clean_pixels.device
+        )
 
         if layer_losses:
             metrics["repa/layer_loss_mean"] = torch.stack(layer_losses).mean()

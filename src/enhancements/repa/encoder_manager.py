@@ -8,7 +8,6 @@ import timm
 import numpy as np
 from typing import List, Tuple, Dict, Any, Optional, Union
 from torchvision import transforms
-from torchvision.datasets.utils import download_url
 import logging
 from common.logger import get_logger
 
@@ -21,6 +20,50 @@ IMAGENET_DEFAULT_STD = (0.229, 0.224, 0.225)
 # CLIP default normalization
 CLIP_DEFAULT_MEAN = (0.48145466, 0.4578275, 0.40821073)
 CLIP_DEFAULT_STD = (0.26862954, 0.26130258, 0.27577711)
+
+# Model download URLs
+MODEL_URLS = {
+    # MoCo v3 ViT models (from https://github.com/facebookresearch/moco-v3)
+    "mocov3_vits": "https://dl.fbaipublicfiles.com/moco-v3/vit-s-300ep/vit-s-300ep.pth.tar",
+    "mocov3_vitb": "https://dl.fbaipublicfiles.com/moco-v3/vit-b-300ep/vit-b-300ep.pth.tar",
+    # DINOv1 models (from https://github.com/facebookresearch/dino)
+    "dinov1_vits16": "https://dl.fbaipublicfiles.com/dino/dino_deitsmall16_pretrain/dino_deitsmall16_pretrain.pth",
+    "dinov1_vits8": "https://dl.fbaipublicfiles.com/dino/dino_deitsmall8_pretrain/dino_deitsmall8_pretrain.pth",
+    "dinov1_vitb16": "https://dl.fbaipublicfiles.com/dino/dino_vitbase16_pretrain/dino_vitbase16_pretrain.pth",
+    "dinov1_vitb8": "https://dl.fbaipublicfiles.com/dino/dino_vitbase8_pretrain/dino_vitbase8_pretrain.pth",
+    # MAE models (from https://github.com/facebookresearch/mae)
+    "mae_vitb": "https://dl.fbaipublicfiles.com/mae/pretrain/mae_pretrain_vit_base.pth",
+    "mae_vitl": "https://dl.fbaipublicfiles.com/mae/pretrain/mae_pretrain_vit_large.pth",
+    "mae_vith": "https://dl.fbaipublicfiles.com/mae/pretrain/mae_pretrain_vit_huge.pth",
+    # I-JEPA models (from https://github.com/facebookresearch/ijepa)
+    "ijepa_vith14": "https://dl.fbaipublicfiles.com/ijepa/IN1K-vit.h.14-300e.pth.tar",
+    "ijepa_vith16_448": "https://dl.fbaipublicfiles.com/ijepa/IN1K-vit.h.16-448px-300e.pth.tar",
+    "ijepa_vith14_in22k": "https://dl.fbaipublicfiles.com/ijepa/IN22K-vit.h.14-900e.pth.tar",
+    "ijepa_vitg16_in22k": "https://dl.fbaipublicfiles.com/ijepa/IN22K-vit.g.16-600e.pth.tar",
+}
+
+# Mapping from config names to download keys
+CONFIG_TO_URL_KEY = {
+    # MoCo v3
+    ("mocov3", "s"): "mocov3_vits",
+    ("mocov3", "b"): "mocov3_vitb",
+    # DINOv1
+    ("dinov1", "s"): "dinov1_vits16",
+    ("dinov1", "s16"): "dinov1_vits16",
+    ("dinov1", "s8"): "dinov1_vits8",
+    ("dinov1", "b"): "dinov1_vitb16",
+    ("dinov1", "b16"): "dinov1_vitb16",
+    ("dinov1", "b8"): "dinov1_vitb8",
+    # MAE
+    ("mae", "b"): "mae_vitb",
+    ("mae", "l"): "mae_vitl",
+    ("mae", "h"): "mae_vith",
+    # I-JEPA
+    ("jepa", "h"): "ijepa_vith14",
+    ("jepa", "h14"): "ijepa_vith14",
+    ("jepa", "h16"): "ijepa_vith16_448",
+    ("jepa", "g"): "ijepa_vitg16_in22k",
+}
 
 
 def _no_grad_trunc_normal_(tensor, mean, std, a, b):
@@ -50,6 +93,67 @@ def _no_grad_trunc_normal_(tensor, mean, std, a, b):
 def trunc_normal_(tensor, mean=0.0, std=1.0, a=-2.0, b=2.0):
     """Truncated normal initialization."""
     return _no_grad_trunc_normal_(tensor, mean, std, a, b)
+
+
+def download_model_if_needed(
+    encoder_type: str, model_config: str, cache_dir: str
+) -> str:
+    """
+    Download model checkpoint if not already present.
+
+    Args:
+        encoder_type: Type of encoder (e.g., 'mocov3', 'dinov1', 'mae', 'jepa')
+        model_config: Model configuration (e.g., 's', 'b', 'l', 'h')
+        cache_dir: Directory to save checkpoints
+
+    Returns:
+        Path to the checkpoint file
+    """
+    os.makedirs(cache_dir, exist_ok=True)
+
+    # Determine the URL key
+    url_key = CONFIG_TO_URL_KEY.get((encoder_type, model_config))
+    if url_key is None:
+        # Try without the encoder type prefix for backward compatibility
+        logger.warning(
+            f"No download URL found for {encoder_type}-{model_config}. "
+            "Please download the checkpoint manually."
+        )
+        return ""
+
+    url = MODEL_URLS.get(url_key)
+    if url is None:
+        logger.warning(f"No URL found for key {url_key}")
+        return ""
+
+    # Determine local filename
+    if encoder_type == "mocov3":
+        local_filename = f"mocov3_vit{model_config}.pth"
+    elif encoder_type == "dinov1":
+        local_filename = f"dinov1_vit{model_config}.pth"
+    elif encoder_type == "mae":
+        local_filename = f"mae_vit{model_config}.pth"
+    elif encoder_type == "jepa":
+        local_filename = f"ijepa_vit{model_config}.pth"
+    else:
+        local_filename = f"{encoder_type}_{model_config}.pth"
+
+    local_path = os.path.join(cache_dir, local_filename)
+
+    # Download if not exists
+    if not os.path.exists(local_path):
+        logger.info(f"Downloading {encoder_type} model from {url}...")
+        try:
+            torch.hub.download_url_to_file(url, local_path, progress=True)
+            logger.info(f"Successfully downloaded to {local_path}")
+        except Exception as e:
+            logger.error(f"Failed to download model: {e}")
+            logger.info(f"Please manually download from {url} and save to {local_path}")
+            return ""
+    else:
+        logger.info(f"Using cached checkpoint: {local_path}")
+
+    return local_path
 
 
 def fix_mocov3_state_dict(
@@ -280,10 +384,13 @@ class EncoderManager:
         else:
             raise ValueError(f"Unsupported MoCo v3 config: {model_config}")
 
-        # Load checkpoint
-        ckpt_path = os.path.join(self.cache_dir, f"mocov3_vit{model_config}.pth")
-        if not os.path.exists(ckpt_path):
-            raise FileNotFoundError(f"MoCo v3 checkpoint not found: {ckpt_path}")
+        # Load checkpoint (auto-download if needed)
+        ckpt_path = download_model_if_needed("mocov3", model_config, self.cache_dir)
+        if not ckpt_path or not os.path.exists(ckpt_path):
+            raise FileNotFoundError(
+                f"MoCo v3 checkpoint not found. Please download manually to: "
+                f"{os.path.join(self.cache_dir, f'mocov3_vit{model_config}.pth')}"
+            )
 
         ckpt = torch.load(ckpt_path, map_location="cpu")
         state_dict = fix_mocov3_state_dict(ckpt["state_dict"])
@@ -337,10 +444,13 @@ class EncoderManager:
 
         encoder = vit_base()
 
-        # Load checkpoint
-        ckpt_path = os.path.join(self.cache_dir, f"dinov1_vit{model_config}.pth")
-        if not os.path.exists(ckpt_path):
-            raise FileNotFoundError(f"DINOv1 checkpoint not found: {ckpt_path}")
+        # Load checkpoint (auto-download if needed)
+        ckpt_path = download_model_if_needed("dinov1", model_config, self.cache_dir)
+        if not ckpt_path or not os.path.exists(ckpt_path):
+            raise FileNotFoundError(
+                f"DINOv1 checkpoint not found. Please download manually to: "
+                f"{os.path.join(self.cache_dir, f'dinov1_vit{model_config}.pth')}"
+            )
 
         ckpt = torch.load(ckpt_path, map_location="cpu")
 
@@ -393,10 +503,13 @@ class EncoderManager:
         kwargs = dict(img_size=256)
         encoder = vit_large_patch16(**kwargs)
 
-        # Load checkpoint
-        ckpt_path = os.path.join(self.cache_dir, f"mae_vit{model_config}.pth")
-        if not os.path.exists(ckpt_path):
-            raise FileNotFoundError(f"MAE checkpoint not found: {ckpt_path}")
+        # Load checkpoint (auto-download if needed)
+        ckpt_path = download_model_if_needed("mae", model_config, self.cache_dir)
+        if not ckpt_path or not os.path.exists(ckpt_path):
+            raise FileNotFoundError(
+                f"MAE checkpoint not found. Please download manually to: "
+                f"{os.path.join(self.cache_dir, f'mae_vit{model_config}.pth')}"
+            )
 
         with open(ckpt_path, "rb") as f:
             state_dict = torch.load(f, map_location="cpu")
@@ -433,10 +546,13 @@ class EncoderManager:
         kwargs = dict(img_size=[224, 224], patch_size=14)
         encoder = vit_huge(**kwargs)
 
-        # Load checkpoint
-        ckpt_path = os.path.join(self.cache_dir, f"ijepa_vit{model_config}.pth")
-        if not os.path.exists(ckpt_path):
-            raise FileNotFoundError(f"I-JEPA checkpoint not found: {ckpt_path}")
+        # Load checkpoint (auto-download if needed)
+        ckpt_path = download_model_if_needed("jepa", model_config, self.cache_dir)
+        if not ckpt_path or not os.path.exists(ckpt_path):
+            raise FileNotFoundError(
+                f"I-JEPA checkpoint not found. Please download manually to: "
+                f"{os.path.join(self.cache_dir, f'ijepa_vit{model_config}.pth')}"
+            )
 
         with open(ckpt_path, "rb") as f:
             state_dict = torch.load(f, map_location=self.device)

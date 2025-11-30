@@ -269,9 +269,7 @@ def create_args_from_config(
     args.prior_loss_weight = config.get("prior_loss_weight", 1.0)
 
     # DOP
-    args.diff_output_preservation = bool(
-        config.get("diff_output_preservation", False)
-    )
+    args.diff_output_preservation = bool(config.get("diff_output_preservation", False))
     args.diff_output_preservation_trigger_word = config.get(
         "diff_output_preservation_trigger_word"
     )
@@ -1195,6 +1193,14 @@ def create_args_from_config(
     args.repa_input_resolution = config.get("repa_input_resolution", 256)
     args.repa_ensemble_mode = config.get("repa_ensemble_mode", "individual")
     args.repa_shared_projection = config.get("repa_shared_projection", False)
+    args.repa_spatial_align = config.get("repa_spatial_align", True)
+
+    # CREPA (Cross-frame Representation Alignment) settings
+    # Extends REPA with temporal neighbor alignment for better video consistency
+    args.crepa_enabled = config.get("crepa_enabled", False)
+    args.crepa_adjacency = int(config.get("crepa_adjacency", 1))
+    args.crepa_temperature = float(config.get("crepa_temperature", 1.0))
+    args.crepa_normalize_by_frames = config.get("crepa_normalize_by_frames", True)
 
     # SARA (Structural and Adversarial Representation Alignment) settings
     args.sara_enabled = config.get("sara_enabled", False)
