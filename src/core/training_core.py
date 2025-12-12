@@ -694,6 +694,7 @@ class TrainingCore:
         val_epoch_step_sync: Optional[Tuple[Any, Any]] = None,
         repa_helper: Optional[Any] = None,
         sara_helper: Optional[Any] = None,
+        layer_sync_helper: Optional[Any] = None,
         controlnet: Optional[Any] = None,
         dual_model_manager: Optional[Any] = None,
     ) -> Tuple[int, Any]:
@@ -1344,6 +1345,7 @@ class TrainingCore:
                                     repa_helper if sara_helper is None else None
                                 ),
                                 sara_helper=sara_helper,
+                                layer_sync_helper=layer_sync_helper,
                                 raft=getattr(self, "raft", None),
                                 warp_fn=getattr(self, "warp", None),
                                 adaptive_manager=self.adaptive_manager,

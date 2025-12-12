@@ -55,6 +55,7 @@ def get_default_metric_descriptions() -> Dict[str, str]:
         "train/dop_loss": "Differential Output Preservation loss; maintains base model behavior (lower is better).",
         "train/dispersive_loss": "InfoNCE-style dispersive loss for representation diversity (lower is better).",
         "train/optical_flow_loss": "Temporal consistency loss using optical flow (lower is better).",
+        "train/layer_sync_loss": "LayerSync self-alignment loss between transformer blocks (lower is better).",
         "train/repa_loss": "REPA alignment loss for visual quality (lower is better).",
         # Validation metrics - velocity prediction
         "val/velocity_loss_avg": "Average velocity loss across validation timesteps (lower is better).",

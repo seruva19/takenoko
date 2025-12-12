@@ -135,6 +135,8 @@ def collect_and_log_training_metrics(
         )
     if loss_components.optical_flow_loss is not None:
         logs["loss/optical_flow"] = float(loss_components.optical_flow_loss.item())
+    if getattr(loss_components, "layer_sync_loss", None) is not None:
+        logs["loss/layer_sync"] = float(loss_components.layer_sync_loss.item())
     if loss_components.repa_loss is not None:
         logs["loss/repa"] = float(loss_components.repa_loss.item())
 

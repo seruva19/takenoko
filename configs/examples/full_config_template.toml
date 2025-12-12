@@ -1080,6 +1080,36 @@ repa_shared_projection = false
 repa_spatial_align = true
 
 # =============================================================================
+# ⚠️ LAYER SYNC (SELF ALIGNMENT) SETTINGS
+# =============================================================================
+
+# Enable LayerSync self-alignment regularizer.
+enable_layer_sync = false
+
+# Weight applied to the LayerSync projection loss.
+layer_sync_weight = 0.2
+
+# Primary block pair for alignment (1-indexed, source < target).
+# Recommended: early semantic block guides a deeper one.
+layer_sync_source_block = 8
+
+# Target block for alignment (1-indexed, source < target).
+layer_sync_target_block = 16
+
+# Optional list of additional (source, target) pairs, each 1-indexed with source < target.
+# When provided, pairs are summed with equal weight. Example:
+# layer_sync_pairs = [[4, 8], [12, 20]]
+
+# Optional per-pair weights matching layer_sync_pairs. If omitted, all pairs weight=1.0.
+# layer_sync_pair_weights = [0.5, 1.0]
+
+# Detach guidance activations so gradients flow only through the source block.
+layer_sync_detach_guidance = true
+
+# Feature normalization mode for projection. "cosine" uses unit-normalized embeddings before dot product.
+layer_sync_normalization = "cosine"
+
+# =============================================================================
 # ⚠️ CREPA (CROSS-FRAME REPRESENTATIONAL ALIGNMENT) SETTINGS
 # =============================================================================
 

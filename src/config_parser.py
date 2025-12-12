@@ -1189,6 +1189,11 @@ def create_args_from_config(
     args.repa_loss_lambda = config.get("repa_loss_lambda", 0.5)
     args.repa_similarity_fn = config.get("repa_similarity_fn", "cosine")
 
+    # LayerSync (self-alignment) settings
+    from enhancements.layer_sync.config import parse_layer_sync_config
+
+    parse_layer_sync_config(config, args, logger)
+
     # Enhanced REPA settings (now the only REPA implementation)
     args.repa_input_resolution = config.get("repa_input_resolution", 256)
     args.repa_ensemble_mode = config.get("repa_ensemble_mode", "individual")

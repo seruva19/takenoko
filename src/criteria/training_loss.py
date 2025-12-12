@@ -76,6 +76,8 @@ class LossComponents:
         The dispersive (InfoNCE-style) loss component, if enabled.
     optical_flow_loss: Optional[torch.Tensor]
         The optical flow consistency loss, if enabled.
+    layer_sync_loss: Optional[torch.Tensor]
+        The LayerSync self-alignment projection loss, if enabled.
     repa_loss: Optional[torch.Tensor]
         The REPA alignment loss, if enabled.
     sara_loss: Optional[torch.Tensor]
@@ -92,6 +94,7 @@ class LossComponents:
     blank_prompt_loss: Optional[torch.Tensor] = None
     dispersive_loss: Optional[torch.Tensor] = None
     optical_flow_loss: Optional[torch.Tensor] = None
+    layer_sync_loss: Optional[torch.Tensor] = None
     repa_loss: Optional[torch.Tensor] = None
     sara_loss: Optional[torch.Tensor] = None
     ortho_reg_p: Optional[torch.Tensor] = None
@@ -369,6 +372,7 @@ class TrainingLossComputer:
         control_signal_processor: Optional[Any] = None,
         repa_helper: Optional[Any] = None,
         sara_helper: Optional[Any] = None,
+        layer_sync_helper: Optional[Any] = None,
         raft: Optional[Any] = None,
         warp_fn: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
         adaptive_manager: Optional[Any] = None,
@@ -832,6 +836,22 @@ class TrainingLossComputer:
             except Exception as e:
                 logger.warning(f"REPA loss computation failed: {e}")
 
+        # ---- Optional LayerSync Loss ----
+        layer_sync_loss_value: Optional[torch.Tensor] = None
+        layer_sync_weight = float(getattr(args, "layer_sync_weight", 0.0))
+        if (
+            layer_sync_helper is not None
+            and getattr(args, "enable_layer_sync", False)
+            and layer_sync_weight > 0.0
+        ):
+            try:
+                ls_val = layer_sync_helper.compute_loss()
+                if ls_val is not None:
+                    loss = loss + layer_sync_weight * ls_val
+                    layer_sync_loss_value = ls_val.detach()
+            except Exception as e:
+                logger.warning(f"LayerSync loss computation failed: {e}")
+
         # ---- Optional Optical Flow Loss (RAFT) ----
         optical_flow_loss_value: Optional[torch.Tensor] = None
         if (
@@ -1099,6 +1119,7 @@ class TrainingLossComputer:
             blank_prompt_loss=bpp_loss_value,
             dispersive_loss=dispersive_loss_value,
             optical_flow_loss=optical_flow_loss_value,
+            layer_sync_loss=layer_sync_loss_value,
             repa_loss=repa_loss_value,
             sara_loss=sara_loss_value,
             ortho_reg_p=ortho_p_val,

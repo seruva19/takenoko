@@ -1226,6 +1226,7 @@ class WanNetworkTrainer:
             # ========== SARA / REPA Helper Setup ==========
             sara_helper = None
             repa_helper = None
+            layer_sync_helper = None
             if getattr(args, "sara_enabled", False):
                 from enhancements.sara.sara_helper import create_sara_helper
 
@@ -1243,6 +1244,17 @@ class WanNetworkTrainer:
                 repa_helper = EnhancedRepaHelper(transformer, args)
                 repa_helper.setup_hooks()
                 repa_helper = accelerator.prepare(repa_helper)
+            if getattr(args, "enable_layer_sync", False):
+                try:
+                    from enhancements.layer_sync.helper import LayerSyncHelper
+
+                    logger.info("LayerSync is enabled. Setting up the helper module.")
+                    layer_sync_helper = LayerSyncHelper(transformer, args)
+                    layer_sync_helper.setup_hooks()
+                    layer_sync_helper = accelerator.prepare(layer_sync_helper)
+                except Exception as exc:
+                    logger.warning(f"LayerSync setup failed: {exc}")
+                    layer_sync_helper = None
 
             # Run the main training loop using TrainingCore
             # Attach a self-correction manager instance if enabled so the core can call it
@@ -1303,6 +1315,7 @@ class WanNetworkTrainer:
                 val_epoch_step_sync=val_epoch_step_sync,
                 repa_helper=repa_helper if sara_helper is None else None,
                 sara_helper=sara_helper,
+                layer_sync_helper=layer_sync_helper,
                 dual_model_manager=dual_model_manager,
             )
 
@@ -1310,6 +1323,8 @@ class WanNetworkTrainer:
             sara_helper.remove_hooks()
         if "repa_helper" in locals() and repa_helper is not None:
             repa_helper.remove_hooks()
+        if "layer_sync_helper" in locals() and layer_sync_helper is not None:
+            layer_sync_helper.remove_hooks()
 
         metadata["takenoko_training_finished_at"] = str(time.time())
 
