@@ -237,8 +237,13 @@ rope_use_float32 = false
 # - "TemporalAdamW": AdamW with temporal gradient smoothing for video training
 # - "Prodigy": Adaptive learning rate optimizer
 # - "AdaMuon": Muon-style orthogonal optimizer with element-wise adaptivity for ≥2D params
+# - "IVON": Bayesian optimizer that samples parameters each step (requires ivon_ess)
 # - "SOAP", "SophiaG", "Scion", etc. (see optimizer_manager.py)
 optimizer_type = "adamw8bit"
+
+# IVON effective sample size (ESS). Only used when optimizer_type = "ivon".
+# If unset, Takenoko will auto-set it from the training dataset size.
+# ivon_ess = 100000
 
 # Additional arguments for optimizer (like "weight_decay=0.01 betas=0.9,0.999 ...")
 # Format: key=value pairs as strings. Values are parsed as Python literals.

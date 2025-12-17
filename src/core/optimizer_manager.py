@@ -223,8 +223,47 @@ class OptimizerManager:
             optimizer_class = torch.optim.AdamW
             optimizer = optimizer_class(trainable_params, lr=lr, **optimizer_kwargs)
 
+        elif optimizer_type == "IVON".lower():
+            logger.info(f"using IVON optimizer | {optimizer_kwargs}")
+
+            from vendor.ivon.ivon import IVON
+
+            # Allow users to pass standard Adam-style betas=(b1,b2)
+            if (
+                "betas" in optimizer_kwargs
+                and "beta1" not in optimizer_kwargs
+                and "beta2" not in optimizer_kwargs
+            ):
+                betas_value = optimizer_kwargs.pop("betas")
+                if isinstance(betas_value, list):
+                    betas_value = tuple(betas_value)
+                if not isinstance(betas_value, (tuple, list)) or len(betas_value) != 2:
+                    raise ValueError(
+                        "IVON betas must be a length-2 sequence when provided as betas=(beta1,beta2). "
+                        f"Received: {betas_value}"
+                    )
+                optimizer_kwargs["beta1"], optimizer_kwargs["beta2"] = betas_value
+
+            ess = optimizer_kwargs.pop("ess", None)
+            if ess is None:
+                ess = getattr(args, "ivon_ess", None)
+            if ess is None:
+                raise ValueError(
+                    (
+                        "IVON requires an effective sample size 'ess'. Provide ivon_ess in the TOML "
+                        'or optimizer_args=["ess=..."].'
+                    )
+                )
+
+            optimizer_class = IVON
+            optimizer = optimizer_class(
+                trainable_params,
+                lr=lr,
+                ess=float(ess),
+                **optimizer_kwargs,
+            )
+
         elif optimizer_type == "CAME8Bit".lower():
-            # https://github.com/NVlabs/Sana/commit/dd38c12744ac652b01e9b653412fc76c355798bd
             try:
                 from optimizers.sana_optimizer import CAME8BitWrapper
 

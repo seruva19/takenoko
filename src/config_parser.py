@@ -342,6 +342,7 @@ def create_args_from_config(
     # Optimizer settings
     args.optimizer_type = config.get("optimizer_type", "")
     args.optimizer_args = config.get("optimizer_args", [])
+    args.ivon_ess = config.get("ivon_ess")
     args.learning_rate = config.get("learning_rate", 5e-5)
     args.max_grad_norm = config.get("max_grad_norm", 1.0)
 
@@ -605,7 +606,9 @@ def create_args_from_config(
     if weight_ema_eval_mode not in ("off", "ema", "compare"):
         raise ValueError("weight_ema_eval_mode must be 'off', 'ema', or 'compare'")
     args.weight_ema_eval_mode = weight_ema_eval_mode
-    args.weight_ema_save_separately = bool(config.get("weight_ema_save_separately", False))
+    args.weight_ema_save_separately = bool(
+        config.get("weight_ema_save_separately", False)
+    )
 
     # Loss-vs-timestep scatter logging
     args.log_loss_scatterplot = config.get("log_loss_scatterplot", False)
@@ -1070,9 +1073,7 @@ def create_args_from_config(
     )
     # WanVideo LoRA cross-batch CFM regularizer (disabled by default)
     args.enable_wanvideo_cfm = bool(config.get("enable_wanvideo_cfm", False))
-    args.wanvideo_cfm_weighting = str(
-        config.get("wanvideo_cfm_weighting", "uniform")
-    )
+    args.wanvideo_cfm_weighting = str(config.get("wanvideo_cfm_weighting", "uniform"))
     if args.wanvideo_cfm_weighting not in {"uniform", "linear"}:
         raise ValueError(
             f"wanvideo_cfm_weighting must be 'uniform' or 'linear', got {args.wanvideo_cfm_weighting}"

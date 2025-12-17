@@ -42,6 +42,7 @@ from transition.pipeline import (
 from core.training_inputs import prepare_standard_training_inputs
 from energy_based.eqm_mode.training_helper import EqMTrainingHelper
 
+from optimizers.ivon_integration import ivon_sampled_params
 
 from scheduling.fvdm_manager import create_fvdm_manager
 
@@ -1110,124 +1111,127 @@ class TrainingCore:
                             dit_dtype,
                         )
 
-                    # Start forward pass timing
-                    start_forward_pass_timing()
+                    with ivon_sampled_params(args, optimizer):
+                        # Start forward pass timing
+                        start_forward_pass_timing()
 
-                    # choose active transformer when dual mode is enabled
-                    active_transformer = transformer
-                    if dual_model_manager is not None:
-                        active_transformer = dual_model_manager.active_model
+                        # choose active transformer when dual mode is enabled
+                        active_transformer = transformer
+                        if dual_model_manager is not None:
+                            active_transformer = dual_model_manager.active_model
 
-                    if eqm_enabled:
-                        trigger_event(
-                            "before_forward",
-                            args=args,
-                            accelerator=accelerator,
-                            latents=latents,
-                            batch=batch,
-                            noise=noise,
-                            noisy_model_input=noisy_model_input,
-                            timesteps=timesteps,
-                            network_dtype=network_dtype,
-                            transformer=active_transformer,
-                            weighting=weighting,
-                        )
-
-                        if self.eqm_training_helper is None:
-                            raise RuntimeError(
-                                "EqM training helper was not initialised."
+                        if eqm_enabled:
+                            trigger_event(
+                                "before_forward",
+                                args=args,
+                                accelerator=accelerator,
+                                latents=latents,
+                                batch=batch,
+                                noise=noise,
+                                noisy_model_input=noisy_model_input,
+                                timesteps=timesteps,
+                                network_dtype=network_dtype,
+                                transformer=active_transformer,
+                                weighting=weighting,
                             )
 
-                        eqm_result = self.eqm_training_helper.prepare_forward(
-                            transformer=active_transformer,
-                            latents=latents,
-                            batch=batch,
-                            args=args,
-                            accelerator=accelerator,
-                            network_dtype=network_dtype,
-                            patch_size=self.config.patch_size,
-                            global_step=global_step,
-                        )
-                        end_forward_pass_timing()
+                            if self.eqm_training_helper is None:
+                                raise RuntimeError(
+                                    "EqM training helper was not initialised."
+                                )
 
-                        model_pred = eqm_result.model_pred
-                        target = eqm_result.target
-                        timesteps = eqm_result.timesteps
-                        noise = eqm_result.noise
-                        noisy_model_input = eqm_result.noisy_latents
-                        intermediate_z = eqm_result.intermediate
-                        context_memory_loss = torch.zeros(
-                            (), device=accelerator.device, dtype=network_dtype
-                        )
-                        context_stats = {}
-                        loss_components = eqm_result.loss_components
-                        if eqm_result.metrics and accelerator.is_main_process:
-                            accelerator.log(eqm_result.metrics, step=global_step)
-                        weighting = None
-                        per_source_losses = {}
-                        transition_loss_context = {"transition_training_enabled": False}
-
-                        trigger_event(
-                            "after_forward",
-                            args=args,
-                            accelerator=accelerator,
-                            model_pred=model_pred,
-                            target=target,
-                            intermediate_z=intermediate_z,
-                            latents=latents,
-                            batch=batch,
-                            noise=noise,
-                            noisy_model_input=noisy_model_input,
-                            timesteps=timesteps,
-                            network_dtype=network_dtype,
-                            weighting=weighting,
-                        )
-                    else:
-                        # Trigger before_forward junction event
-                        trigger_event(
-                            "before_forward",
-                            args=args,
-                            accelerator=accelerator,
-                            latents=latents,
-                            batch=batch,
-                            noise=noise,
-                            noisy_model_input=noisy_model_input,
-                            timesteps=timesteps,
-                            network_dtype=network_dtype,
-                            transformer=active_transformer,
-                            weighting=weighting,
-                        )
-
-                        model_result = self.call_dit(
-                            args,
-                            accelerator,
-                            active_transformer,
-                            latents,
-                            batch,
-                            noise,
-                            noisy_model_input,
-                            timesteps,
-                            network_dtype,
-                            control_signal_processor,
-                            controlnet,
-                        )
-
-                        # End forward pass timing
-                        end_forward_pass_timing()
-
-                        # Handle case where control LoRA failed to process
-                        if model_result is None or model_result[0] is None:
-                            logger.warning(
-                                "Skipping batch due to control LoRA processing failure"
+                            eqm_result = self.eqm_training_helper.prepare_forward(
+                                transformer=active_transformer,
+                                latents=latents,
+                                batch=batch,
+                                args=args,
+                                accelerator=accelerator,
+                                network_dtype=network_dtype,
+                                patch_size=self.config.patch_size,
+                                global_step=global_step,
                             )
-                            continue
+                            end_forward_pass_timing()
 
-                        # Unpack model result - handle both 3-tuple and 4-tuple returns
-                        # (4-tuple is returned when rcm_mode=True, includes rcm_result)
-                        if len(model_result) == 4:
-                            model_pred, target, intermediate_z, _ = model_result
+                            model_pred = eqm_result.model_pred
+                            target = eqm_result.target
+                            timesteps = eqm_result.timesteps
+                            noise = eqm_result.noise
+                            noisy_model_input = eqm_result.noisy_latents
+                            intermediate_z = eqm_result.intermediate
+                            context_memory_loss = torch.zeros(
+                                (), device=accelerator.device, dtype=network_dtype
+                            )
+                            context_stats = {}
+                            loss_components = eqm_result.loss_components
+                            if eqm_result.metrics and accelerator.is_main_process:
+                                accelerator.log(eqm_result.metrics, step=global_step)
+                            weighting = None
+                            per_source_losses = {}
+                            transition_loss_context = {
+                                "transition_training_enabled": False
+                            }
+
+                            trigger_event(
+                                "after_forward",
+                                args=args,
+                                accelerator=accelerator,
+                                model_pred=model_pred,
+                                target=target,
+                                intermediate_z=intermediate_z,
+                                latents=latents,
+                                batch=batch,
+                                noise=noise,
+                                noisy_model_input=noisy_model_input,
+                                timesteps=timesteps,
+                                network_dtype=network_dtype,
+                                weighting=weighting,
+                            )
                         else:
-                            model_pred, target, intermediate_z = model_result
+                            # Trigger before_forward junction event
+                            trigger_event(
+                                "before_forward",
+                                args=args,
+                                accelerator=accelerator,
+                                latents=latents,
+                                batch=batch,
+                                noise=noise,
+                                noisy_model_input=noisy_model_input,
+                                timesteps=timesteps,
+                                network_dtype=network_dtype,
+                                transformer=active_transformer,
+                                weighting=weighting,
+                            )
+
+                            model_result = self.call_dit(
+                                args,
+                                accelerator,
+                                active_transformer,
+                                latents,
+                                batch,
+                                noise,
+                                noisy_model_input,
+                                timesteps,
+                                network_dtype,
+                                control_signal_processor,
+                                controlnet,
+                            )
+
+                            # End forward pass timing
+                            end_forward_pass_timing()
+
+                            # Handle case where control LoRA failed to process
+                            if model_result is None or model_result[0] is None:
+                                logger.warning(
+                                    "Skipping batch due to control LoRA processing failure"
+                                )
+                                continue
+
+                            # Unpack model result - handle both 3-tuple and 4-tuple returns
+                            # (4-tuple is returned when rcm_mode=True, includes rcm_result)
+                            if len(model_result) == 4:
+                                model_pred, target, intermediate_z, _ = model_result
+                            else:
+                                model_pred, target, intermediate_z = model_result
 
                         transition_loss_context = {"transition_training_enabled": False}
                         per_sample_transition_loss = None
