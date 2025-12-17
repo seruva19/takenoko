@@ -842,6 +842,13 @@ class WanNetworkTrainer:
             transformer.eval()
 
         accelerator.unwrap_model(network).prepare_grad_etc(transformer)
+        # Initialize optional weight EMA before registering checkpoint hooks/resume
+        try:
+            self.training_core.initialize_weight_ema(
+                args, accelerator, network, register_checkpoint=True
+            )
+        except Exception as exc:
+            logger.warning("Weight EMA setup skipped: %s", exc)
 
         # ========== Checkpoint Hooks ==========
         self.checkpoint_manager.register_hooks(accelerator, args, transformer, network)
@@ -1041,6 +1048,22 @@ class WanNetworkTrainer:
             args, metadata, minimum_metadata, dit_dtype
         )
         remove_model = self.checkpoint_manager.create_remove_model_function(args)
+        # Optionally create a separate EMA save function
+        save_model_ema = None
+        if getattr(self.training_core, "weight_ema", None) is not None and getattr(
+            args, "weight_ema_save_separately", False
+        ):
+            def _save_model_ema(ckpt_name, unwrapped_nw, steps, epoch_no, force_sync_upload=False):
+                ema_ckpt_name = ckpt_name.replace(".safetensors", "-ema.safetensors")
+                with self.training_core._weight_ema_eval_context():
+                    save_model(
+                        ema_ckpt_name,
+                        unwrapped_nw,
+                        steps,
+                        epoch_no,
+                        force_sync_upload=force_sync_upload,
+                    )
+            save_model_ema = _save_model_ema
 
         # Prepare validation epoch/step sync objects for training core
         val_epoch_step_sync = None

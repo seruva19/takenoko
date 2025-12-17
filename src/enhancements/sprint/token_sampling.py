@@ -51,11 +51,17 @@ def sample_tokens_3d(
 
         # Generate indices based on strategy
         if strategy == "uniform":
-            indices = _sample_uniform_3d(F, H, W, num_keep, b if batch_idx is None else batch_idx, device)
+            indices = _sample_uniform_3d(
+                F, H, W, num_keep, b if batch_idx is None else batch_idx, device
+            )
         elif strategy == "temporal_coherent":
-            indices = _sample_temporal_coherent(F, H, W, num_keep, b if batch_idx is None else batch_idx, device)
+            indices = _sample_temporal_coherent(
+                F, H, W, num_keep, b if batch_idx is None else batch_idx, device
+            )
         elif strategy == "spatial_coherent":
-            indices = _sample_spatial_coherent(F, H, W, num_keep, b if batch_idx is None else batch_idx, device)
+            indices = _sample_spatial_coherent(
+                F, H, W, num_keep, b if batch_idx is None else batch_idx, device
+            )
         else:
             raise ValueError(f"Unknown sampling strategy: {strategy}")
 
@@ -104,7 +110,9 @@ def _sample_temporal_coherent(
 
     # Calculate how many frames to keep (at least 1)
     keep_ratio = num_keep / seq_len
-    num_frames_keep = max(1, int(F * math.sqrt(keep_ratio)))  # Keep more frames with less spatial detail
+    num_frames_keep = max(
+        1, int(F * math.sqrt(keep_ratio))
+    )  # Keep more frames with less spatial detail
     num_frames_keep = min(num_frames_keep, F)  # Can't keep more frames than exist
 
     # Sample frames uniformly
@@ -117,11 +125,13 @@ def _sample_temporal_coherent(
 
     # Sample spatial tokens within each selected frame
     all_indices = []
-    for i, frame_idx in enumerate(frame_indices):
+    for frame_idx in frame_indices:
         frame_start = frame_idx * tokens_per_frame
 
         # For this frame, sample spatial tokens
-        spatial_indices = torch.randperm(tokens_per_frame, device=device)[:tokens_per_selected_frame]
+        spatial_indices = torch.randperm(tokens_per_frame, device=device)[
+            :tokens_per_selected_frame
+        ]
 
         # Convert to global indices
         global_indices = frame_start + spatial_indices
@@ -139,7 +149,9 @@ def _sample_temporal_coherent(
         mask[indices] = False
         available = all_possible[mask]
 
-        extra_indices = available[torch.randperm(available.size(0), device=device)[:remaining]]
+        extra_indices = available[
+            torch.randperm(available.size(0), device=device)[:remaining]
+        ]
         indices = torch.cat([indices, extra_indices])
         indices = indices.sort()[0]
 
@@ -189,6 +201,7 @@ def restore_sequence_with_padding(
     keep_indices_list: List[torch.Tensor],
     original_seq_lens: torch.Tensor,
     pad_value: float = 0.0,
+    pad_token: Optional[torch.Tensor] = None,
 ) -> torch.Tensor:
     """
     Restore sparse sequences to original length with padding (MASK tokens).
@@ -208,13 +221,18 @@ def restore_sequence_with_padding(
 
     max_seq_len = original_seq_lens.max().item()
 
-    # Create output tensor filled with pad_value
-    restored_x = torch.full(
-        (B, max_seq_len, C),
-        pad_value,
-        dtype=dtype,
-        device=device,
-    )
+    if pad_token is not None:
+        restored_x = (
+            pad_token.to(device=device, dtype=dtype).expand(B, max_seq_len, C).clone()
+        )
+    else:
+        # Create output tensor filled with pad_value
+        restored_x = torch.full(
+            (B, max_seq_len, C),
+            pad_value,
+            dtype=dtype,
+            device=device,
+        )
 
     # Fill in kept tokens at their original positions
     for b in range(B):
@@ -332,6 +350,7 @@ class TokenSampler(nn.Module):
         keep_indices_list: List[torch.Tensor],
         original_seq_lens: torch.Tensor,
         pad_value: float = 0.0,
+        pad_token: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """Restore sparse sequence to original length with padding."""
         return restore_sequence_with_padding(
@@ -339,4 +358,5 @@ class TokenSampler(nn.Module):
             keep_indices_list=keep_indices_list,
             original_seq_lens=original_seq_lens,
             pad_value=pad_value,
+            pad_token=pad_token,
         )

@@ -11,10 +11,15 @@ import torch.nn as nn
 
 from common.logger import get_logger
 from .exceptions import (
-    SprintImportError, SprintConfigurationError, SprintCompatibilityError,
-    SprintModelStateError
+    SprintImportError,
+    SprintConfigurationError,
+    SprintCompatibilityError,
+    SprintModelStateError,
 )
-from .device_utils import validate_sprint_device_compatibility, optimize_memory_for_sprint
+from .device_utils import (
+    validate_sprint_device_compatibility,
+    optimize_memory_for_sprint,
+)
 from .sparse_dense_fusion import create_sprint_fusion
 from .training_scheduler import SprintTrainingScheduler
 from .config_parser import validate_sprint_block_partitioning
@@ -32,6 +37,7 @@ def setup_sprint_fusion(
     partitioning_strategy: str = "percentage",
     encoder_ratio: float = 0.25,
     middle_ratio: float = 0.50,
+    use_learnable_mask_token: bool = False,
 ) -> Optional[nn.Module]:
     """
     Create and initialize Sprint sparse-dense fusion module for a WanModel.
@@ -56,7 +62,7 @@ def setup_sprint_fusion(
         device = model.device  # type: ignore
 
         # Validate Sprint compatibility with model configuration
-        if hasattr(model, 'rope_on_the_fly') and model.rope_on_the_fly:  # type: ignore
+        if hasattr(model, "rope_on_the_fly") and model.rope_on_the_fly:  # type: ignore
             raise ValueError(
                 "Sprint requires cached rotary position embeddings (RoPE). "
                 "The model is configured with rope_on_the_fly=True, which is incompatible. "
@@ -73,8 +79,9 @@ def setup_sprint_fusion(
             middle_ratio=middle_ratio,
             path_drop_prob=path_drop_prob,
             encoder_layers=encoder_layers,  # Manual override (if specified)
-            middle_layers=middle_layers,    # Manual override (if specified)
+            middle_layers=middle_layers,  # Manual override (if specified)
             partitioning_strategy=partitioning_strategy,
+            use_learnable_mask_token=use_learnable_mask_token,
         ).to(device)
 
         return sprint_fusion
@@ -193,14 +200,16 @@ def apply_sprint_forward(
     # Record diagnostics AFTER forward pass (so _last_sparse_seq_lens is available)
     try:
         from .diagnostics import get_diagnostics
+
         diagnostics = get_diagnostics()
         if diagnostics and diagnostics.enabled:
             # Get sparse seq_lens from fusion module (now set during forward pass)
             sparse_seq_lens = None
-            if hasattr(sprint_fusion, '_last_sparse_seq_lens'):
+            if hasattr(sprint_fusion, "_last_sparse_seq_lens"):
                 sparse_seq_lens = sprint_fusion._last_sparse_seq_lens
 
             from .diagnostics import record_sprint_step
+
             record_sprint_step(
                 sprint_active=True,
                 drop_ratio=drop_ratio,
@@ -328,6 +337,7 @@ def update_sprint_drop_ratio(
 
 # New helper functions for improved error handling and state management
 
+
 def handle_sprint_import_error(import_error: Exception, logger: logging.Logger) -> None:
     """
     Handle Sprint import errors with helpful user guidance.
@@ -342,7 +352,9 @@ def handle_sprint_import_error(import_error: Exception, logger: logging.Logger) 
         if "enhancements.sprint" in error_msg:
             logger.error("❌ Sprint module not found.")
             logger.error("Solution: Ensure enhancements.sprint is in your Python path.")
-            logger.error("Check that src/ is in PYTHONPATH or install the package properly.")
+            logger.error(
+                "Check that src/ is in PYTHONPATH or install the package properly."
+            )
         else:
             missing_module = error_msg.split("no module named")[-1].strip().strip("'\"")
             logger.error(f"❌ Missing dependency: {missing_module}")
@@ -351,7 +363,9 @@ def handle_sprint_import_error(import_error: Exception, logger: logging.Logger) 
         logger.error(f"❌ Sprint import failed: {import_error}")
         logger.error("Solution: Check your Python environment and dependencies.")
 
-    logger.error("⚠️ Sprint will be disabled. Training will continue without Sprint optimization.")
+    logger.error(
+        "⚠️ Sprint will be disabled. Training will continue without Sprint optimization."
+    )
     logger.error("For help, see: docs/enhancements/sprint/INTEGRATION_GUIDE.md")
 
 
@@ -367,36 +381,36 @@ def validate_sprint_model_compatibility(model: nn.Module) -> None:
         SprintConfigurationError: If model configuration is invalid
     """
     # Check basic model attributes
-    required_attrs = ['blocks', 'dim', 'device']
+    required_attrs = ["blocks", "dim", "device"]
     for attr in required_attrs:
         if not hasattr(model, attr):
             raise SprintCompatibilityError(
                 f"Model missing required attribute '{attr}' for Sprint integration",
                 incompatible_feature=f"missing_{attr}",
-                alternative="Ensure model has proper attributes before Sprint setup"
+                alternative="Ensure model has proper attributes before Sprint setup",
             )
 
     # Validate device compatibility
-    device = getattr(model, 'device', None)
+    device = getattr(model, "device", None)
     if device is not None:
         validate_sprint_device_compatibility(device)
 
     # Validate model size
-    blocks = getattr(model, 'blocks', [])
+    blocks = getattr(model, "blocks", [])
     if len(blocks) < 4:
         raise SprintConfigurationError(
             f"Model too small for Sprint: {len(blocks)} blocks. Minimum 4 blocks required.",
             config_key="model_size",
             config_value=len(blocks),
-            expected=">= 4 blocks"
+            expected=">= 4 blocks",
         )
 
     # Check for incompatible features
-    if hasattr(model, 'rope_on_the_fly') and getattr(model, 'rope_on_the_fly', False):
+    if hasattr(model, "rope_on_the_fly") and getattr(model, "rope_on_the_fly", False):
         raise SprintCompatibilityError(
             "Sprint requires cached rotary position embeddings. rope_on_the_fly=True is incompatible.",
             incompatible_feature="rope_on_the_fly",
-            alternative="Set rope_on_the_fly=False in model configuration"
+            alternative="Set rope_on_the_fly=False in model configuration",
         )
 
     # Optimize memory for Sprint
@@ -414,49 +428,52 @@ def get_sprint_status_info(model: nn.Module) -> Dict[str, Any]:
         Dictionary with Sprint status information
     """
     status = {
-        'sprint_enabled': False,
-        'sprint_fusion_loaded': False,
-        'import_error': None,
-        'compatibility_issues': [],
-        'model_info': {},
-        'configuration': {}
+        "sprint_enabled": False,
+        "sprint_fusion_loaded": False,
+        "import_error": None,
+        "compatibility_issues": [],
+        "model_info": {},
+        "configuration": {},
     }
 
     # Check if Sprint is enabled
-    if hasattr(model, '_sprint_enabled'):
-        status['sprint_enabled'] = getattr(model, '_sprint_enabled', False)
+    if hasattr(model, "_sprint_enabled"):
+        status["sprint_enabled"] = getattr(model, "_sprint_enabled", False)
 
     # Check if fusion module is loaded
-    if hasattr(model, 'sprint_fusion') and getattr(model, 'sprint_fusion', None) is not None:
-        status['sprint_fusion_loaded'] = True
+    if (
+        hasattr(model, "sprint_fusion")
+        and getattr(model, "sprint_fusion", None) is not None
+    ):
+        status["sprint_fusion_loaded"] = True
         fusion = model.sprint_fusion
 
         # Get fusion configuration
-        if hasattr(fusion, 'token_sampler'):
+        if hasattr(fusion, "token_sampler"):
             token_sampler = fusion.token_sampler
-            status['configuration'] = {
-                'sampling_strategy': getattr(token_sampler, 'strategy', 'unknown'),
-                'keep_ratio': getattr(token_sampler, 'keep_ratio', None),
-                'drop_ratio': 1.0 - getattr(token_sampler, 'keep_ratio', 0.0)
+            status["configuration"] = {
+                "sampling_strategy": getattr(token_sampler, "strategy", "unknown"),
+                "keep_ratio": getattr(token_sampler, "keep_ratio", None),
+                "drop_ratio": 1.0 - getattr(token_sampler, "keep_ratio", 0.0),
             }
 
     # Check for import errors
-    if hasattr(model, '_sprint_import_error'):
-        status['import_error'] = getattr(model, '_sprint_import_error', None)
+    if hasattr(model, "_sprint_import_error"):
+        status["import_error"] = getattr(model, "_sprint_import_error", None)
 
     # Get model information
-    if hasattr(model, 'blocks'):
-        status['model_info']['total_blocks'] = len(model.blocks)
-    if hasattr(model, 'dim'):
-        status['model_info']['hidden_size'] = getattr(model, 'dim', None)
-    if hasattr(model, 'device'):
-        status['model_info']['device'] = str(getattr(model, 'device', None))
+    if hasattr(model, "blocks"):
+        status["model_info"]["total_blocks"] = len(model.blocks)
+    if hasattr(model, "dim"):
+        status["model_info"]["hidden_size"] = getattr(model, "dim", None)
+    if hasattr(model, "device"):
+        status["model_info"]["device"] = str(getattr(model, "device", None))
 
     # Check compatibility
     try:
         validate_sprint_model_compatibility(model)
     except (SprintCompatibilityError, SprintConfigurationError) as e:
-        status['compatibility_issues'].append(str(e))
+        status["compatibility_issues"].append(str(e))
 
     return status
 
@@ -478,8 +495,8 @@ def safe_sprint_setup(model: nn.Module, **kwargs) -> Optional[nn.Module]:
 
         # Extract and validate block partitioning
         total_blocks = len(model.blocks)
-        encoder_layers = kwargs.get('encoder_layers')
-        middle_layers = kwargs.get('middle_layers')
+        encoder_layers = kwargs.get("encoder_layers")
+        middle_layers = kwargs.get("middle_layers")
 
         validate_sprint_block_partitioning(encoder_layers, middle_layers, total_blocks)
 
@@ -495,7 +512,7 @@ def safe_sprint_setup(model: nn.Module, **kwargs) -> Optional[nn.Module]:
 
     except (SprintCompatibilityError, SprintConfigurationError) as e:
         logger.error(f"❌ Sprint compatibility error: {e}")
-        if e.details.get('alternative'):
+        if e.details.get("alternative"):
             logger.error(f"💡 Suggestion: {e.details['alternative']}")
         return None
     except Exception as e:
@@ -505,14 +522,18 @@ def safe_sprint_setup(model: nn.Module, **kwargs) -> Optional[nn.Module]:
         return None
 
 
-def enable_sprint_with_validation(model: nn.Module, token_drop_ratio: float = 0.75,
-                                encoder_layers: Optional[int] = None,
-                                middle_layers: Optional[int] = None,
-                                sampling_strategy: str = "temporal_coherent",
-                                path_drop_prob: float = 0.1,
-                                partitioning_strategy: str = "percentage",
-                                encoder_ratio: float = 0.25,
-                                middle_ratio: float = 0.50) -> bool:
+def enable_sprint_with_validation(
+    model: nn.Module,
+    token_drop_ratio: float = 0.75,
+    encoder_layers: Optional[int] = None,
+    middle_layers: Optional[int] = None,
+    sampling_strategy: str = "temporal_coherent",
+    path_drop_prob: float = 0.1,
+    partitioning_strategy: str = "percentage",
+    encoder_ratio: float = 0.25,
+    middle_ratio: float = 0.50,
+    use_learnable_mask_token: bool = False,
+) -> bool:
     """
     Enable Sprint with comprehensive validation and error handling.
     This function handles ALL Sprint setup logic and state management.
@@ -553,6 +574,7 @@ def enable_sprint_with_validation(model: nn.Module, token_drop_ratio: float = 0.
             partitioning_strategy=partitioning_strategy,
             encoder_ratio=encoder_ratio,
             middle_ratio=middle_ratio,
+            use_learnable_mask_token=use_learnable_mask_token,
         )
 
         if fusion is not None:
@@ -568,7 +590,7 @@ def enable_sprint_with_validation(model: nn.Module, token_drop_ratio: float = 0.
         model._sprint_enabled = False
         model._sprint_import_error = str(e)
         logger.error(f"❌ Sprint compatibility error: {e}")
-        if hasattr(e, 'details') and e.details.get('alternative'):
+        if hasattr(e, "details") and e.details.get("alternative"):
             logger.error(f"💡 Suggestion: {e.details['alternative']}")
         return False
     except ImportError as e:
@@ -584,9 +606,11 @@ def enable_sprint_with_validation(model: nn.Module, token_drop_ratio: float = 0.
         return False
 
 
-def set_sprint_training_state(model: nn.Module,
-                             global_step: Optional[int] = None,
-                             stage_name: Optional[str] = None) -> None:
+def set_sprint_training_state(
+    model: nn.Module,
+    global_step: Optional[int] = None,
+    stage_name: Optional[str] = None,
+) -> None:
     """
     Set Sprint training state for diagnostics logging.
 
@@ -614,13 +638,13 @@ def set_sprint_training_state(model: nn.Module,
             loss = model(...)
     """
     # Initialize Sprint state attributes if they don't exist
-    if not hasattr(model, '_sprint_global_step'):
+    if not hasattr(model, "_sprint_global_step"):
         model._sprint_global_step = None
-    if not hasattr(model, '_sprint_stage_name'):
+    if not hasattr(model, "_sprint_stage_name"):
         model._sprint_stage_name = None
 
     # Only update state if Sprint is actually enabled
-    if hasattr(model, '_sprint_enabled') and model._sprint_enabled:
+    if hasattr(model, "_sprint_enabled") and model._sprint_enabled:
         model._sprint_global_step = global_step
         model._sprint_stage_name = stage_name
     else:
@@ -629,7 +653,7 @@ def set_sprint_training_state(model: nn.Module,
         model._sprint_stage_name = stage_name
 
 
-def create_sprint_state_tracker() -> 'SprintStateTracker':
+def create_sprint_state_tracker() -> "SprintStateTracker":
     """
     Create a Sprint state tracker for monitoring model state during training.
 
@@ -658,16 +682,19 @@ class SprintStateTracker:
             step: Current training step
         """
         current_state = {
-            'step': step,
-            'sprint_enabled': getattr(model, '_sprint_enabled', False),
-            'sprint_fusion_exists': hasattr(model, 'sprint_fusion') and model.sprint_fusion is not None,
-            'fusion_keep_ratio': None
+            "step": step,
+            "sprint_enabled": getattr(model, "_sprint_enabled", False),
+            "sprint_fusion_exists": hasattr(model, "sprint_fusion")
+            and model.sprint_fusion is not None,
+            "fusion_keep_ratio": None,
         }
 
-        if hasattr(model, 'sprint_fusion') and model.sprint_fusion is not None:
+        if hasattr(model, "sprint_fusion") and model.sprint_fusion is not None:
             fusion = model.sprint_fusion
-            if hasattr(fusion, 'token_sampler') and hasattr(fusion.token_sampler, 'keep_ratio'):
-                current_state['fusion_keep_ratio'] = fusion.token_sampler.keep_ratio
+            if hasattr(fusion, "token_sampler") and hasattr(
+                fusion.token_sampler, "keep_ratio"
+            ):
+                current_state["fusion_keep_ratio"] = fusion.token_sampler.keep_ratio
 
         # Check for anomalies
         if self._last_known_state and step > 0:
@@ -690,13 +717,15 @@ class SprintStateTracker:
     def _detect_state_anomaly(self, prev_state: Dict, curr_state: Dict) -> bool:
         """Detect if current state represents an anomaly compared to previous."""
         # Sprint should not spontaneously enable/disable
-        if prev_state['sprint_enabled'] != curr_state['sprint_enabled']:
+        if prev_state["sprint_enabled"] != curr_state["sprint_enabled"]:
             return True
 
         # Fusion should not disappear if Sprint is enabled
-        if (curr_state['sprint_enabled'] and
-            prev_state['sprint_fusion_exists'] and
-            not curr_state['sprint_fusion_exists']):
+        if (
+            curr_state["sprint_enabled"]
+            and prev_state["sprint_fusion_exists"]
+            and not curr_state["sprint_fusion_exists"]
+        ):
             return True
 
         return False
@@ -704,8 +733,8 @@ class SprintStateTracker:
     def get_summary(self) -> Dict[str, Any]:
         """Get summary of tracked state information."""
         return {
-            'total_steps_tracked': len(self._state_history),
-            'anomalies_detected': self._anomaly_count,
-            'last_known_state': self._last_known_state,
-            'recent_states': self._state_history[-10:] if self._state_history else []
+            "total_steps_tracked": len(self._state_history),
+            "anomalies_detected": self._anomaly_count,
+            "last_known_state": self._last_known_state,
+            "recent_states": self._state_history[-10:] if self._state_history else [],
         }

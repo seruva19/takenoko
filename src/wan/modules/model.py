@@ -1031,6 +1031,11 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
         encoder_layers: Optional[int] = None,
         middle_layers: Optional[int] = None,
         sampling_strategy: str = "temporal_coherent",
+        path_drop_prob: float = 0.1,
+        partitioning_strategy: str = "percentage",
+        encoder_ratio: float = 0.25,
+        middle_ratio: float = 0.50,
+        use_learnable_mask_token: bool = False,
     ) -> None:
         """
         Enable Sprint sparse-dense residual fusion for efficient training.
@@ -1042,16 +1047,26 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
             sampling_strategy: Token sampling strategy - "uniform", "temporal_coherent", "spatial_coherent"
         """
         try:
-            from enhancements.sprint.model_integration import enable_sprint_with_validation
+            from enhancements.sprint.model_integration import (
+                enable_sprint_with_validation,
+            )
+
             enable_sprint_with_validation(
                 model=self,
                 token_drop_ratio=token_drop_ratio,
                 encoder_layers=encoder_layers,
                 middle_layers=middle_layers,
                 sampling_strategy=sampling_strategy,
+                path_drop_prob=path_drop_prob,
+                partitioning_strategy=partitioning_strategy,
+                encoder_ratio=encoder_ratio,
+                middle_ratio=middle_ratio,
+                use_learnable_mask_token=use_learnable_mask_token,
             )
         except ImportError:
-            logger.error("Sprint module not found. Please ensure enhancements.sprint is installed.")
+            logger.error(
+                "Sprint module not found. Please ensure enhancements.sprint is installed."
+            )
 
     @property
     def dtype(self):
@@ -1510,7 +1525,11 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
         use_sprint = False
         if self.sprint_fusion is not None:
             try:
-                from enhancements.sprint.exports import can_use_sprint, apply_sprint_forward
+                from enhancements.sprint.exports import (
+                    can_use_sprint,
+                    apply_sprint_forward,
+                )
+
                 use_sprint = can_use_sprint(
                     sprint_fusion=self.sprint_fusion,
                     is_training=self.training,
@@ -1524,8 +1543,10 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
                     # Get current drop ratio from fusion module
                     current_drop_ratio = (
                         1.0 - self.sprint_fusion.token_sampler.keep_ratio
-                        if (hasattr(self.sprint_fusion, 'token_sampler') and
-                            hasattr(self.sprint_fusion.token_sampler, 'keep_ratio'))
+                        if (
+                            hasattr(self.sprint_fusion, "token_sampler")
+                            and hasattr(self.sprint_fusion.token_sampler, "keep_ratio")
+                        )
                         else 0.75
                     )
 
@@ -1540,7 +1561,9 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
                         stage_name=self._sprint_stage_name,
                     )
             except Exception as e:
-                logger.error(f"Sprint forward pass failed: {e}. Falling back to standard path.")
+                logger.error(
+                    f"Sprint forward pass failed: {e}. Falling back to standard path."
+                )
                 use_sprint = False
 
         # Standard block iteration path (only if Sprint not used)
@@ -1608,7 +1631,9 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
                         else:
                             # downsample states along layers by stride
                             if block_idx % max(1, int(controlnet_stride)) == 0:
-                                controlnet_idx = block_idx // int(max(1, controlnet_stride))
+                                controlnet_idx = block_idx // int(
+                                    max(1, controlnet_stride)
+                                )
                             else:
                                 controlnet_idx = None
                         if controlnet_idx is not None and controlnet_idx < len(
@@ -1618,9 +1643,9 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
                             # Expect shape: (B, L_tokens, dim)
                             if cn is not None and isinstance(cn, torch.Tensor):
                                 try:
-                                    x = x + cn.to(dtype=x.dtype, device=x.device) * float(
-                                        controlnet_weight
-                                    )
+                                    x = x + cn.to(
+                                        dtype=x.dtype, device=x.device
+                                    ) * float(controlnet_weight)
                                 except Exception:
                                     # Best-effort: ignore shape mismatch to avoid breaking non-control runs
                                     pass

@@ -9,7 +9,10 @@ import warnings
 from typing import Dict, Any, Optional
 
 from .exceptions import SprintConfigurationError, SprintCompatibilityError
-from .device_utils import validate_sprint_memory_requirements, estimate_sprint_memory_usage
+from .device_utils import (
+    validate_sprint_memory_requirements,
+    estimate_sprint_memory_usage,
+)
 
 
 def parse_sprint_config(config: Dict[str, Any], args: argparse.Namespace) -> None:
@@ -28,11 +31,15 @@ def parse_sprint_config(config: Dict[str, Any], args: argparse.Namespace) -> Non
     args.sprint_token_drop_ratio = float(config.get("sprint_token_drop_ratio", 0.75))
     args.sprint_encoder_layers = config.get("sprint_encoder_layers", None)
     args.sprint_middle_layers = config.get("sprint_middle_layers", None)
-    args.sprint_sampling_strategy = config.get("sprint_sampling_strategy", "temporal_coherent")
+    args.sprint_sampling_strategy = config.get(
+        "sprint_sampling_strategy", "temporal_coherent"
+    )
 
     # Sprint advanced settings
     args.sprint_path_drop_prob = float(config.get("sprint_path_drop_prob", 0.1))
-    args.sprint_partitioning_strategy = config.get("sprint_partitioning_strategy", "percentage")
+    args.sprint_partitioning_strategy = config.get(
+        "sprint_partitioning_strategy", "percentage"
+    )
     args.sprint_encoder_ratio = float(config.get("sprint_encoder_ratio", 0.25))
     args.sprint_middle_ratio = float(config.get("sprint_middle_ratio", 0.50))
 
@@ -43,7 +50,14 @@ def parse_sprint_config(config: Dict[str, Any], args: argparse.Namespace) -> Non
     args.sprint_cooldown_steps = int(config.get("sprint_cooldown_steps", 100))
 
     # Sprint diagnostics
-    args.sprint_enable_diagnostics = bool(config.get("sprint_enable_diagnostics", False))
+    args.sprint_enable_diagnostics = bool(
+        config.get("sprint_enable_diagnostics", False)
+    )
+
+    # Sprint mask token behavior
+    args.sprint_use_learnable_mask_token = bool(
+        config.get("sprint_use_learnable_mask_token", False)
+    )
 
     # Validate Sprint configuration if enabled
     if args.enable_sprint:
@@ -186,49 +200,49 @@ def _validate_sprint_compatibility(args: argparse.Namespace) -> None:
         SprintCompatibilityError: If Sprint is incompatible with current setup
     """
     # Check for incompatible features
-    if hasattr(args, 'cpu_offload') and args.cpu_offload:
+    if hasattr(args, "cpu_offload") and args.cpu_offload:
         raise SprintCompatibilityError(
             "Sprint is incompatible with CPU offload. Please disable cpu_offload to use Sprint.",
             incompatible_feature="cpu_offload",
-            alternative="Disable CPU offload in config"
+            alternative="Disable CPU offload in config",
         )
 
-    if hasattr(args, 'enable_tread') and args.enable_tread:
+    if hasattr(args, "enable_tread") and args.enable_tread:
         raise SprintCompatibilityError(
             "Sprint is incompatible with TREAD routing. Please disable enable_tread to use Sprint.",
             incompatible_feature="tread_routing",
-            alternative="Disable TREAD routing in config"
+            alternative="Disable TREAD routing in config",
         )
 
-    if hasattr(args, 'controlnet') and args.controlnet:
+    if hasattr(args, "controlnet") and args.controlnet:
         raise SprintCompatibilityError(
             "Sprint is incompatible with ControlNet. Please disable controlnet to use Sprint.",
             incompatible_feature="controlnet",
-            alternative="Disable ControlNet in config"
+            alternative="Disable ControlNet in config",
         )
 
     # Check rope_on_the_fly compatibility
-    if hasattr(args, 'rope_on_the_fly') and args.rope_on_the_fly:
+    if hasattr(args, "rope_on_the_fly") and args.rope_on_the_fly:
         raise SprintCompatibilityError(
             "Sprint requires cached rotary position embeddings (RoPE). rope_on_the_fly=True is incompatible.",
             incompatible_feature="rope_on_the_fly",
-            alternative="Set rope_on_the_fly=False in config"
+            alternative="Set rope_on_the_fly=False in config",
         )
 
     # Memory validation (if we can estimate model size)
-    if hasattr(args, 'hidden_size') and hasattr(args, 'num_blocks'):
+    if hasattr(args, "hidden_size") and hasattr(args, "num_blocks"):
         try:
             model_config = {
-                'hidden_size': args.hidden_size,
-                'num_blocks': args.num_blocks,
-                'max_sequence_length': getattr(args, 'max_sequence_length', 4096),
-                'batch_size': getattr(args, 'batch_size', 1)
+                "hidden_size": args.hidden_size,
+                "num_blocks": args.num_blocks,
+                "max_sequence_length": getattr(args, "max_sequence_length", 4096),
+                "batch_size": getattr(args, "batch_size", 1),
             }
 
             sprint_config = {
-                'token_drop_ratio': args.sprint_token_drop_ratio,
-                'encoder_layers': args.sprint_encoder_layers or 6,
-                'middle_layers': args.sprint_middle_layers or 6
+                "token_drop_ratio": args.sprint_token_drop_ratio,
+                "encoder_layers": args.sprint_encoder_layers or 6,
+                "middle_layers": args.sprint_middle_layers or 6,
             }
 
             # Validate memory requirements
@@ -239,9 +253,9 @@ def _validate_sprint_compatibility(args: argparse.Namespace) -> None:
             warnings.warn(f"Could not validate Sprint memory requirements: {e}")
 
 
-def validate_sprint_block_partitioning(encoder_layers: Optional[int],
-                                     middle_layers: Optional[int],
-                                     total_blocks: int) -> None:
+def validate_sprint_block_partitioning(
+    encoder_layers: Optional[int], middle_layers: Optional[int], total_blocks: int
+) -> None:
     """
     Validate Sprint block partitioning against model size.
 
@@ -267,7 +281,7 @@ def validate_sprint_block_partitioning(encoder_layers: Optional[int],
             f"Reduce encoder_layers ({encoder_layers}) or middle_layers ({middle_layers})",
             config_key="block_partitioning",
             config_value=f"encoder={encoder_layers}, middle={middle_layers}",
-            expected=f"total < {total_blocks}"
+            expected=f"total < {total_blocks}",
         )
 
     # Validate minimum layers
@@ -276,7 +290,7 @@ def validate_sprint_block_partitioning(encoder_layers: Optional[int],
             "encoder_layers must be at least 1 for Sprint to function",
             config_key="encoder_layers",
             config_value=encoder_layers,
-            expected=">= 1"
+            expected=">= 1",
         )
 
     if middle_layers < 0:
@@ -284,7 +298,7 @@ def validate_sprint_block_partitioning(encoder_layers: Optional[int],
             "middle_layers cannot be negative",
             config_key="middle_layers",
             config_value=middle_layers,
-            expected=">= 0"
+            expected=">= 0",
         )
 
     # Validate reasonable partitioning ratios

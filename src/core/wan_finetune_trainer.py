@@ -1178,6 +1178,13 @@ class WanFinetuneTrainer:
 
         # training_model is the transformer itself (full fine-tuning)
         training_model = transformer
+        # Optional weight EMA (shared helper from TrainingCore)
+        try:
+            self.training_core.initialize_weight_ema(
+                args, accelerator, training_model, register_checkpoint=True
+            )
+        except Exception as exc:
+            logger.warning("Weight EMA setup skipped: %s", exc)
 
         analysis_frequency = getattr(args, "verify_weight_dynamics_every_n_steps", 0)
 
@@ -1503,11 +1510,17 @@ class WanFinetuneTrainer:
 
                             # Optimizer step
                             optimizer.step()
+                            self.training_core._update_weight_ema_if_needed(
+                                accelerator, global_step
+                            )
                             lr_scheduler.step()
                             optimizer.zero_grad(set_to_none=True)
                     else:
                         # Fused backward pass - optimizer.step() and zero_grad() handled by hooks
                         if accelerator.sync_gradients:
+                            self.training_core._update_weight_ema_if_needed(
+                                accelerator, global_step
+                            )
                             lr_scheduler.step()
 
                             # Store weight change info for progress bar (for debugging)
@@ -1634,6 +1647,9 @@ class WanFinetuneTrainer:
                         should_sample = ModelSavingUtils.should_sample_images(
                             args, global_step, epoch + 1
                         )
+                        ema_eval_context = (
+                            self.training_core._weight_ema_eval_context()
+                        )
 
                         # Debug sampling conditions
                         if should_sample:
@@ -1682,16 +1698,17 @@ class WanFinetuneTrainer:
                                         )
                                     else:
                                         # Generate samples using sampling manager with pre-processed parameters
-                                        self.sampling_manager.sample_images(
-                                            accelerator=accelerator,
-                                            args=args,
-                                            epoch=epoch,
-                                            steps=global_step,
-                                            vae=vae,
-                                            transformer=transformer,
-                                            sample_parameters=processed_sample_parameters,  # Use pre-processed parameters (no repeated T5 loading)
-                                            dit_dtype=self.mixed_precision_dtype,
-                                        )
+                                        with ema_eval_context:
+                                            self.sampling_manager.sample_images(
+                                                accelerator=accelerator,
+                                                args=args,
+                                                epoch=epoch,
+                                                steps=global_step,
+                                                vae=vae,
+                                                transformer=transformer,
+                                                sample_parameters=processed_sample_parameters,  # Use pre-processed parameters (no repeated T5 loading)
+                                                dit_dtype=self.mixed_precision_dtype,
+                                            )
 
                                     logger.info(
                                         f"✅ Sampling completed at step {global_step}"
@@ -1710,9 +1727,10 @@ class WanFinetuneTrainer:
 
                         if save_before:
                             # Handle step-based saving first (includes model and state)
-                            self.model_saving_utils.handle_step_saving(
-                                args, accelerator, training_model, global_step
-                            )
+                            with ema_eval_context:
+                                self.model_saving_utils.handle_step_saving(
+                                    args, accelerator, training_model, global_step
+                                )
 
                         # Check if we should validate
                         should_validate = (
@@ -1739,33 +1757,35 @@ class WanFinetuneTrainer:
                                 solver="euler",
                             )
 
-                            last_validated_step, warned_no_val_pixels_for_perceptual = (
-                                handle_step_validation(
-                                    should_validating=True,
-                                    validation_core=self.training_core.validation_core,
-                                    val_dataloader=val_dataloader,
-                                    val_epoch_step_sync=val_epoch_step_sync,
-                                    current_epoch=current_epoch,
-                                    epoch=epoch,
-                                    global_step=global_step,
-                                    args=args,
-                                    accelerator=accelerator,
-                                    transformer=transformer,
-                                    noise_scheduler=validation_noise_scheduler,
-                                    control_signal_processor=None,  # Not used in finetune trainer
-                                    vae=vae,  # Pass the VAE if available
-                                    sampling_manager=self.sampling_manager,
-                                    warned_no_val_pixels_for_perceptual=warned_no_val_pixels_for_perceptual,
-                                    last_validated_step=last_validated_step,
-                                    timestep_distribution=None,  # Optional parameter
+                            with ema_eval_context:
+                                last_validated_step, warned_no_val_pixels_for_perceptual = (
+                                    handle_step_validation(
+                                        should_validating=True,
+                                        validation_core=self.training_core.validation_core,
+                                        val_dataloader=val_dataloader,
+                                        val_epoch_step_sync=val_epoch_step_sync,
+                                        current_epoch=current_epoch,
+                                        epoch=epoch,
+                                        global_step=global_step,
+                                        args=args,
+                                        accelerator=accelerator,
+                                        transformer=transformer,
+                                        noise_scheduler=validation_noise_scheduler,
+                                        control_signal_processor=None,  # Not used in finetune trainer
+                                        vae=vae,  # Pass the VAE if available
+                                        sampling_manager=self.sampling_manager,
+                                        warned_no_val_pixels_for_perceptual=warned_no_val_pixels_for_perceptual,
+                                        last_validated_step=last_validated_step,
+                                        timestep_distribution=None,  # Optional parameter
+                                    )
                                 )
-                            )
 
                         if not save_before:
                             # Handle step-based saving after sampling/validation (original behavior)
-                            self.model_saving_utils.handle_step_saving(
-                                args, accelerator, training_model, global_step
-                            )
+                            with ema_eval_context:
+                                self.model_saving_utils.handle_step_saving(
+                                    args, accelerator, training_model, global_step
+                                )
 
                         # Handle additional state saving based on save_state_every_n_steps
                         if should_save_state_at_step(args, global_step):

@@ -1275,6 +1275,12 @@ sprint_sampling_strategy = "temporal_coherent"
 # 0.1 = 10% probability (default), 0.0 = disabled
 sprint_path_drop_prob = 0.1
 
+# Use a learnable [MASK] token for restored / dropped positions (SPRINT)
+# false (default): use zeros as MASK padding (most stable / minimal behavior change)
+# true: learn a dedicated mask embedding
+# Note: When enabled, path-drop replaces the sparse path with the learnable mask token.
+sprint_use_learnable_mask_token = false
+
 # Block partitioning strategy
 # "percentage" (default): Flexible, scales with model size using encoder_ratio and middle_ratio
 # "fixed": 2-N-2 partitioning (2 encoder, N middle, 2 decoder blocks)
@@ -1737,6 +1743,117 @@ reward_backprop_random_end_step = 50
 
 # Stop backprop at the latent model input gradient
 reward_stop_latent_model_input_gradient = false
+
+# =============================================================================
+# POLYLORA PIPELINE SETTINGS 
+# =============================================================================
+
+# Enable the PolyLoRA side pipeline (offline hypernetwork that maps style/identity frames to a LoRA).
+# When false, no PolyLoRA code runs anywhere.
+enable_polylora = false
+
+# Path to a trained PolyLoRA checkpoint (.pt) produced by tools/polylora_train.py.
+# Only required when enable_polylora = true.
+# polylora_ckpt = "checkpoints/polylora_video.pt"
+
+# Path to the target spec JSON produced by tools/polylora_collect_spec.py.
+# Describes module names and A/B shapes expected by the hypernetwork and downstream LoRA merge.
+# polylora_spec = "specs/polylora_video_spec.json"
+
+# Encoder model name for generating style embeddings at inference time.
+# Should match the encoder used to build training pairs; defaults to CLIP-L/336.
+polylora_encoder = "openai/clip-vit-large-patch14-336"
+
+# Encoder type: "clip" (image) or "video" (uses a video-capable HF processor/model).
+polylora_encoder_type = "clip"
+
+# Optional multi-encoder fusion for stronger embeddings (e.g., SigLIP2 + DINOv3 + Qwen-VL).
+# Provide a list of model names; leave empty to use the single polylora_encoder above.
+# polylora_encoders = ["openai/clip-vit-large-patch14-336", "google/siglip-so400m-patch14-384"]
+
+# Fusion mode for multiple encoders: "mean" (average embeddings) or "concat" (concatenate then project).
+polylora_fusion_mode = "mean"
+
+# Head mode: "trunk" (shared trunk + per-target heads, current default) or "per_tensor" (strict per-tensor 2-layer heads).
+polylora_head_mode = "trunk"
+
+# Optional identity encoder (ArcFace/InsightFace) to fuse identity embeddings into the mapper.
+polylora_use_identity = false
+
+# Identity encoder model name (only used when polylora_use_identity = true).
+polylora_identity_encoder = "antelopev2"
+
+# Style + identity fusion mode: "style_only" (ignore identity), "mean", "gated" (learned gate), or "concat".
+polylora_si_fusion_mode = "style_only"
+
+# Enable a lightweight Perceiver-style mixer before the mapper (default off to match current behavior).
+polylora_use_perceiver_frontend = false
+
+# Emit an additional base LoRA branch (prefixed with "base.") alongside the main LoRA (defaults to off).
+polylora_dual_lora_heads = false
+
+# Use cached embeddings (recommended; default true). Set false to encode on-the-fly when building pairs.
+polylora_use_cached_embeddings = true
+
+# Optional sampler smoke command to run after prediction/merge.
+# Can include placeholders: {lora} (predicted path), {merged} (merged path if merge target is provided).
+# Example: polylora_smoke_command = "python tools/sample_with_lora.py --lora {lora} --config configs/quick_sample.toml"
+# polylora_smoke_command = ""
+
+# Optional base model checkpoint to merge predicted LoRA into (for convenience in smoke tests).
+# polylora_merge_target = "models/base_model.pt"
+
+# Embedding dimension emitted by the encoder (must align with PolyLoRA training).
+# For CLIP-L/336 this is typically 768; set explicitly when enable_polylora = true.
+# polylora_embed_dim = 768
+
+# Directory containing per-LoRA frame folders (each named after the checkpoint stem).
+# Used by the PolyLoRA interactive menu to build embedding/LoRA pairs without re-prompting.
+# polylora_frames_root = "data/polylora_frames"
+
+# Output directory for saved embedding/LoRA pairs.
+# polylora_pairs_out = "data/polylora_pairs"
+
+# Optional list of LoRA checkpoints used to derive the target spec and build pairs.
+# polylora_lora_paths = ["loras/style1.safetensors", "loras/style2.safetensors"]
+
+# Optional list of base LoRA checkpoints aligned with polylora_lora_paths (for dual-head/base branch training).
+# Only used when polylora_dual_lora_heads = true; lengths and stems should match polylora_lora_paths.
+# polylora_base_lora_paths = ["loras/style1_base.safetensors", "loras/style2_base.safetensors"]
+
+# Heuristic attenuation factor applied to main LoRA when polylora_dual_lora_heads = true and no base list is provided.
+polylora_base_attenuate = 0.5
+
+# Optional list of frame paths for non-interactive predict sanity check.
+# polylora_predict_frames = ["frames/style1/0.jpg", "frames/style1/1.jpg"]
+
+# Output directory for saved embedding/LoRA pairs.
+# polylora_predict_out = "predicted_lora.pt"
+
+# Training hyperparameters for the hyper-LoRA network (used as defaults in the menu/CLI).
+polylora_train_lr = 0.001
+
+# Number of epochs to train the hyper-LoRA network.
+polylora_train_epochs = 5
+
+# Batch size for hyper-LoRA training.
+polylora_train_batch_size = 4
+
+# Weight for the cosine loss term in hyper-LoRA training.
+polylora_cosine_loss_weight = 0.0
+
+# Optional: run a sampling command every N epochs using a predicted LoRA from the current hypernetwork.
+# Placeholders: {lora} (predicted path), {merged} (merged path if merge target is provided), {epoch} (1-based epoch).
+# polylora_sample_every_epochs = 0
+
+# Command to run for sampling (e.g., to generate images or videos).
+# polylora_sample_command = "python tools/polylora_sample.py --config {config} --lora {lora}"
+
+# Directory to save sampled images or videos.
+# polylora_sample_dir = "polylora_samples"
+
+# Base model checkpoint to merge predicted LoRA into (for convenience in smoke tests).
+# polylora_sample_merge_target = "models/base_model.pt"
 
 # =============================================================================
 # ⚠️ SRPO SETTINGS
@@ -2821,6 +2938,43 @@ latent_quality_tensorboard = true
 # Analyzes temporal consistency, scene transitions, and motion patterns
 # Provides video-specific quality metrics beyond basic mean/std analysis
 latent_quality_video_analysis = true
+
+# =============================================================================
+# MODEL WEIGHT EMA
+# =============================================================================
+
+# Track an exponential moving average of model weights for smoother evaluation/checkpoints.
+# Disabled by default; only enable when you want EMA-based validation/saves.
+enable_weight_ema = false
+
+# EMA decay (0<value<1). Higher = smoother/less reactive. Common: 0.999-0.9999.
+weight_ema_decay = 0.999
+
+# Delay EMA updates until this global step (>=0). Useful when resuming or warming up.
+weight_ema_start_step = 0
+
+# Only include parameters with requires_grad=True (recommended for LoRA/finetune to reduce VRAM).
+# Set to false to include all parameters.
+weight_ema_trainable_only = true
+
+# Swap EMA weights in for validation/sampling/checkpoint saving; training weights are restored automatically.
+# Disable to keep raw weights for eval/saves even when EMA tracking is on.
+weight_ema_use_for_eval = true
+
+# Update EMA every N optimizer steps (>=1). Higher values reduce overhead at the cost of responsiveness.
+weight_ema_update_interval = 1
+
+# Where to keep EMA weights between updates: "accelerator" (faster, more VRAM) or "cpu" (saves VRAM, slower).
+weight_ema_device = "accelerator"
+
+# How to use EMA during evaluation:
+# - "off": never swap EMA for eval/sampling (even if tracking)
+# - "ema": use EMA weights for eval/sampling (default when enabled)
+# - "compare": run validation twice (base and EMA) with separate metric tags
+weight_ema_eval_mode = "ema"
+
+# Save a separate EMA checkpoint alongside the base model (e.g., output_name-ema.safetensors).
+weight_ema_save_separately = false
 
 # =============================================================================
 # TIMESTEP DISTRIBUTION LOGGING

@@ -22,7 +22,7 @@ from typing import Optional, List, Tuple, Union
 import logging
 
 from common.logger import get_logger
-from .token_sampling import TokenSampler, restore_sequence_with_padding
+from .token_sampling import TokenSampler
 
 logger = get_logger(__name__, level=logging.INFO)
 
@@ -83,8 +83,8 @@ def _build_batched_rotary(
     for b, keep_idx in enumerate(keep_indices_list):
         if keep_idx.numel() == 0:
             continue
-        gathered = freqs[b].squeeze(1).index_select(
-            0, keep_idx.to(device=freqs[b].device)
+        gathered = (
+            freqs[b].squeeze(1).index_select(0, keep_idx.to(device=freqs[b].device))
         )
         rope[b, : gathered.size(0)] = gathered.to(device=device)
 
@@ -125,6 +125,7 @@ class SparseDenseFusion(nn.Module):
         token_drop_ratio: float = 0.75,
         sampling_strategy: str = "temporal_coherent",
         path_drop_prob: float = 0.1,
+        use_learnable_mask_token: bool = False,
     ):
         """
         Initialize Sprint sparse-dense fusion module.
@@ -146,6 +147,11 @@ class SparseDenseFusion(nn.Module):
         self.token_drop_ratio = token_drop_ratio
         self.keep_ratio = 1.0 - token_drop_ratio
         self.path_drop_prob = path_drop_prob
+        self.use_learnable_mask_token = use_learnable_mask_token
+
+        self.mask_token = None
+        if self.use_learnable_mask_token:
+            self.mask_token = nn.Parameter(torch.zeros(1, 1, dim))
 
         # Token sampler
         self.token_sampler = TokenSampler(
@@ -164,7 +170,7 @@ class SparseDenseFusion(nn.Module):
         with torch.no_grad():
             # Project dense path as identity, sparse path as zero initially
             self.fusion_proj.weight.zero_()
-            self.fusion_proj.weight[: dim, : dim] = torch.eye(dim)  # Dense path identity
+            self.fusion_proj.weight[:dim, :dim] = torch.eye(dim)  # Dense path identity
             # Sparse path weights remain zero initially
             if self.fusion_proj.bias is not None:
                 self.fusion_proj.bias.zero_()
@@ -278,8 +284,8 @@ class SparseDenseFusion(nn.Module):
                 sparse_seq_lens,
                 grid_sizes,  # Keep original grid sizes for RoPE frequency calculation
                 freqs,
-                context,           # Full context (not sparse) for cross-attention
-                context_lens,      # Full context lengths for cross-attention
+                context,  # Full context (not sparse) for cross-attention
+                context_lens,  # Full context lengths for cross-attention
                 sparse_attention=sparse_attention,
                 batched_rotary=sparse_batched_rotary,
             )
@@ -290,6 +296,7 @@ class SparseDenseFusion(nn.Module):
             keep_indices_list=keep_indices_list,
             original_seq_lens=seq_lens,
             pad_value=0.0,  # MASK tokens as zeros
+            pad_token=self.mask_token,
         )
 
         # ===== PATH-DROP LEARNING: Randomly replace sparse path with MASK =====
@@ -299,15 +306,28 @@ class SparseDenseFusion(nn.Module):
             # Generate per-sample random mask for better regularization
             # mask[i] = 1.0 means use sparse features, 0.0 means use MASK (zeros)
             batch_size = sparse_features_restored.size(0)
-            keep_mask = (torch.rand(batch_size, device=x.device) > self.path_drop_prob).float()
+            keep_mask = (
+                torch.rand(batch_size, device=x.device) > self.path_drop_prob
+            ).float()
             keep_mask = keep_mask.view(batch_size, 1, 1)  # [B, 1, 1] for broadcasting
 
-            # Apply mask: keeps sparse features or zeros them out per sample
-            sparse_features_restored = sparse_features_restored * keep_mask
+            # Apply mask: keeps sparse features or replaces with mask token/zeros per sample
+            if self.mask_token is not None:
+                mask_tokens = self.mask_token.to(
+                    device=x.device, dtype=sparse_features_restored.dtype
+                )
+                sparse_features_restored = (
+                    sparse_features_restored * keep_mask
+                    + mask_tokens * (1.0 - keep_mask)
+                )
+            else:
+                sparse_features_restored = sparse_features_restored * keep_mask
 
         # ===== FUSION: Combine dense shallow + sparse deep =====
         # Concatenate along channel dimension
-        fused = torch.cat([dense_features, sparse_features_restored], dim=-1)  # [B, L, 2*C]
+        fused = torch.cat(
+            [dense_features, sparse_features_restored], dim=-1
+        )  # [B, L, 2*C]
 
         # Project back to original dimension
         x = self.fusion_proj(fused)  # [B, L, C]
@@ -378,6 +398,7 @@ def create_sprint_fusion(
     encoder_layers: Optional[int] = None,
     middle_layers: Optional[int] = None,
     partitioning_strategy: str = "percentage",
+    use_learnable_mask_token: bool = False,
 ) -> SparseDenseFusion:
     """
     Factory function to create Sprint fusion module with automatic block partitioning.
@@ -439,17 +460,25 @@ def create_sprint_fusion(
         if middle_layers is not None:
             middle_end_idx = encoder_end_idx + middle_layers
         else:
-            middle_end_idx = max(encoder_end_idx + 1, int(num_layers * (encoder_ratio + middle_ratio)))
+            middle_end_idx = max(
+                encoder_end_idx + 1, int(num_layers * (encoder_ratio + middle_ratio))
+            )
 
     else:
-        raise ValueError(f"Unknown partitioning_strategy: {partitioning_strategy}. Use 'percentage' or 'fixed'")
+        raise ValueError(
+            f"Unknown partitioning_strategy: {partitioning_strategy}. Use 'percentage' or 'fixed'"
+        )
 
     # Ensure valid partitioning (with warnings for any adjustments)
     original_encoder_end = encoder_end_idx
     original_middle_end = middle_end_idx
 
-    encoder_end_idx = max(1, min(encoder_end_idx, num_layers - 2))  # At least 1 encoder, leave room for middle+decoder
-    middle_end_idx = max(encoder_end_idx + 1, min(middle_end_idx, num_layers - 1))  # At least 1 middle, 1 decoder
+    encoder_end_idx = max(
+        1, min(encoder_end_idx, num_layers - 2)
+    )  # At least 1 encoder, leave room for middle+decoder
+    middle_end_idx = max(
+        encoder_end_idx + 1, min(middle_end_idx, num_layers - 1)
+    )  # At least 1 middle, 1 decoder
 
     # Warn if partitioning was adjusted
     if encoder_end_idx != original_encoder_end:
@@ -482,4 +511,5 @@ def create_sprint_fusion(
         token_drop_ratio=token_drop_ratio,
         sampling_strategy=sampling_strategy,
         path_drop_prob=path_drop_prob,
+        use_learnable_mask_token=use_learnable_mask_token,
     )

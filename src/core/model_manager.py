@@ -218,12 +218,27 @@ class ModelManager:
         if bool(getattr(args, "enable_sprint", False)):
             try:
                 transformer.enable_sprint(
-                    token_drop_ratio=float(getattr(args, "sprint_token_drop_ratio", 0.75)),
+                    token_drop_ratio=float(
+                        getattr(args, "sprint_token_drop_ratio", 0.75)
+                    ),
                     encoder_layers=getattr(args, "sprint_encoder_layers", None),
                     middle_layers=getattr(args, "sprint_middle_layers", None),
-                    sampling_strategy=str(getattr(args, "sprint_sampling_strategy", "temporal_coherent")),
+                    sampling_strategy=str(
+                        getattr(args, "sprint_sampling_strategy", "temporal_coherent")
+                    ),
+                    path_drop_prob=float(getattr(args, "sprint_path_drop_prob", 0.1)),
+                    partitioning_strategy=str(
+                        getattr(args, "sprint_partitioning_strategy", "percentage")
+                    ),
+                    encoder_ratio=float(getattr(args, "sprint_encoder_ratio", 0.25)),
+                    middle_ratio=float(getattr(args, "sprint_middle_ratio", 0.50)),
+                    use_learnable_mask_token=bool(
+                        getattr(args, "sprint_use_learnable_mask_token", False)
+                    ),
                 )
-                logger.info("✅ Sprint sparse-dense fusion enabled for efficient training")
+                logger.info(
+                    "✅ Sprint sparse-dense fusion enabled for efficient training"
+                )
             except Exception as e:
                 logger.error(f"Failed to enable Sprint: {e}")
 

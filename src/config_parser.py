@@ -494,6 +494,10 @@ def create_args_from_config(
         "reward_stop_latent_model_input_gradient", False
     )
 
+    from polylora.config import apply_polylora_to_args
+
+    args = apply_polylora_to_args(args, config)
+
     # Enhanced progress bar and logging
     args.enhanced_progress_bar = config.get(
         "enhanced_progress_bar", True
@@ -582,6 +586,26 @@ def create_args_from_config(
     # EMA loss display config
     args.ema_loss_beta = float(config.get("ema_loss_beta", 0.98))
     args.ema_loss_bias_warmup_steps = int(config.get("ema_loss_bias_warmup_steps", 100))
+    # Optional model weight EMA (averaged parameters for eval/saving)
+    args.enable_weight_ema = bool(config.get("enable_weight_ema", False))
+    args.weight_ema_decay = float(config.get("weight_ema_decay", 0.999))
+    if not 0.0 < args.weight_ema_decay < 1.0:
+        raise ValueError("weight_ema_decay must be between 0 and 1 (exclusive)")
+    args.weight_ema_start_step = max(int(config.get("weight_ema_start_step", 0)), 0)
+    args.weight_ema_trainable_only = bool(config.get("weight_ema_trainable_only", True))
+    args.weight_ema_use_for_eval = bool(config.get("weight_ema_use_for_eval", True))
+    args.weight_ema_update_interval = max(
+        int(config.get("weight_ema_update_interval", 1)), 1
+    )
+    weight_ema_device = str(config.get("weight_ema_device", "accelerator")).lower()
+    if weight_ema_device not in ("accelerator", "cpu"):
+        raise ValueError("weight_ema_device must be 'accelerator' or 'cpu'")
+    args.weight_ema_device = weight_ema_device
+    weight_ema_eval_mode = str(config.get("weight_ema_eval_mode", "ema")).lower()
+    if weight_ema_eval_mode not in ("off", "ema", "compare"):
+        raise ValueError("weight_ema_eval_mode must be 'off', 'ema', or 'compare'")
+    args.weight_ema_eval_mode = weight_ema_eval_mode
+    args.weight_ema_save_separately = bool(config.get("weight_ema_save_separately", False))
 
     # Loss-vs-timestep scatter logging
     args.log_loss_scatterplot = config.get("log_loss_scatterplot", False)

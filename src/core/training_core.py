@@ -13,6 +13,8 @@ from accelerate import Accelerator
 import torch.nn.functional as F
 from easydict import EasyDict
 
+from utils.ema import ExponentialMovingAverage
+
 import logging
 from common.logger import get_logger
 from memory.safe_memory_manager import SafeMemoryManager
@@ -64,6 +66,7 @@ from common.context_memory_manager import ContextMemoryManager
 
 from junctions.training_events import trigger_event
 
+from core import ema_helper
 from core.handlers.logging_config import (
     configure_advanced_logging as _configure_advanced_logging,
 )
@@ -198,6 +201,16 @@ class TrainingCore:
         # Initialize differential guidance enhancement
         self.differential_guidance_integration = None
 
+        # Weight EMA tracking (initialized when enabled)
+        self.weight_ema: Optional[ExponentialMovingAverage] = None
+        self.weight_ema_start_step: int = 0
+        self.weight_ema_use_for_eval: bool = True
+        self.weight_ema_update_interval: int = 1
+        self.weight_ema_device: str = "accelerator"
+        self.weight_ema_eval_mode: str = "off"
+        self.weight_ema_save_separately: bool = False
+        self._weight_ema_initialized: bool = False
+
     def set_ema_beta(self, beta: float) -> None:
         """Set the EMA smoothing factor. Higher values (closer to 1.0) = more smoothing."""
         validate_ema_beta(beta)
@@ -218,6 +231,39 @@ class TrainingCore:
         Sets default values for various logging options if not already set in args.
         """
         _configure_advanced_logging(args)
+
+    def initialize_weight_ema(
+        self,
+        args: argparse.Namespace,
+        accelerator: Accelerator,
+        network: Any,
+        register_checkpoint: bool = True,
+    ) -> None:
+        """Optionally initialize model weight EMA for eval/saving."""
+        try:
+            ema_helper.initialize_weight_ema(
+                owner=self,
+                args=args,
+                accelerator=accelerator,
+                network=network,
+                register_checkpoint=register_checkpoint,
+            )
+        except Exception as exc:
+            logger.warning("Weight EMA setup skipped: %s", exc)
+
+    def _weight_ema_eval_context(self):
+        """Return context manager that swaps EMA weights in for eval/saving when enabled."""
+        return ema_helper.weight_ema_eval_context(self)
+
+    def _update_weight_ema_if_needed(
+        self, accelerator: Accelerator, global_step: int
+    ) -> None:
+        """Update weight EMA if enabled and at the correct interval."""
+        try:
+            ema_helper.update_weight_ema_if_needed(self, accelerator, global_step)
+        except Exception as exc:
+            logger.warning("Disabling weight EMA due to update failure: %s", exc)
+            self.weight_ema = None
 
     def initialize_adaptive_timestep_sampling(self, args: argparse.Namespace) -> None:
         """Initialize adaptive timestep sampling and FVDM manager."""

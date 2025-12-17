@@ -38,6 +38,7 @@ from common.performance_logger import (
     snapshot_gpu_memory,
     force_cuda_cleanup,
 )
+from polylora.integration import PolyLoRAController
 from common.global_seed import set_global_seed
 
 logger = get_logger(__name__, level=logging.INFO)
@@ -337,6 +338,7 @@ class UnifiedTrainer:
         self.args = create_args_from_config(
             self.config, config_path, self.config_content
         )
+        self.polylora_controller = PolyLoRAController(self)
 
         # Configure CUDA from TOML before any CUDA initialization
         try:
@@ -382,6 +384,11 @@ class UnifiedTrainer:
 
     def show_menu(self) -> str:
         """Display the main menu and get user choice (legacy method)"""
+        if getattr(self.args, "enable_polylora", False):
+            from menu.polylora_menu import create_polylora_menu
+
+            menu = create_polylora_menu(self)
+            return menu.display()
         from menu.operations_menu import create_operations_menu
 
         menu = create_operations_menu(self)
@@ -539,6 +546,7 @@ class UnifiedTrainer:
             logger.exception(f"❌ Error during latent caching: {e}")
             return False
 
+    # PolyLoRA side-pipeline menu actions
     def cache_text_encoder_outputs(self) -> bool:
         """Run text encoder output caching operation - simplified without temporary files"""
         logger.info("Starting Text Encoder Output Caching...")
@@ -1086,9 +1094,14 @@ class UnifiedTrainer:
         logger.info(f"Loaded configuration from: {self.config_path}")
 
         # Use the new menu system
-        from menu.operations_menu import create_operations_menu
+        if getattr(self.args, "enable_polylora", False):
+            from menu.polylora_menu import create_polylora_menu
 
-        menu = create_operations_menu(self)
+            menu = create_polylora_menu(self)
+        else:
+            from menu.operations_menu import create_operations_menu
+
+            menu = create_operations_menu(self)
         menu.run(self)
 
     def cleanup(self):
@@ -1146,7 +1159,12 @@ def main():
         sys.exit(1)
 
     # Determine requested actions
-    action_flags = [args.cache_latents, args.cache_text_encoder, args.train, args.all]
+    action_flags = [
+        args.cache_latents,
+        args.cache_text_encoder,
+        args.train,
+        args.all,
+    ]
     non_interactive_requested = args.non_interactive or any(action_flags)
 
     try:
