@@ -235,6 +235,9 @@ class ModelManager:
                     use_learnable_mask_token=bool(
                         getattr(args, "sprint_use_learnable_mask_token", False)
                     ),
+                    uncond_path_drop=bool(
+                        getattr(args, "sprint_uncond_path_drop", False)
+                    ),
                 )
                 logger.info(
                     "✅ Sprint sparse-dense fusion enabled for efficient training"

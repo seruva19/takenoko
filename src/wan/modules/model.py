@@ -1036,6 +1036,7 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
         encoder_ratio: float = 0.25,
         middle_ratio: float = 0.50,
         use_learnable_mask_token: bool = False,
+        uncond_path_drop: bool = False,
     ) -> None:
         """
         Enable Sprint sparse-dense residual fusion for efficient training.
@@ -1062,6 +1063,7 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
                 encoder_ratio=encoder_ratio,
                 middle_ratio=middle_ratio,
                 use_learnable_mask_token=use_learnable_mask_token,
+                enable_uncond_path_drop=uncond_path_drop,
             )
         except ImportError:
             logger.error(
@@ -1548,7 +1550,7 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
                             and hasattr(self.sprint_fusion.token_sampler, "keep_ratio")
                         )
                         else 0.75
-                    )
+                        )
 
                     x = apply_sprint_forward(
                         sprint_fusion=self.sprint_fusion,
@@ -1559,6 +1561,9 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
                         global_step=self._sprint_global_step,
                         drop_ratio=current_drop_ratio,
                         stage_name=self._sprint_stage_name,
+                        force_path_drop=bool(
+                            kwargs.pop("sprint_force_path_drop", False)
+                        ),
                     )
             except Exception as e:
                 logger.error(

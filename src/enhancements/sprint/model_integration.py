@@ -38,6 +38,7 @@ def setup_sprint_fusion(
     encoder_ratio: float = 0.25,
     middle_ratio: float = 0.50,
     use_learnable_mask_token: bool = False,
+    enable_uncond_path_drop: bool = False,
 ) -> Optional[nn.Module]:
     """
     Create and initialize Sprint sparse-dense fusion module for a WanModel.
@@ -83,6 +84,7 @@ def setup_sprint_fusion(
             partitioning_strategy=partitioning_strategy,
             use_learnable_mask_token=use_learnable_mask_token,
         ).to(device)
+        sprint_fusion.enable_uncond_path_drop = enable_uncond_path_drop
 
         return sprint_fusion
 
@@ -126,8 +128,8 @@ def can_use_sprint(
     if sprint_fusion is None:
         return False
 
-    if not is_training:
-        # Sprint is training-only
+    if not is_training and not getattr(sprint_fusion, "enable_uncond_path_drop", False):
+        # Sprint is training-only unless explicitly enabled for evaluation path drop
         return False
 
     # Check for incompatible features
@@ -165,6 +167,7 @@ def apply_sprint_forward(
     global_step: Optional[int] = None,
     drop_ratio: float = 0.75,
     stage_name: Optional[str] = None,
+    force_path_drop: bool = False,
 ):
     """
     Apply Sprint sparse-dense fusion forward pass with diagnostics.
@@ -195,6 +198,7 @@ def apply_sprint_forward(
         sparse_attention=False,  # Sprint has own sampling
         batched_rotary=None,
         batch_idx=batch_idx,
+        force_path_drop=force_path_drop,
     )
 
     # Record diagnostics AFTER forward pass (so _last_sparse_seq_lens is available)
@@ -533,6 +537,7 @@ def enable_sprint_with_validation(
     encoder_ratio: float = 0.25,
     middle_ratio: float = 0.50,
     use_learnable_mask_token: bool = False,
+    enable_uncond_path_drop: bool = False,
 ) -> bool:
     """
     Enable Sprint with comprehensive validation and error handling.
@@ -575,6 +580,7 @@ def enable_sprint_with_validation(
             encoder_ratio=encoder_ratio,
             middle_ratio=middle_ratio,
             use_learnable_mask_token=use_learnable_mask_token,
+            enable_uncond_path_drop=enable_uncond_path_drop,
         )
 
         if fusion is not None:

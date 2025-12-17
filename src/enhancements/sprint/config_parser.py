@@ -37,6 +37,9 @@ def parse_sprint_config(config: Dict[str, Any], args: argparse.Namespace) -> Non
 
     # Sprint advanced settings
     args.sprint_path_drop_prob = float(config.get("sprint_path_drop_prob", 0.1))
+    args.sprint_uncond_path_drop = bool(
+        config.get("sprint_uncond_path_drop", False)
+    )
     args.sprint_partitioning_strategy = config.get(
         "sprint_partitioning_strategy", "percentage"
     )

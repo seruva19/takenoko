@@ -195,6 +195,7 @@ class SparseDenseFusion(nn.Module):
         sparse_attention: bool = False,
         batched_rotary: Optional[torch.Tensor] = None,
         batch_idx: Optional[int] = None,
+        force_path_drop: bool = False,
     ) -> torch.Tensor:
         """
         Forward pass with sparse-dense residual fusion.
@@ -302,7 +303,7 @@ class SparseDenseFusion(nn.Module):
         # ===== PATH-DROP LEARNING: Randomly replace sparse path with MASK =====
         # During training, features from the sparse path are randomly replaced
         # with [MASK] tokens at the configured probability (default 10%)
-        if self.training and self.path_drop_prob > 0.0:
+        if (self.training or force_path_drop) and self.path_drop_prob > 0.0:
             # Generate per-sample random mask for better regularization
             # mask[i] = 1.0 means use sparse features, 0.0 means use MASK (zeros)
             batch_size = sparse_features_restored.size(0)

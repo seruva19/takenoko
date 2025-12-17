@@ -563,6 +563,15 @@ sigmoid_scale = 1.0
 # Bias for enhanced_sigmoid timestep sampling (only used when timestep_sampling = "enhanced_sigmoid")
 sigmoid_bias = 0.0
 
+# Enable dim-aware timestep shift for large video latents (default: false)
+# When true, rescales timesteps by sqrt(latent_dim / dim_aware_shift_base) to reduce instability.
+# Leave disabled unless training high-dimensional WanVideo LoRA; no effect on inference.
+enable_dim_aware_time_shift = false
+
+# Base divisor for dim-aware timestep shift. Effective shift = sqrt(latent_dim / dim_aware_shift_base).
+# Higher values reduce the shift magnitude. Must be > 0.
+dim_aware_shift_base = 4096.0
+
 # Center of bell_shaped distribution in [0.0, 1.0]; 0.95 ~ timestep 950
 # Only used when timestep_sampling = "bell_shaped"
 bell_center = 0.5
@@ -1026,6 +1035,19 @@ adaptive_research_mode_enabled = false
 # Enable the enhanced contrastive objective for improved generation quality and speed.
 enable_contrastive_flow_matching = false
 
+# WanVideo LoRA cross-batch CFM regularizer (disabled by default)
+# Adds a negative MSE between current targets and a batch-rolled target to encourage consistency.
+enable_wanvideo_cfm = false
+
+# Weighting: "uniform" or "linear" (linear scales by normalized timestep).
+wanvideo_cfm_weighting = "uniform"
+
+# Strength multiplier for the WanVideo cross-batch CFM regularizer.
+# The loss computes a negative MSE between the current prediction/target and a batch-rolled target.
+# wanvideo_cfm_lambda scales that term before adding it to the total loss.
+# Default is 0.05, and it should be ≥ 0.
+wanvideo_cfm_lambda = 0.05
+
 # The lambda (λ) hyperparameter that controls the strength of the contrastive loss. The paper found 0.05 to be a robust value.
 contrastive_flow_lambda = 0.05
 
@@ -1290,6 +1312,10 @@ sprint_sampling_strategy = "temporal_coherent"
 # Helps the model learn to handle missing sparse information
 # 0.1 = 10% probability (default), 0.0 = disabled
 sprint_path_drop_prob = 0.1
+
+# Apply path-drop only to unconditional CFG branch during sampling (Sprint inference).
+# Default false keeps Sprint training-only. Enable to mask sparse path on uncond branch when using Sprint at inference.
+sprint_uncond_path_drop = false
 
 # Use a learnable [MASK] token for restored / dropped positions (SPRINT)
 # false (default): use zeros as MASK padding (most stable / minimal behavior change)

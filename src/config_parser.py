@@ -880,6 +880,15 @@ def create_args_from_config(
     args.sigmoid_scale = config.get("sigmoid_scale", 1.0)
     # Enhanced sigmoid optional bias
     args.sigmoid_bias = config.get("sigmoid_bias", 0.0)
+    # Dim-aware timestep shift (default off; helps large video latents when enabled)
+    args.enable_dim_aware_time_shift = bool(
+        config.get("enable_dim_aware_time_shift", False)
+    )
+    args.dim_aware_shift_base = float(config.get("dim_aware_shift_base", 4096.0))
+    if args.dim_aware_shift_base <= 0:
+        raise ValueError(
+            f"dim_aware_shift_base must be > 0, got {args.dim_aware_shift_base}"
+        )
     # Bell-shaped distribution parameters
     args.bell_center = config.get("bell_center", 0.5)
     args.bell_std = config.get("bell_std", 0.2)
@@ -1059,6 +1068,20 @@ def create_args_from_config(
     args.enable_contrastive_flow_matching = config.get(
         "enable_contrastive_flow_matching", False
     )
+    # WanVideo LoRA cross-batch CFM regularizer (disabled by default)
+    args.enable_wanvideo_cfm = bool(config.get("enable_wanvideo_cfm", False))
+    args.wanvideo_cfm_weighting = str(
+        config.get("wanvideo_cfm_weighting", "uniform")
+    )
+    if args.wanvideo_cfm_weighting not in {"uniform", "linear"}:
+        raise ValueError(
+            f"wanvideo_cfm_weighting must be 'uniform' or 'linear', got {args.wanvideo_cfm_weighting}"
+        )
+    args.wanvideo_cfm_lambda = float(config.get("wanvideo_cfm_lambda", 0.05))
+    if args.wanvideo_cfm_lambda < 0:
+        raise ValueError(
+            f"wanvideo_cfm_lambda must be >= 0, got {args.wanvideo_cfm_lambda}"
+        )
     args.contrastive_flow_lambda = config.get("contrastive_flow_lambda", 0.05)
     args.contrastive_flow_class_conditioning = config.get(
         "contrastive_flow_class_conditioning", True

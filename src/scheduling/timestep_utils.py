@@ -961,6 +961,19 @@ def get_noisy_model_input_and_timesteps(
             t = _apply_timestep_constraints(
                 t, args, batch_size, device, latents, presampled_uniform
             )
+            # Optional dim-aware timestep shift for high-dimensional latents (WanVideo LoRA)
+            if getattr(args, "enable_dim_aware_time_shift", False):
+                try:
+                    shift_base = float(getattr(args, "dim_aware_shift_base", 4096.0))
+                    if shift_base > 0:
+                        # Estimate latent dimensionality per sample (supports 4D/5D latents)
+                        latent_dim = float(latents[0].numel())
+                        shift = math.sqrt(latent_dim / shift_base)
+                        t = (shift * t) / (1 + (shift - 1) * t)
+                        t = torch.clamp(t, 0.0, 1.0)
+                except Exception:
+                    # Keep original timesteps if shift computation fails
+                    pass
 
             # Convert to timestep indices and create noisy input
             timesteps = t * 1000.0

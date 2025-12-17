@@ -82,6 +82,8 @@ class LossComponents:
         The REPA alignment loss, if enabled.
     sara_loss: Optional[torch.Tensor]
         The SARA loss component, if enabled.
+    wanvideo_cfm_loss: Optional[torch.Tensor]
+        WanVideo cross-batch CFM regularizer (if enabled).
     ortho_reg_p: Optional[torch.Tensor]
         The orthogonal regularization loss component for p, if enabled.
     ortho_reg_q: Optional[torch.Tensor]
@@ -97,6 +99,7 @@ class LossComponents:
     layer_sync_loss: Optional[torch.Tensor] = None
     repa_loss: Optional[torch.Tensor] = None
     sara_loss: Optional[torch.Tensor] = None
+    wanvideo_cfm_loss: Optional[torch.Tensor] = None
     ortho_reg_p: Optional[torch.Tensor] = None
     ortho_reg_q: Optional[torch.Tensor] = None
 
@@ -401,6 +404,7 @@ class TrainingLossComputer:
                 )
             except Exception:
                 transition_directional_weight = 0.0
+        wanvideo_cfm_loss_value: Optional[torch.Tensor] = None
 
         # ---- Contrastive Flow Matching (Enhanced with DeltaFM improvements) ----
         if (
@@ -723,6 +727,34 @@ class TrainingLossComputer:
             loss = loss + transition_directional_weight * directional_value.mean()
 
         base_loss = loss
+
+        # ---- WanVideo cross-batch CFM regularizer (optional, default off) ----
+        if getattr(args, "enable_wanvideo_cfm", False):
+            try:
+                cfm_target = torch.roll(target.to(network_dtype), shifts=1, dims=0)
+                cfm_pred = model_pred.to(network_dtype)
+                cfm_residual = (cfm_pred - cfm_target) ** 2
+                if str(getattr(args, "wanvideo_cfm_weighting", "uniform")) == "linear":
+                    max_ts = float(
+                        getattr(
+                            getattr(noise_scheduler, "config", object()),
+                            "num_train_timesteps",
+                            1000,
+                        )
+                        or 1000
+                    )
+                    t_weight = timesteps.float()
+                    if t_weight.dim() > 1:
+                        t_weight = t_weight.view(t_weight.size(0), -1).mean(dim=1)
+                    t_weight = t_weight / max(1.0, max_ts)
+                    while t_weight.dim() < cfm_residual.dim():
+                        t_weight = t_weight.unsqueeze(-1)
+                    cfm_residual = cfm_residual * t_weight
+                wanvideo_cfm_loss_value = -cfm_residual.mean()
+                loss = loss + float(getattr(args, "wanvideo_cfm_lambda", 0.05)) * wanvideo_cfm_loss_value
+            except Exception as cfm_err:
+                logger.debug(f"WanVideo CFM regularizer skipped: {cfm_err}")
+                wanvideo_cfm_loss_value = None
 
         # ---- Optional Dispersive Loss ----
         dispersive_loss_value: Optional[torch.Tensor] = None
@@ -1122,6 +1154,7 @@ class TrainingLossComputer:
             layer_sync_loss=layer_sync_loss_value,
             repa_loss=repa_loss_value,
             sara_loss=sara_loss_value,
+            wanvideo_cfm_loss=wanvideo_cfm_loss_value,
             ortho_reg_p=ortho_p_val,
             ortho_reg_q=ortho_q_val,
         )

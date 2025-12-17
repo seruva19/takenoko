@@ -98,3 +98,5 @@ Keep in mind that work on some features is not yet complete due to time and hard
 | [HyperLoRA](https://github.com/bytedance/ComfyUI-HyperLoRA) | repo | - HyperLoRA concept | [bytedance](https://github.com/bytedance) | GPL-3.0 | <sub>see also [paper](https://arxiv.org/abs/2503.16944)</sub> |
 | [Qwen-Image-i2L](https://huggingface.co/DiffSynth-Studio/Qwen-Image-i2L) | repo | - Trainable single-pass LoRA weight prediction hypernetwork concept | [DiffSynth-Studio](https://huggingface.co/DiffSynth-Studio) | Apache 2.0 | <sub>see also [article](https://huggingface.co/blog/kelseye/qwen-image-i2l)</sub> | |
 | [iREPA](https://github.com/End2End-Diffusion/iREPA) | repo | - Convolutional projector for spatial preservation<br>- Spatial z-score normalization for sharper alignment | [End2End-Diffusion](https://github.com/End2End-Diffusion) | MIT | <sub>see also [paper](https://arxiv.org/abs/2512.10794)</sub> |
+| [SpeedrunDiT](https://github.com/SwayStar123/SpeedrunDiT) | repo | - Dim-aware timestep shift<br>- Cross-batch CFM regularizer<br>- Sprint uncond-only path drop for sampling  | [SwayStar123](https://github.com/SwayStar123) | MIT |  |
+

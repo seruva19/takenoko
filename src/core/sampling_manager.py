@@ -741,6 +741,8 @@ class SamplingManager:
             )
             arg_c = {"context": [context], "seq_len": max_seq_len}
             arg_null = {"context": [context_null], "seq_len": max_seq_len}
+            if getattr(args, "sprint_uncond_path_drop", False):
+                arg_null["sprint_force_path_drop"] = True
 
             # Wrap the inner loop with tqdm to track progress over timesteps
             prompt_idx = sample_parameter.get("enum", 0)

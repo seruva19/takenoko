@@ -139,6 +139,10 @@ def collect_and_log_training_metrics(
         logs["loss/layer_sync"] = float(loss_components.layer_sync_loss.item())
     if loss_components.repa_loss is not None:
         logs["loss/repa"] = float(loss_components.repa_loss.item())
+    if getattr(loss_components, "wanvideo_cfm_loss", None) is not None:
+        logs["loss/wanvideo_cfm"] = float(
+            loss_components.wanvideo_cfm_loss.item()
+        )
 
     # Optionally compute extra training metrics periodically
     try:
