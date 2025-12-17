@@ -66,12 +66,17 @@ class MultiEncoderProjectionHead(nn.Module):
         encoder_dims: List[int],
         ensemble_mode: str = "individual",
         shared_projection: bool = False,
+        projection_type: str = "mlp",
+        conv_kernel: int = 3,
     ):
         super().__init__()
         self.diffusion_hidden_dim = diffusion_hidden_dim
         self.encoder_dims = encoder_dims
         self.ensemble_mode = ensemble_mode
         self.shared_projection = shared_projection
+        self.projection_type = projection_type
+        self.conv_kernel = conv_kernel
+        self._conv_warning_logged = False
 
         if shared_projection:
             # Single shared projection head for all encoders
@@ -80,7 +85,13 @@ class MultiEncoderProjectionHead(nn.Module):
             self.projection = self._create_projection_head(
                 diffusion_hidden_dim, avg_dim
             )
+            self.fallback_linear = (
+                nn.Linear(diffusion_hidden_dim, avg_dim)
+                if self.projection_type == "conv"
+                else None
+            )
             self.projections = None
+            self.fallback_linears = None
         else:
             # Individual projection heads for each encoder
             self.projections = nn.ModuleList(
@@ -89,15 +100,60 @@ class MultiEncoderProjectionHead(nn.Module):
                     for dim in encoder_dims
                 ]
             )
+            self.fallback_linears = (
+                nn.ModuleList(
+                    [nn.Linear(diffusion_hidden_dim, dim) for dim in encoder_dims]
+                )
+                if self.projection_type == "conv"
+                else None
+            )
             self.projection = None
+            self.fallback_linear = None
 
     def _create_projection_head(self, input_dim: int, output_dim: int) -> nn.Module:
-        """Creates a 3-layer MLP as described in the REPA paper."""
+        """Creates a projection head (MLP or conv) for REPA/iREPA."""
+        if self.projection_type == "conv":
+            padding = self.conv_kernel // 2
+            return nn.Conv2d(
+                input_dim,
+                output_dim,
+                kernel_size=self.conv_kernel,
+                padding=padding,
+            )
         return nn.Sequential(
             nn.Linear(input_dim, input_dim * 4),
             nn.SiLU(),
             nn.Linear(input_dim * 4, output_dim),
         )
+
+    def _project_with_layer(
+        self,
+        features: torch.Tensor,
+        proj_layer: nn.Module,
+        fallback_layer: Optional[nn.Module],
+    ) -> torch.Tensor:
+        """
+        Apply either conv or MLP projection. Conv expects a square token grid; falls back to linear if not.
+        """
+        B, tokens, dim = features.shape
+        if self.projection_type == "conv":
+            side = int(math.isqrt(tokens))
+            if side * side == tokens:
+                x = features.view(B, side, side, dim).permute(0, 3, 1, 2).contiguous()
+                y = proj_layer(x)
+                return y.permute(0, 2, 3, 1).contiguous().view(B, tokens, -1)
+            if not self._conv_warning_logged:
+                logger.warning(
+                    "iREPA conv projection falling back to linear: token grid is not square (tokens=%d).",
+                    tokens,
+                )
+                self._conv_warning_logged = True
+        flat = features.view(B * tokens, dim)
+        if fallback_layer is not None:
+            projected = fallback_layer(flat)
+            return projected.view(B, tokens, -1)
+        # Fallback to identity if no projection is available (should not happen for MLP path)
+        return proj_layer(flat).view(B, tokens, -1)
 
     def forward(self, diffusion_features: torch.Tensor) -> List[torch.Tensor]:
         """
@@ -109,14 +165,25 @@ class MultiEncoderProjectionHead(nn.Module):
         Returns:
             List of projected features for each encoder
         """
+        if self.projection_type == "conv":
+            if self.shared_projection:
+                projected = self._project_with_layer(
+                    diffusion_features, self.projection, self.fallback_linear
+                )
+                return [projected for _ in self.encoder_dims]
+            return [
+                self._project_with_layer(
+                    diffusion_features,
+                    proj_layer,
+                    self.fallback_linears[idx] if self.fallback_linears else None,
+                )
+                for idx, proj_layer in enumerate(self.projections)
+            ]
+
         if self.shared_projection:
-            # Use shared projection for all encoders
             projected = self.projection(diffusion_features)
-            # Replicate for each encoder (may need adaptation layers in future)
             return [projected for _ in self.encoder_dims]
-        else:
-            # Use individual projections
-            return [proj(diffusion_features) for proj in self.projections]
+        return [proj(diffusion_features) for proj in self.projections]
 
 
 class EnhancedRepaHelper(nn.Module):
@@ -166,6 +233,13 @@ class EnhancedRepaHelper(nn.Module):
         # Get the diffusion model's hidden dimension
         self.diffusion_hidden_dim = self._infer_diffusion_hidden_dim()
 
+        # iREPA settings (conv projector + spatial normalization)
+        self.irepa_enabled = bool(getattr(args, "enable_irepa", False))
+        self.irepa_projection_type = getattr(args, "irepa_projection_type", "conv")
+        self.irepa_proj_kernel = int(getattr(args, "irepa_proj_kernel", 3))
+        self.irepa_spatial_norm = getattr(args, "irepa_spatial_norm", "zscore")
+        self.irepa_zscore_alpha = float(getattr(args, "irepa_zscore_alpha", 1.0))
+
         # Create multi-encoder projection heads
         ensemble_mode = getattr(args, "repa_ensemble_mode", "individual")
         shared_proj = getattr(args, "repa_shared_projection", False)
@@ -175,6 +249,10 @@ class EnhancedRepaHelper(nn.Module):
             self.encoder_dims,
             ensemble_mode=ensemble_mode,
             shared_projection=shared_proj,
+            projection_type=(
+                self.irepa_projection_type if self.irepa_enabled else "mlp"
+            ),
+            conv_kernel=self.irepa_proj_kernel,
         )
 
         # Setup preprocessing transforms for each encoder type
@@ -260,6 +338,14 @@ class EnhancedRepaHelper(nn.Module):
                     mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
                 )
             self.preprocessing_transforms.append(transform)
+
+    def _apply_spatial_norm(self, features: torch.Tensor) -> torch.Tensor:
+        """Optional spatial normalization (iREPA) over patch tokens."""
+        if not self.irepa_enabled or self.irepa_spatial_norm == "none":
+            return features
+        mean = features.mean(dim=1, keepdim=True)
+        std = features.std(dim=1, keepdim=True)
+        return (features - self.irepa_zscore_alpha * mean) / (std + 1e-6)
 
     def _get_hook(self, layer_idx: int):
         """Closure to capture the hidden state from the target layer."""
@@ -404,6 +490,8 @@ class EnhancedRepaHelper(nn.Module):
                     target_features = target_features.view(
                         N_s, C_feat, H_feat * W_feat
                     ).transpose(1, 2)
+
+                target_features = self._apply_spatial_norm(target_features)
 
                 # For CREPA, we generally want global frame representations (or at least aligned structure)
                 # Standard REPA usually pools if shapes don't match.
@@ -693,6 +781,8 @@ class EnhancedRepaHelper(nn.Module):
                     target_features = target_features.view(B, C, H * W).transpose(
                         1, 2
                     )  # (B, H*W, C)
+
+                target_features = self._apply_spatial_norm(target_features)
 
                 target_features_list.append(target_features)
 

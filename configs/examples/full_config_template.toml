@@ -1048,6 +1048,22 @@ contrastive_flow_skip_unconditional = false
 # Enable REPA for representational alignment during training
 enable_repa = false
 
+# Enable iREPA (improved REPA) for spatially focused alignment (LoRA training only, defaults off)
+enable_irepa = false
+
+# Projection layer type for iREPA: "mlp" (baseline) or "conv" (iREPA default, preserves spatial structure)
+# Only used when enable_irepa = true; defaults keep inference unchanged
+irepa_projection_type = "conv"
+
+# Convolution kernel size for iREPA projector (odd integers ≥ 3 recommended; 3 matches paper)
+irepa_proj_kernel = 3
+
+# Spatial normalization applied to encoder patch tokens before similarity ("none" or "zscore"; z-score is paper default)
+irepa_spatial_norm = "zscore"
+
+# Z-score scaling factor (gamma) for spatial normalization (> 0, 1.0 matches paper)
+irepa_zscore_alpha = 1.0
+
 # Visual encoder specification - supports both single and multi-encoder setups
 # Single encoder: "dinov2-vit-b", "dinov2-vit-l", "dinov2-vit-g", "clip-vit-L", "mocov3-vit-b"
 # Multi-encoder: "dinov2-vit-b,dinov2-vit-l", "dinov2-vit-b,clip-vit-L"

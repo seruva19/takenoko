@@ -1260,6 +1260,15 @@ class WanNetworkTrainer:
                         sara_helper.configure_accelerator(accelerator)
                     sara_helper.setup_hooks()
                     sara_helper = accelerator.prepare(sara_helper)
+            elif getattr(args, "enable_irepa", False):
+                from enhancements.repa.enhanced_repa_helper import EnhancedRepaHelper
+
+                logger.info(
+                    "iREPA is enabled. Setting up the spatially-aware REPA helper."
+                )
+                repa_helper = EnhancedRepaHelper(transformer, args)
+                repa_helper.setup_hooks()
+                repa_helper = accelerator.prepare(repa_helper)
             elif getattr(args, "enable_repa", False):
                 from enhancements.repa.enhanced_repa_helper import EnhancedRepaHelper
 

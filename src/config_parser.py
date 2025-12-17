@@ -1208,6 +1208,39 @@ def create_args_from_config(
 
     # REPA (Representation Alignment) settings
     args.enable_repa = config.get("enable_repa", False)
+    args.enable_irepa = bool(config.get("enable_irepa", False))
+    args.irepa_projection_type = str(config.get("irepa_projection_type", "conv"))
+    allowed_irepa_projection = {"mlp", "conv"}
+    if args.irepa_projection_type not in allowed_irepa_projection:
+        raise ValueError(
+            f"Invalid irepa_projection_type '{args.irepa_projection_type}'. "
+            f"Expected one of {sorted(allowed_irepa_projection)}."
+        )
+    args.irepa_proj_kernel = int(config.get("irepa_proj_kernel", 3))
+    if args.irepa_proj_kernel < 3 or args.irepa_proj_kernel % 2 == 0:
+        raise ValueError(
+            f"irepa_proj_kernel must be an odd integer >= 3, got {args.irepa_proj_kernel}"
+        )
+    args.irepa_spatial_norm = str(config.get("irepa_spatial_norm", "zscore"))
+    allowed_irepa_norms = {"none", "zscore"}
+    if args.irepa_spatial_norm not in allowed_irepa_norms:
+        raise ValueError(
+            f"Invalid irepa_spatial_norm '{args.irepa_spatial_norm}'. "
+            f"Expected one of {sorted(allowed_irepa_norms)}."
+        )
+    args.irepa_zscore_alpha = float(config.get("irepa_zscore_alpha", 1.0))
+    if args.irepa_zscore_alpha <= 0:
+        raise ValueError(
+            f"irepa_zscore_alpha must be > 0 for numerical stability, got {args.irepa_zscore_alpha}"
+        )
+    if args.enable_irepa:
+        logger.info(
+            "iREPA enabled (projection=%s, spatial_norm=%s, kernel=%d, alpha=%.3f)",
+            args.irepa_projection_type,
+            args.irepa_spatial_norm,
+            args.irepa_proj_kernel,
+            args.irepa_zscore_alpha,
+        )
     args.repa_encoder_name = config.get("repa_encoder_name", "dinov2-vit-b")
     args.repa_alignment_depth = config.get("repa_alignment_depth", 8)
     args.repa_loss_lambda = config.get("repa_loss_lambda", 0.5)

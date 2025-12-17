@@ -1192,9 +1192,17 @@ class WanFinetuneTrainer:
             # Initialize weight dynamics analysis baseline
             self.weight_analyzer.initialize_baseline_statistics(training_model)
 
-        # TODO: Initialize enhanced REPA helper if enabled
+        # Initialize REPA/iREPA helper if enabled
         repa_helper = None
-        if getattr(args, "enable_repa", False):
+        if getattr(args, "enable_irepa", False):
+            try:
+                from enhancements.repa.enhanced_repa_helper import EnhancedRepaHelper
+
+                repa_helper = EnhancedRepaHelper(transformer, args)
+                logger.info("iREPA helper initialized (conv projection + spatial norm)")
+            except Exception as e:
+                logger.warning(f"Failed to initialize iREPA helper: {e}")
+        elif getattr(args, "enable_repa", False):
             try:
                 from enhancements.repa.enhanced_repa_helper import EnhancedRepaHelper
 
