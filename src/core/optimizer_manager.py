@@ -438,6 +438,7 @@ class OptimizerManager:
                 "momentum", 0.9
             )  # Lower momentum for stability
             ns_steps = optimizer_kwargs.get("ns_steps", 3)  # Fewer Newton-Schulz steps
+            nesterov = optimizer_kwargs.get("nesterov", True)
             weight_decay_type = optimizer_kwargs.get("weight_decay_type", "default")
 
             # Only include parameter groups that have parameters
@@ -451,6 +452,8 @@ class OptimizerManager:
                         lr=muon_lr,
                         weight_decay=weight_decay,
                         momentum=momentum,  # Add momentum for Muon group
+                        ns_steps=ns_steps,
+                        nesterov=nesterov,
                         initial_lr=muon_lr,
                         weight_decay_type=weight_decay_type,
                     )

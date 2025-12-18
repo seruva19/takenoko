@@ -101,7 +101,11 @@ class Muon(torch.optim.Optimizer):
                     if len(state) == 0:
                         state["momentum_buffer"] = torch.zeros_like(p)
                     update = muon_update(
-                        p.grad, state["momentum_buffer"], beta=group["momentum"]
+                        p.grad,
+                        state["momentum_buffer"],
+                        beta=group["momentum"],
+                        ns_steps=group.get("ns_steps", 5),
+                        nesterov=group.get("nesterov", True),
                     )
 
                     apply_weight_decay(
@@ -147,7 +151,11 @@ class SingleDeviceMuon(torch.optim.Optimizer):
                 if len(state) == 0:
                     state["momentum_buffer"] = torch.zeros_like(p)
                 update = muon_update(
-                    p.grad, state["momentum_buffer"], beta=group["momentum"]
+                    p.grad,
+                    state["momentum_buffer"],
+                    beta=group["momentum"],
+                    ns_steps=group.get("ns_steps", 5),
+                    nesterov=group.get("nesterov", True),
                 )
 
                 apply_weight_decay(
@@ -210,6 +218,8 @@ class MuonWithAuxAdam(torch.optim.Optimizer):
                 group["lr"] = group.get("lr", 0.02)
                 group["momentum"] = group.get("momentum", 0.95)
                 group["weight_decay"] = group.get("weight_decay", 0)
+                group["ns_steps"] = group.get("ns_steps", 5)
+                group["nesterov"] = group.get("nesterov", True)
                 assert set(group.keys()) == set(
                     [
                         "params",
@@ -217,6 +227,8 @@ class MuonWithAuxAdam(torch.optim.Optimizer):
                         "momentum",
                         "weight_decay",
                         "use_muon",
+                        "ns_steps",
+                        "nesterov",
                         "initial_lr",
                         "weight_decay_type",
                     ]
@@ -265,7 +277,11 @@ class MuonWithAuxAdam(torch.optim.Optimizer):
                         if len(state) == 0:
                             state["momentum_buffer"] = torch.zeros_like(p)
                         update = muon_update(
-                            p.grad, state["momentum_buffer"], beta=group["momentum"]
+                            p.grad,
+                            state["momentum_buffer"],
+                            beta=group["momentum"],
+                            ns_steps=group.get("ns_steps", 5),
+                            nesterov=group.get("nesterov", True),
                         )
                         p.grad = update.reshape(p.shape)
                         apply_weight_decay(
@@ -327,6 +343,8 @@ class SingleDeviceMuonWithAuxAdam(torch.optim.Optimizer):
                 group["lr"] = group.get("lr", 0.02)
                 group["momentum"] = group.get("momentum", 0.95)
                 group["weight_decay"] = group.get("weight_decay", 0)
+                group["ns_steps"] = group.get("ns_steps", 5)
+                group["nesterov"] = group.get("nesterov", True)
                 assert set(group.keys()) == set(
                     [
                         "params",
@@ -334,6 +352,8 @@ class SingleDeviceMuonWithAuxAdam(torch.optim.Optimizer):
                         "momentum",
                         "weight_decay",
                         "use_muon",
+                        "ns_steps",
+                        "nesterov",
                         "initial_lr",
                         "weight_decay_type",
                     ]
@@ -376,7 +396,11 @@ class SingleDeviceMuonWithAuxAdam(torch.optim.Optimizer):
                     if len(state) == 0:
                         state["momentum_buffer"] = torch.zeros_like(p)
                     update = muon_update(
-                        p.grad, state["momentum_buffer"], beta=group["momentum"]
+                        p.grad,
+                        state["momentum_buffer"],
+                        beta=group["momentum"],
+                        ns_steps=group.get("ns_steps", 5),
+                        nesterov=group.get("nesterov", True),
                     )
 
                     apply_weight_decay(
