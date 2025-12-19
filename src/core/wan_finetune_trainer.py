@@ -1019,13 +1019,24 @@ class WanFinetuneTrainer:
 
         # Prepare data loader
         n_workers = min(args.max_data_loader_n_workers, os.cpu_count())
+
+        _train_loader_kwargs = {
+            "pin_memory": bool(getattr(args, "data_loader_pin_memory", False)),
+        }
+        _prefetch_factor = int(getattr(args, "data_loader_prefetch_factor", 0) or 0)
+        if n_workers > 0 and _prefetch_factor > 0:
+            _train_loader_kwargs["prefetch_factor"] = _prefetch_factor
+
         train_dataloader = torch.utils.data.DataLoader(
             train_dataset_group,
             batch_size=1,
             shuffle=(not getattr(args, "bucket_shuffle_across_datasets", False)),
             collate_fn=collator,
             num_workers=n_workers,
-            persistent_workers=args.persistent_data_loader_workers,
+            persistent_workers=(
+                bool(args.persistent_data_loader_workers) and n_workers > 0
+            ),
+            **_train_loader_kwargs,
         )
 
         # Initialize loss recorder for proper loss tracking

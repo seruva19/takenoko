@@ -778,13 +778,23 @@ class WanNetworkTrainer:
         # ========== DataLoader Setup ==========
         n_workers = min(args.max_data_loader_n_workers, os.cpu_count() or 1)
 
+        _train_loader_kwargs = {
+            "pin_memory": bool(getattr(args, "data_loader_pin_memory", False)),
+        }
+        _prefetch_factor = int(getattr(args, "data_loader_prefetch_factor", 0) or 0)
+        if n_workers > 0 and _prefetch_factor > 0:
+            _train_loader_kwargs["prefetch_factor"] = _prefetch_factor
+
         train_dataloader = torch.utils.data.DataLoader(
             train_dataset_group,
             batch_size=1,
             shuffle=(not getattr(args, "bucket_shuffle_across_datasets", False)),
             collate_fn=collator,
             num_workers=n_workers,
-            persistent_workers=args.persistent_data_loader_workers,
+            persistent_workers=(
+                bool(args.persistent_data_loader_workers) and n_workers > 0
+            ),
+            **_train_loader_kwargs,
         )
 
         val_dataloader = None
@@ -793,12 +803,23 @@ class WanNetworkTrainer:
             val_collator = collator_class(
                 val_current_epoch, val_current_step, ds_for_collator
             )
+
+            _val_loader_kwargs = {
+                "pin_memory": bool(getattr(args, "data_loader_pin_memory", False)),
+            }
+            _val_prefetch_factor = int(
+                getattr(args, "data_loader_prefetch_factor", 0) or 0
+            )
+            if args.max_data_loader_n_workers > 0 and _val_prefetch_factor > 0:
+                _val_loader_kwargs["prefetch_factor"] = _val_prefetch_factor
+
             val_dataloader = torch.utils.data.DataLoader(
                 val_dataset_group,
                 batch_size=1,
                 shuffle=False,
                 collate_fn=val_collator,
                 num_workers=args.max_data_loader_n_workers,
+                **_val_loader_kwargs,
             )
 
         # ========== Training Parameters ==========

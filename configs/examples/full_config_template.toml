@@ -149,6 +149,15 @@ max_data_loader_n_workers = 2
 # Persistent DataLoader workers (useful for reduce time gap between epoch, but may use more memory)
 persistent_data_loader_workers = true
 
+# DataLoader pinned memory (performance). Default: false
+# When true, DataLoader uses page-locked host memory to speed up CPU->GPU transfers.
+# Recommended when GPU utilization is < 90% and CPU is the bottleneck.
+data_loader_pin_memory = false
+
+# DataLoader prefetch factor (performance). 0 (default) means "use PyTorch default". Typical values: 2-8.
+# Number of batches to prefetch per worker (only used when max_data_loader_n_workers > 0).
+data_loader_prefetch_factor = 0
+
 # Bucket-level shuffling across datasets (performance)
 # When true, iterates batches grouped by bucket key (resolution; plus frame_count for video)
 # across all datasets. Usually improves throughput with mixed shapes.

@@ -307,6 +307,14 @@ def create_args_from_config(
     args.persistent_data_loader_workers = config.get(
         "persistent_data_loader_workers", False
     )
+    args.data_loader_pin_memory = bool(config.get("data_loader_pin_memory", False))
+    _prefetch_factor = config.get("data_loader_prefetch_factor", 0)
+    try:
+        args.data_loader_prefetch_factor = int(_prefetch_factor)
+    except (TypeError, ValueError):
+        raise ValueError("data_loader_prefetch_factor must be an int") from None
+    if args.data_loader_prefetch_factor < 0:
+        raise ValueError("data_loader_prefetch_factor must be >= 0")
     args.bucket_shuffle_across_datasets = bool(
         config.get("bucket_shuffle_across_datasets", False)
     )
