@@ -307,6 +307,9 @@ def create_args_from_config(
     args.persistent_data_loader_workers = config.get(
         "persistent_data_loader_workers", False
     )
+    args.bucket_shuffle_across_datasets = bool(
+        config.get("bucket_shuffle_across_datasets", False)
+    )
     args.seed = config.get("seed", 42)
     args.gradient_checkpointing = config.get("gradient_checkpointing", False)
     args.gradient_checkpointing_cpu_offload = config.get(

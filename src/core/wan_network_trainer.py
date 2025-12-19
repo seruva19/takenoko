@@ -502,6 +502,23 @@ class WanNetworkTrainer:
         except Exception as _sc_wrap_err:
             logger.warning(f"Self-correction hybrid setup skipped: {_sc_wrap_err}")
 
+        if getattr(args, "bucket_shuffle_across_datasets", False):
+            try:
+                from dataset.bucket_shuffled_group import BucketShuffledDatasetGroup
+
+                train_dataset_group = BucketShuffledDatasetGroup(
+                    getattr(train_dataset_group, "datasets", [train_dataset_group]),
+                    seed=int(getattr(args, "seed", 0) or 0),
+                    shared_epoch=current_epoch,
+                )
+                logger.info(
+                    "Bucket-level dataset shuffling enabled (bucket_shuffle_across_datasets=true)"
+                )
+            except Exception as _bucket_wrap_err:
+                logger.warning(
+                    f"Bucket-level dataset shuffling setup skipped: {_bucket_wrap_err}"
+                )
+
         # Setup latent quality analysis if enabled (actual analysis runs later with TensorBoard or here if TB disabled)
         from dataset.latent_quality_analyzer import (
             setup_latent_quality_for_trainer,
@@ -764,7 +781,7 @@ class WanNetworkTrainer:
         train_dataloader = torch.utils.data.DataLoader(
             train_dataset_group,
             batch_size=1,
-            shuffle=True,
+            shuffle=(not getattr(args, "bucket_shuffle_across_datasets", False)),
             collate_fn=collator,
             num_workers=n_workers,
             persistent_workers=args.persistent_data_loader_workers,
@@ -1053,7 +1070,10 @@ class WanNetworkTrainer:
         if getattr(self.training_core, "weight_ema", None) is not None and getattr(
             args, "weight_ema_save_separately", False
         ):
-            def _save_model_ema(ckpt_name, unwrapped_nw, steps, epoch_no, force_sync_upload=False):
+
+            def _save_model_ema(
+                ckpt_name, unwrapped_nw, steps, epoch_no, force_sync_upload=False
+            ):
                 ema_ckpt_name = ckpt_name.replace(".safetensors", "-ema.safetensors")
                 with self.training_core._weight_ema_eval_context():
                     save_model(
@@ -1063,6 +1083,7 @@ class WanNetworkTrainer:
                         epoch_no,
                         force_sync_upload=force_sync_upload,
                     )
+
             save_model_ema = _save_model_ema
 
         # Prepare validation epoch/step sync objects for training core

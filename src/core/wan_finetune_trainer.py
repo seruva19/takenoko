@@ -994,12 +994,35 @@ class WanFinetuneTrainer:
         except Exception as _sc_wrap_err:
             logger.warning(f"Self-correction hybrid setup skipped: {_sc_wrap_err}")
 
+        bucket_shuffled_wrapper_applied = False
+        if getattr(args, "bucket_shuffle_across_datasets", False):
+            try:
+                from dataset.bucket_shuffled_group import BucketShuffledDatasetGroup
+
+                train_dataset_group = BucketShuffledDatasetGroup(
+                    getattr(train_dataset_group, "datasets", [train_dataset_group]),
+                    seed=int(getattr(args, "seed", 0) or 0),
+                    shared_epoch=current_epoch,
+                )
+                bucket_shuffled_wrapper_applied = True
+                logger.info(
+                    "Bucket-level dataset shuffling enabled (bucket_shuffle_across_datasets=true)"
+                )
+            except Exception as _bucket_wrap_err:
+                logger.warning(
+                    f"Bucket-level dataset shuffling setup skipped: {_bucket_wrap_err}"
+                )
+
+        if bucket_shuffled_wrapper_applied and args.max_data_loader_n_workers == 0:
+            ds_for_collator = train_dataset_group
+            collator = collator_class(current_epoch, current_step, ds_for_collator)
+
         # Prepare data loader
         n_workers = min(args.max_data_loader_n_workers, os.cpu_count())
         train_dataloader = torch.utils.data.DataLoader(
             train_dataset_group,
             batch_size=1,
-            shuffle=True,
+            shuffle=(not getattr(args, "bucket_shuffle_across_datasets", False)),
             collate_fn=collator,
             num_workers=n_workers,
             persistent_workers=args.persistent_data_loader_workers,
@@ -1655,9 +1678,7 @@ class WanFinetuneTrainer:
                         should_sample = ModelSavingUtils.should_sample_images(
                             args, global_step, epoch + 1
                         )
-                        ema_eval_context = (
-                            self.training_core._weight_ema_eval_context()
-                        )
+                        ema_eval_context = self.training_core._weight_ema_eval_context()
 
                         # Debug sampling conditions
                         if should_sample:
@@ -1766,26 +1787,27 @@ class WanFinetuneTrainer:
                             )
 
                             with ema_eval_context:
-                                last_validated_step, warned_no_val_pixels_for_perceptual = (
-                                    handle_step_validation(
-                                        should_validating=True,
-                                        validation_core=self.training_core.validation_core,
-                                        val_dataloader=val_dataloader,
-                                        val_epoch_step_sync=val_epoch_step_sync,
-                                        current_epoch=current_epoch,
-                                        epoch=epoch,
-                                        global_step=global_step,
-                                        args=args,
-                                        accelerator=accelerator,
-                                        transformer=transformer,
-                                        noise_scheduler=validation_noise_scheduler,
-                                        control_signal_processor=None,  # Not used in finetune trainer
-                                        vae=vae,  # Pass the VAE if available
-                                        sampling_manager=self.sampling_manager,
-                                        warned_no_val_pixels_for_perceptual=warned_no_val_pixels_for_perceptual,
-                                        last_validated_step=last_validated_step,
-                                        timestep_distribution=None,  # Optional parameter
-                                    )
+                                (
+                                    last_validated_step,
+                                    warned_no_val_pixels_for_perceptual,
+                                ) = handle_step_validation(
+                                    should_validating=True,
+                                    validation_core=self.training_core.validation_core,
+                                    val_dataloader=val_dataloader,
+                                    val_epoch_step_sync=val_epoch_step_sync,
+                                    current_epoch=current_epoch,
+                                    epoch=epoch,
+                                    global_step=global_step,
+                                    args=args,
+                                    accelerator=accelerator,
+                                    transformer=transformer,
+                                    noise_scheduler=validation_noise_scheduler,
+                                    control_signal_processor=None,  # Not used in finetune trainer
+                                    vae=vae,  # Pass the VAE if available
+                                    sampling_manager=self.sampling_manager,
+                                    warned_no_val_pixels_for_perceptual=warned_no_val_pixels_for_perceptual,
+                                    last_validated_step=last_validated_step,
+                                    timestep_distribution=None,  # Optional parameter
                                 )
 
                         if not save_before:

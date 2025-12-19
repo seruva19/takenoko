@@ -149,6 +149,13 @@ max_data_loader_n_workers = 2
 # Persistent DataLoader workers (useful for reduce time gap between epoch, but may use more memory)
 persistent_data_loader_workers = true
 
+# Bucket-level shuffling across datasets (performance)
+# When true, iterates batches grouped by bucket key (resolution; plus frame_count for video)
+# across all datasets. Usually improves throughput with mixed shapes.
+# Trade-off: less step-to-step shape mixing (still shuffled within each epoch).
+# Default: false (legacy behavior)
+bucket_shuffle_across_datasets = false
+
 # Random seed for training
 seed = 20250811
 
