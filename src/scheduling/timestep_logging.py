@@ -15,6 +15,14 @@ from common.logger import get_logger
 
 logger = get_logger(__name__)
 
+# Force non-GUI backend to avoid Tkinter teardown errors in worker threads
+try:
+    import matplotlib
+
+    matplotlib.use("Agg")
+except Exception:
+    pass
+
 # One-time guard to avoid spamming warnings
 _WARNED_VIZ_MISMATCH: bool = False
 

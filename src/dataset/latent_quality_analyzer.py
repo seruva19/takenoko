@@ -291,6 +291,10 @@ class LatentQualityAnalyzer:
     def create_visualization(self, results: List[LatentQualityResult]) -> Optional[torch.Tensor]:
         """Create quality visualization plot."""
         try:
+            import matplotlib
+
+            # Force non-GUI backend to avoid Tkinter teardown errors in worker threads
+            matplotlib.use("Agg")
             import matplotlib.pyplot as plt
 
             if not results:

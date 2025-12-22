@@ -31,6 +31,10 @@ def attach_attention_metrics_and_maybe_heatmap(
                     if tracker.name == "tensorboard":
                         try:
                             import numpy as _np  # type: ignore
+                            import matplotlib  # type: ignore
+
+                            # Force non-GUI backend to avoid Tkinter teardown errors
+                            matplotlib.use("Agg")
                             import matplotlib.pyplot as _plt  # type: ignore
                             from matplotlib.colors import LogNorm  # type: ignore
 
