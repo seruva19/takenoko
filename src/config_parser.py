@@ -1293,11 +1293,77 @@ def create_args_from_config(
     args.repa_spatial_align = config.get("repa_spatial_align", True)
 
     # CREPA (Cross-frame Representation Alignment) settings
-    # Extends REPA with temporal neighbor alignment for better video consistency
-    args.crepa_enabled = config.get("crepa_enabled", False)
-    args.crepa_adjacency = int(config.get("crepa_adjacency", 1))
-    args.crepa_temperature = float(config.get("crepa_temperature", 1.0))
+    args.crepa_enabled = bool(config.get("crepa_enabled", False))
+    args.crepa_block_index = config.get("crepa_block_index", None)
+    if args.crepa_block_index is not None:
+        args.crepa_block_index = int(args.crepa_block_index)
+    args.crepa_teacher_block_index = config.get("crepa_teacher_block_index", None)
+    if args.crepa_teacher_block_index is not None:
+        args.crepa_teacher_block_index = int(args.crepa_teacher_block_index)
+    args.crepa_lambda = float(config.get("crepa_lambda", 0.5))
+
+    adjacency_fallback = config.get("crepa_adjacency", None)
+    tau_fallback = config.get("crepa_temperature", None)
+    args.crepa_adjacent_distance = int(
+        config.get(
+            "crepa_adjacent_distance",
+            1 if adjacency_fallback is None else adjacency_fallback,
+        )
+    )
+    args.crepa_adjacent_tau = float(
+        config.get(
+            "crepa_adjacent_tau", 1.0 if tau_fallback is None else tau_fallback
+        )
+    )
+    args.crepa_cumulative_neighbors = bool(
+        config.get("crepa_cumulative_neighbors", False)
+    )
+    args.crepa_encoder = config.get(
+        "crepa_encoder", config.get("crepa_model", "dinov2_vitg14")
+    )
+    args.crepa_encoder_image_size = int(
+        config.get("crepa_encoder_image_size", 518)
+    )
+    args.crepa_spatial_align = bool(config.get("crepa_spatial_align", True))
+    args.crepa_use_backbone_features = bool(
+        config.get("crepa_use_backbone_features", False)
+    )
+    args.crepa_drop_vae_encoder = bool(
+        config.get("crepa_drop_vae_encoder", False)
+    )
     args.crepa_normalize_by_frames = config.get("crepa_normalize_by_frames", True)
+    # Back-compat aliases for existing REPA-based CREPA path
+    args.crepa_adjacency = args.crepa_adjacent_distance
+    args.crepa_temperature = args.crepa_adjacent_tau
+
+    if args.crepa_adjacent_distance < 0:
+        raise ValueError(
+            f"crepa_adjacent_distance must be non-negative, got {args.crepa_adjacent_distance}"
+        )
+    if args.crepa_adjacent_tau <= 0:
+        raise ValueError(
+            f"crepa_adjacent_tau must be > 0, got {args.crepa_adjacent_tau}"
+        )
+    if args.crepa_lambda < 0:
+        raise ValueError(f"crepa_lambda must be non-negative, got {args.crepa_lambda}")
+    if args.crepa_enabled and args.crepa_lambda <= 0:
+        raise ValueError("crepa_lambda must be > 0 when CREPA is enabled")
+    if args.crepa_encoder_image_size <= 0:
+        raise ValueError(
+            f"crepa_encoder_image_size must be > 0, got {args.crepa_encoder_image_size}"
+        )
+    if args.crepa_enabled and args.crepa_block_index is None:
+        raise ValueError("crepa_block_index must be set when CREPA is enabled")
+    if args.crepa_enabled:
+        logger.info(
+            "CREPA enabled (block=%s, teacher=%s, lambda=%.3f, distance=%d, tau=%.3f, backbone=%s)",
+            args.crepa_block_index,
+            args.crepa_teacher_block_index,
+            args.crepa_lambda,
+            args.crepa_adjacent_distance,
+            args.crepa_adjacent_tau,
+            args.crepa_use_backbone_features,
+        )
 
     # SARA (Structural and Adversarial Representation Alignment) settings
     args.sara_enabled = config.get("sara_enabled", False)

@@ -593,6 +593,10 @@ class WanNetworkTrainer:
             hasattr(args, "enable_control_lora") and args.enable_control_lora
         )
         need_vae_for_sampling = args.sample_prompts is not None
+        need_vae_for_crepa = (
+            getattr(args, "crepa_enabled", False)
+            and not getattr(args, "crepa_use_backbone_features", False)
+        )
 
         if need_vae_for_sampling and self.sampling_manager is not None:
             sample_parameters = self.sampling_manager.process_sample_prompts(
@@ -600,11 +604,15 @@ class WanNetworkTrainer:
             )
 
         # Decide VAE loading strategy
-        if need_vae_for_control:
-            # Hard fail early if Control LoRA is enabled without a VAE path
+        if need_vae_for_control or need_vae_for_crepa:
+            # Hard fail early if VAE path is missing
             if not getattr(args, "vae", None) or not str(args.vae).strip():
+                if need_vae_for_control:
+                    raise ValueError(
+                        "Control LoRA requires a VAE checkpoint. Set 'vae' in the config when enable_control_lora is True."
+                    )
                 raise ValueError(
-                    "Control LoRA requires a VAE checkpoint. Set 'vae' in the config when enable_control_lora is True."
+                    "CREPA requires a VAE checkpoint unless crepa_use_backbone_features is enabled."
                 )
 
             # Control-LoRA requires an actual VAE during training – load it now.
@@ -617,6 +625,8 @@ class WanNetworkTrainer:
                 )
             vae.requires_grad_(False)
             vae.eval()
+            if getattr(args, "crepa_drop_vae_encoder", False):
+                self._drop_vae_encoder_if_possible(vae)
             # Expose to control-signal processor so it can encode control latents
             # Store on processor for later use without breaking static typing
             setattr(self.control_signal_processor, "vae", vae)
@@ -1294,15 +1304,35 @@ class WanNetworkTrainer:
 
             log_loss_type_info(args)
 
-            # ========== SARA / REPA Helper Setup ==========
+            # ========== SARA / REPA / CREPA Helper Setup ==========
             sara_helper = None
             repa_helper = None
             layer_sync_helper = None
+            crepa_helper = None
+            crepa_enabled = bool(getattr(args, "crepa_enabled", False))
+            if crepa_enabled:
+                try:
+                    from enhancements.repa.crepa_helper import CrepaHelper
+
+                    logger.info("CREPA is enabled. Setting up the helper module.")
+                    crepa_helper = CrepaHelper(transformer, args, accelerator)
+                    crepa_helper.setup_hooks()
+                    crepa_helper = accelerator.prepare(crepa_helper)
+                except Exception as exc:
+                    logger.warning(f"CREPA setup failed: {exc}")
+                    crepa_helper = None
             if getattr(args, "sara_enabled", False):
                 from enhancements.sara.sara_helper import create_sara_helper
 
                 logger.info("SARA is enabled. Setting up the helper module.")
-                sara_helper = create_sara_helper(transformer, args)
+                original_crepa_enabled = getattr(args, "crepa_enabled", False)
+                if crepa_helper is not None:
+                    args.crepa_enabled = False
+                try:
+                    sara_helper = create_sara_helper(transformer, args)
+                finally:
+                    if crepa_helper is not None:
+                        args.crepa_enabled = original_crepa_enabled
                 if sara_helper is not None:
                     if hasattr(sara_helper, "configure_accelerator"):
                         sara_helper.configure_accelerator(accelerator)
@@ -1314,14 +1344,28 @@ class WanNetworkTrainer:
                 logger.info(
                     "iREPA is enabled. Setting up the spatially-aware REPA helper."
                 )
-                repa_helper = EnhancedRepaHelper(transformer, args)
+                original_crepa_enabled = getattr(args, "crepa_enabled", False)
+                if crepa_helper is not None:
+                    args.crepa_enabled = False
+                try:
+                    repa_helper = EnhancedRepaHelper(transformer, args)
+                finally:
+                    if crepa_helper is not None:
+                        args.crepa_enabled = original_crepa_enabled
                 repa_helper.setup_hooks()
                 repa_helper = accelerator.prepare(repa_helper)
             elif getattr(args, "enable_repa", False):
                 from enhancements.repa.enhanced_repa_helper import EnhancedRepaHelper
 
                 logger.info("REPA is enabled. Setting up the enhanced helper module.")
-                repa_helper = EnhancedRepaHelper(transformer, args)
+                original_crepa_enabled = getattr(args, "crepa_enabled", False)
+                if crepa_helper is not None:
+                    args.crepa_enabled = False
+                try:
+                    repa_helper = EnhancedRepaHelper(transformer, args)
+                finally:
+                    if crepa_helper is not None:
+                        args.crepa_enabled = original_crepa_enabled
                 repa_helper.setup_hooks()
                 repa_helper = accelerator.prepare(repa_helper)
             if getattr(args, "enable_layer_sync", False):
@@ -1335,6 +1379,9 @@ class WanNetworkTrainer:
                 except Exception as exc:
                     logger.warning(f"LayerSync setup failed: {exc}")
                     layer_sync_helper = None
+
+            if crepa_helper is not None:
+                self._maybe_add_crepa_params(optimizer, crepa_helper, args)
 
             # Run the main training loop using TrainingCore
             # Attach a self-correction manager instance if enabled so the core can call it
@@ -1396,6 +1443,7 @@ class WanNetworkTrainer:
                 repa_helper=repa_helper if sara_helper is None else None,
                 sara_helper=sara_helper,
                 layer_sync_helper=layer_sync_helper,
+                crepa_helper=crepa_helper,
                 dual_model_manager=dual_model_manager,
             )
 
@@ -1405,6 +1453,8 @@ class WanNetworkTrainer:
             repa_helper.remove_hooks()
         if "layer_sync_helper" in locals() and layer_sync_helper is not None:
             layer_sync_helper.remove_hooks()
+        if "crepa_helper" in locals() and crepa_helper is not None:
+            crepa_helper.remove_hooks()
 
         metadata["takenoko_training_finished_at"] = str(time.time())
 
@@ -1438,6 +1488,42 @@ class WanNetworkTrainer:
         """Log detailed information about the LoRA network and trainable parameters."""
         logger.info("🔍 Detailed LoRA Network Information:")
         logger.info("=" * 80)
+
+    @staticmethod
+    def _drop_vae_encoder_if_possible(vae: Any) -> None:
+        """Drop VAE encoder modules to save memory when only decoding latents."""
+        model = getattr(vae, "model", None)
+        if model is None:
+            return
+        encoder = getattr(model, "encoder", None)
+        if encoder is None:
+            return
+        try:
+            model.encoder = None
+            if hasattr(model, "conv1"):
+                model.conv1 = None
+            logger.info("CREPA: dropped VAE encoder modules to save memory.")
+        except Exception as exc:
+            logger.warning("CREPA: failed to drop VAE encoder modules: %s", exc)
+
+    @staticmethod
+    def _maybe_add_crepa_params(optimizer: Any, crepa_helper: Any, args: argparse.Namespace) -> None:
+        """Ensure CREPA projector parameters are included in the optimizer."""
+        if optimizer is None:
+            return
+        params = getattr(crepa_helper, "get_trainable_params", None)
+        if not callable(params):
+            return
+        trainable = list(params())
+        if not trainable:
+            return
+        existing = {id(p) for group in optimizer.param_groups for p in group.get("params", [])}
+        new_params = [p for p in trainable if id(p) not in existing]
+        if not new_params:
+            return
+        lr = float(getattr(args, "learning_rate", 1e-4)) * float(getattr(args, "input_lr_scale", 1.0))
+        optimizer.add_param_group({"params": new_params, "lr": lr})
+        logger.info("CREPA: added %d projector params to optimizer (lr=%.6f).", len(new_params), lr)
 
         # Count different types of parameters
         total_params = 0

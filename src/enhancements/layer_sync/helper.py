@@ -26,6 +26,8 @@ class LayerSyncHelper(nn.Module):
         self.hooks: List[torch.utils.hooks.RemovableHandle] = []
         self.activations: Dict[int, torch.Tensor] = {}
         self._warned_missing: bool = False
+        self.last_similarity: Optional[torch.Tensor] = None
+        self._pair_labels: List[str] = []
 
         self.pairs = self._collect_pairs()
         self.pair_weights = self._collect_pair_weights()
@@ -91,6 +93,14 @@ class LayerSyncHelper(nn.Module):
             raise ValueError("LayerSyncHelper could not find transformer blocks to hook")
         return list(blocks), len(blocks)
 
+    @staticmethod
+    def _resolve_block_index(idx: int, num_blocks: int) -> Optional[int]:
+        candidates = [idx - 1, idx]
+        for cand in candidates:
+            if 0 <= cand < num_blocks:
+                return cand + 1
+        return None
+
     def _make_hook(self, block_idx: int):
         def hook(_module, _inputs, output):
             tensor = output
@@ -122,15 +132,36 @@ class LayerSyncHelper(nn.Module):
             except Exception:
                 pass
 
-        required_indices = sorted({idx for pair in self.pairs for idx in pair})
-        for idx in required_indices:
-            if idx < 1 or idx > num_blocks:
+        resolved_pairs: List[Tuple[int, int]] = []
+        resolved_weights: List[float] = []
+        resolved_indices: Dict[int, int] = {}
+        for pair_idx, (src_idx, tgt_idx) in enumerate(self.pairs):
+            resolved_src = self._resolve_block_index(src_idx, num_blocks)
+            resolved_tgt = self._resolve_block_index(tgt_idx, num_blocks)
+            if resolved_src is None or resolved_tgt is None:
                 logger.warning(
-                    "LayerSync: requested block %s outside available range [1, %s]",
-                    idx,
-                    num_blocks,
+                    "LayerSync: requested blocks %s->%s outside available range [0, %s]",
+                    src_idx,
+                    tgt_idx,
+                    num_blocks - 1,
                 )
                 continue
+            resolved_pairs.append((resolved_src, resolved_tgt))
+            weight = (
+                self.pair_weights[pair_idx]
+                if pair_idx < len(self.pair_weights)
+                else 1.0
+            )
+            resolved_weights.append(weight)
+            resolved_indices[src_idx] = resolved_src
+            resolved_indices[tgt_idx] = resolved_tgt
+
+        self.pairs = resolved_pairs
+        self.pair_weights = resolved_weights if resolved_weights else self.pair_weights
+        self._pair_labels = [f"{src}->{tgt}" for src, tgt in self.pairs]
+
+        required_indices = sorted({idx for pair in self.pairs for idx in pair})
+        for idx in required_indices:
             handle = blocks[idx - 1].register_forward_hook(self._make_hook(idx))
             self.hooks.append(handle)
 
@@ -138,7 +169,7 @@ class LayerSyncHelper(nn.Module):
             logger.info(
                 "LayerSync: attached hooks for %s pairs (%s)",
                 len(self.pairs),
-                ", ".join(f"{src}->{tgt}" for src, tgt in self.pairs),
+                ", ".join(self._pair_labels),
             )
         else:
             logger.warning("LayerSync: no valid hooks were attached; feature disabled")
@@ -151,6 +182,7 @@ class LayerSyncHelper(nn.Module):
                 pass
         self.hooks = []
         self.activations.clear()
+        self.last_similarity = None
 
     def _normalize(self, tensor: torch.Tensor) -> torch.Tensor:
         if tensor.dim() < 3:
@@ -158,18 +190,12 @@ class LayerSyncHelper(nn.Module):
         tensor = tensor.flatten(1, -2) if tensor.dim() > 3 else tensor
         return F.normalize(tensor, dim=-1)
 
-    def _pair_loss(self, src: torch.Tensor, tgt: torch.Tensor) -> torch.Tensor:
-        if src.shape[1] != tgt.shape[1]:
-            min_tokens = min(src.shape[1], tgt.shape[1])
-            src = src[:, :min_tokens]
-            tgt = tgt[:, :min_tokens]
-        return -1.0 * (src * tgt).sum(dim=-1).mean()
-
     def compute_loss(self) -> Optional[torch.Tensor]:
         if not self.hooks:
             return None
 
         losses: List[torch.Tensor] = []
+        similarities: List[torch.Tensor] = []
         missing_pairs: List[Tuple[int, int]] = []
 
         for pair_idx, (src_idx, tgt_idx) in enumerate(self.pairs):
@@ -185,7 +211,14 @@ class LayerSyncHelper(nn.Module):
                 tgt_norm = tgt_norm.detach()
 
             weight = self.pair_weights[pair_idx] if pair_idx < len(self.pair_weights) else 1.0
-            losses.append(weight * self._pair_loss(src_norm, tgt_norm))
+            if src_norm.shape[1] != tgt_norm.shape[1]:
+                min_tokens = min(src_norm.shape[1], tgt_norm.shape[1])
+                src_norm = src_norm[:, :min_tokens]
+                tgt_norm = tgt_norm[:, :min_tokens]
+
+            similarity = (src_norm * tgt_norm).sum(dim=-1).mean()
+            losses.append(weight * (-1.0 * similarity))
+            similarities.append(weight * similarity)
 
         self.activations.clear()
 
@@ -201,4 +234,6 @@ class LayerSyncHelper(nn.Module):
 
         total_weight = sum(self.pair_weights) if self.pair_weights else float(len(losses))
         total_weight = total_weight if total_weight > 0 else float(len(losses))
-        return torch.stack(losses).sum() / total_weight
+        total_loss = torch.stack(losses).sum() / total_weight
+        self.last_similarity = torch.stack(similarities).sum() / total_weight
+        return total_loss

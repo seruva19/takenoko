@@ -11,7 +11,7 @@ import math
 import os
 import random
 from multiprocessing import Value
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 import torch
 from tqdm import tqdm
 from accelerate.utils import set_seed
@@ -624,7 +624,12 @@ class WanFinetuneTrainer:
         transformer: torch.nn.Module,
         batch: Dict[str, torch.Tensor],
         text_encoder: Optional[torch.nn.Module] = None,
-    ) -> torch.Tensor:
+        repa_helper: Optional[Any] = None,
+        sara_helper: Optional[Any] = None,
+        layer_sync_helper: Optional[Any] = None,
+        crepa_helper: Optional[Any] = None,
+        vae: Optional[Any] = None,
+    ) -> Any:
         """
         Forward pass using transformer DIRECTLY.
         This is full fine-tuning where the transformer itself is trained.
@@ -683,7 +688,7 @@ class WanFinetuneTrainer:
 
         # Use TrainingCore's call_dit method
         with accelerator.autocast():
-            model_pred, target, _ = self.training_core.call_dit(
+            model_pred, target, intermediate_z = self.training_core.call_dit(
                 args,
                 accelerator,
                 transformer,
@@ -695,12 +700,8 @@ class WanFinetuneTrainer:
                 transformer.dtype,
             )
 
-        # Loss computation with weighting
-        loss = torch.nn.functional.mse_loss(
-            model_pred.to(transformer.dtype), target, reduction="none"
-        )
-
-        # Apply loss weighting if configured (critical for training quality)
+        # Loss computation with weighting (reuse centralized loss computer)
+        weighting = None
         weighting_scheme = getattr(args, "weighting_scheme", None)
         if weighting_scheme:
             try:
@@ -713,14 +714,76 @@ class WanFinetuneTrainer:
                     device,
                     transformer.dtype,
                 )
-                if weighting is not None:
-                    loss = loss * weighting
             except ImportError:
                 logger.warning("Loss weighting not available, using uniform weighting")
 
-        loss = loss.mean()  # mean loss over all elements in batch
+        loss_components = self.training_core.loss_computer.compute_training_loss(
+            args=args,
+            accelerator=accelerator,
+            latents=latents,
+            noise=noise,
+            noisy_model_input=noisy_model_input,
+            timesteps=timesteps,
+            network_dtype=transformer.dtype,
+            model_pred=model_pred,
+            target=target,
+            weighting=weighting,
+            batch=batch,
+            intermediate_z=intermediate_z,
+            vae=vae,
+            transformer=transformer,
+            network=transformer,
+            control_signal_processor=None,
+            repa_helper=repa_helper if sara_helper is None else None,
+            sara_helper=sara_helper,
+            layer_sync_helper=layer_sync_helper,
+            crepa_helper=crepa_helper,
+            raft=None,
+            warp_fn=None,
+            adaptive_manager=None,
+            transition_loss_context=None,
+            noise_scheduler=noise_scheduler,
+        )
 
-        return loss
+        return loss_components
+
+    @staticmethod
+    def _drop_vae_encoder_if_possible(vae: Any) -> None:
+        """Drop VAE encoder modules to save memory when only decoding latents."""
+        if vae is None:
+            return
+        model = getattr(vae, "model", None)
+        if model is None:
+            return
+        encoder = getattr(model, "encoder", None)
+        if encoder is None:
+            return
+        try:
+            model.encoder = None
+            if hasattr(model, "conv1"):
+                model.conv1 = None
+            logger.info("CREPA: dropped VAE encoder modules to save memory.")
+        except Exception as exc:
+            logger.warning("CREPA: failed to drop VAE encoder modules: %s", exc)
+
+    @staticmethod
+    def _maybe_add_crepa_params(optimizer: Any, crepa_helper: Any, args: argparse.Namespace) -> None:
+        """Ensure CREPA projector parameters are included in the optimizer."""
+        if optimizer is None:
+            return
+        params = getattr(crepa_helper, "get_trainable_params", None)
+        if not callable(params):
+            return
+        trainable = list(params())
+        if not trainable:
+            return
+        existing = {id(p) for group in optimizer.param_groups for p in group.get("params", [])}
+        new_params = [p for p in trainable if id(p) not in existing]
+        if not new_params:
+            return
+        lr = float(getattr(args, "learning_rate", 1e-4)) * float(getattr(args, "input_lr_scale", 1.0))
+        optimizer.add_param_group({"params": new_params, "lr": lr})
+        logger.info("CREPA: added %d projector params to optimizer (lr=%.6f).", len(new_params), lr)
 
     def train(self, args: argparse.Namespace) -> None:
         """
@@ -1057,6 +1120,18 @@ class WanFinetuneTrainer:
                 logger.warning(f"⚠️  Failed to load VAE: {e}")
                 vae = None
 
+        if getattr(args, "crepa_drop_vae_encoder", False):
+            self._drop_vae_encoder_if_possible(vae)
+
+        if (
+            getattr(args, "crepa_enabled", False)
+            and not getattr(args, "crepa_use_backbone_features", False)
+            and vae is None
+        ):
+            raise ValueError(
+                "CREPA requires a VAE for latent decoding unless crepa_use_backbone_features is enabled."
+            )
+
         # Initialize sampling manager (but postpone T5 preprocessing until after config setup)
         if getattr(args, "sample_every_n_steps", None) or getattr(
             args, "sample_every_n_epochs", None
@@ -1226,13 +1301,50 @@ class WanFinetuneTrainer:
             # Initialize weight dynamics analysis baseline
             self.weight_analyzer.initialize_baseline_statistics(training_model)
 
+        # Initialize CREPA helper if enabled
+        crepa_helper = None
+        if getattr(args, "crepa_enabled", False):
+            try:
+                from enhancements.repa.crepa_helper import CrepaHelper
+
+                logger.info("CREPA is enabled. Setting up the helper module.")
+                crepa_helper = CrepaHelper(transformer, args, accelerator)
+                crepa_helper.setup_hooks()
+                crepa_helper = accelerator.prepare(crepa_helper)
+            except Exception as exc:
+                logger.warning(f"CREPA setup failed: {exc}")
+                crepa_helper = None
+
+        # Initialize LayerSync helper if enabled
+        layer_sync_helper = None
+        if getattr(args, "enable_layer_sync", False):
+            try:
+                from enhancements.layer_sync.helper import LayerSyncHelper
+
+                logger.info("LayerSync is enabled. Setting up the helper module.")
+                layer_sync_helper = LayerSyncHelper(transformer, args)
+                layer_sync_helper.setup_hooks()
+                layer_sync_helper = accelerator.prepare(layer_sync_helper)
+            except Exception as exc:
+                logger.warning(f"LayerSync setup failed: {exc}")
+                layer_sync_helper = None
+
         # Initialize REPA/iREPA helper if enabled
         repa_helper = None
         if getattr(args, "enable_irepa", False):
             try:
                 from enhancements.repa.enhanced_repa_helper import EnhancedRepaHelper
 
-                repa_helper = EnhancedRepaHelper(transformer, args)
+                original_crepa_enabled = getattr(args, "crepa_enabled", False)
+                if crepa_helper is not None:
+                    args.crepa_enabled = False
+                try:
+                    repa_helper = EnhancedRepaHelper(transformer, args)
+                finally:
+                    if crepa_helper is not None:
+                        args.crepa_enabled = original_crepa_enabled
+                repa_helper.setup_hooks()
+                repa_helper = accelerator.prepare(repa_helper)
                 logger.info("iREPA helper initialized (conv projection + spatial norm)")
             except Exception as e:
                 logger.warning(f"Failed to initialize iREPA helper: {e}")
@@ -1240,16 +1352,30 @@ class WanFinetuneTrainer:
             try:
                 from enhancements.repa.enhanced_repa_helper import EnhancedRepaHelper
 
-                repa_helper = EnhancedRepaHelper(transformer, args)
+                original_crepa_enabled = getattr(args, "crepa_enabled", False)
+                if crepa_helper is not None:
+                    args.crepa_enabled = False
+                try:
+                    repa_helper = EnhancedRepaHelper(transformer, args)
+                finally:
+                    if crepa_helper is not None:
+                        args.crepa_enabled = original_crepa_enabled
+                repa_helper.setup_hooks()
+                repa_helper = accelerator.prepare(repa_helper)
                 logger.info("Enhanced REPA helper initialized")
             except Exception as e:
                 logger.warning(f"Failed to initialize enhanced REPA helper: {e}")
                 # Fallback to basic REPA if enhanced fails
                 try:
                     repa_helper = RepaHelper(transformer, args)
+                    repa_helper.setup_hooks()
+                    repa_helper = accelerator.prepare(repa_helper)
                     logger.info("Basic REPA helper initialized as fallback")
                 except Exception as e2:
                     logger.warning(f"Failed to initialize basic REPA helper: {e2}")
+
+        if crepa_helper is not None:
+            self._maybe_add_crepa_params(optimizer, crepa_helper, args)
 
         # Set training mode and ensure proper device placement
         # Always use training mode for fine-tuning to ensure weight updates
@@ -1532,9 +1658,19 @@ class WanFinetuneTrainer:
                     self._timestep_logging_initialized = True
                 with accelerator.accumulate(training_model):
                     # Forward pass using the transformer DIRECTLY
-                    loss = self.forward_pass(
-                        args, accelerator, training_model, batch, text_encoder
+                    loss_components = self.forward_pass(
+                        args,
+                        accelerator,
+                        training_model,
+                        batch,
+                        text_encoder,
+                        repa_helper=repa_helper,
+                        sara_helper=None,
+                        layer_sync_helper=layer_sync_helper,
+                        crepa_helper=crepa_helper,
+                        vae=vae,
                     )
+                    loss = loss_components.total_loss
 
                     # Backward pass
                     accelerator.backward(loss)
@@ -1599,6 +1735,26 @@ class WanFinetuneTrainer:
                             "epoch": epoch + 1,
                             "global_step": global_step,
                         }
+                        if getattr(loss_components, "repa_loss", None) is not None:
+                            logs["loss/repa"] = float(loss_components.repa_loss.item())
+                        if getattr(loss_components, "layer_sync_loss", None) is not None:
+                            logs["loss/layer_sync"] = float(
+                                loss_components.layer_sync_loss.item()
+                            )
+                            logs["layersync_loss"] = float(
+                                loss_components.layer_sync_loss.item()
+                            )
+                        if getattr(loss_components, "layer_sync_similarity", None) is not None:
+                            logs["layersync_similarity"] = float(
+                                loss_components.layer_sync_similarity.item()
+                            )
+                        if getattr(loss_components, "crepa_loss", None) is not None:
+                            logs["loss/crepa"] = float(loss_components.crepa_loss.item())
+                            logs["crepa_loss"] = float(loss_components.crepa_loss.item())
+                        if getattr(loss_components, "crepa_similarity", None) is not None:
+                            logs["crepa_similarity"] = float(
+                                loss_components.crepa_similarity.item()
+                            )
 
                         # Add gradient norm if available
                         if (
@@ -1885,6 +2041,12 @@ class WanFinetuneTrainer:
                         f.write(str(epoch + 1))
 
         # Close progress bar
+        if "repa_helper" in locals() and repa_helper is not None:
+            repa_helper.remove_hooks()
+        if "layer_sync_helper" in locals() and layer_sync_helper is not None:
+            layer_sync_helper.remove_hooks()
+        if "crepa_helper" in locals() and crepa_helper is not None:
+            crepa_helper.remove_hooks()
         progress_bar.close()
 
         # Final save using checkpoint manager format

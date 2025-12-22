@@ -1145,14 +1145,15 @@ repa_spatial_align = true
 # Enable LayerSync self-alignment regularizer.
 enable_layer_sync = false
 
-# Weight applied to the LayerSync projection loss.
+# Weight applied to the LayerSync projection loss (defaults to 0.2 when enabled).
+# Compatibility: layersync_enabled/layersync_lambda are also accepted.
 layer_sync_weight = 0.2
 
-# Primary block pair for alignment (1-indexed, source < target).
+# Primary block pair for alignment (1-indexed, source < target; 0-based values accepted).
 # Recommended: early semantic block guides a deeper one.
 layer_sync_source_block = 8
 
-# Target block for alignment (1-indexed, source < target).
+# Target block for alignment (1-indexed, source < target; 0-based values accepted).
 layer_sync_target_block = 16
 
 # Optional list of additional (source, target) pairs, each 1-indexed with source < target.
@@ -1176,15 +1177,47 @@ layer_sync_normalization = "cosine"
 # Recommended: true for video fine-tuning, false for image training
 crepa_enabled = false
 
-# Adjacency range for temporal alignment (default: 1 => neighbors at t-1 and t+1)
-# Higher values capture longer-term dependencies but increase compute cost
-crepa_adjacency = 1
+# Transformer block index to align from (1-indexed; 0-based values are accepted for compatibility).
+# Required when crepa_enabled = true.
+crepa_block_index = 8
 
-# Temperature for temporal weighting (default: 1.0)
-# Controls how quickly alignment weight decays with distance
-# Lower values (e.g., 0.5) focus strongly on immediate neighbors
-# Higher values (e.g., 2.0) distribute weight more evenly
-crepa_temperature = 1.0
+# Optional teacher block index for backbone-feature mode (1-indexed; 0-based values accepted).
+# If unset, defaults to crepa_block_index.
+crepa_teacher_block_index = 16
+
+# Weight for CREPA loss (default: 0.5). Set > 0 when enabled.
+crepa_lambda = 0.5
+
+# Adjacency range for temporal alignment (default: 1 => neighbors at t-1 and t+1).
+# Higher values capture longer-term dependencies but increase compute cost.
+crepa_adjacent_distance = 1
+
+# Temperature for temporal weighting (default: 1.0).
+# Controls how quickly alignment weight decays with distance.
+crepa_adjacent_tau = 1.0
+
+# Optional cumulative neighbors mode: use all offsets 1..distance instead of just +/- distance.
+crepa_cumulative_neighbors = false
+
+# Pretrained encoder to use for CREPA feature extraction (DINOv2 torch hub).
+# Example: "dinov2_vitg14", "dinov2_vitb14", "dinov2_vits14".
+crepa_encoder = "dinov2_vitg14"
+
+# Input image size for CREPA encoder (default: 518 for DINOv2).
+crepa_encoder_image_size = 518
+
+# Spatial alignment strategy for CREPA:
+# - true: interpolate patch tokens to align spatial grids
+# - false: pool to global tokens when counts differ
+crepa_spatial_align = true
+
+# Enable backbone feature alignment instead of external encoder (saves VRAM).
+# When true, CREPA aligns one transformer block to another and skips encoder loading.
+crepa_use_backbone_features = false
+
+# Drop the VAE encoder after loading to save memory when only decoding latents.
+# Only safe if you never call VAE.encode during training (CREPA decode path is OK).
+crepa_drop_vae_encoder = false
 
 # Normalize CREPA loss by number of frames (default: true)
 # - true: Mean over frames (consistent loss scale across video lengths)

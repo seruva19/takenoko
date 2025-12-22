@@ -137,8 +137,18 @@ def collect_and_log_training_metrics(
         logs["loss/optical_flow"] = float(loss_components.optical_flow_loss.item())
     if getattr(loss_components, "layer_sync_loss", None) is not None:
         logs["loss/layer_sync"] = float(loss_components.layer_sync_loss.item())
+        logs["layersync_loss"] = float(loss_components.layer_sync_loss.item())
+    if getattr(loss_components, "layer_sync_similarity", None) is not None:
+        logs["layersync_similarity"] = float(
+            loss_components.layer_sync_similarity.item()
+        )
     if loss_components.repa_loss is not None:
         logs["loss/repa"] = float(loss_components.repa_loss.item())
+    if getattr(loss_components, "crepa_loss", None) is not None:
+        logs["loss/crepa"] = float(loss_components.crepa_loss.item())
+        logs["crepa_loss"] = float(loss_components.crepa_loss.item())
+    if getattr(loss_components, "crepa_similarity", None) is not None:
+        logs["crepa_similarity"] = float(loss_components.crepa_similarity.item())
     if getattr(loss_components, "wanvideo_cfm_loss", None) is not None:
         logs["loss/wanvideo_cfm"] = float(
             loss_components.wanvideo_cfm_loss.item()

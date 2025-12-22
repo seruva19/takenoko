@@ -78,8 +78,14 @@ class LossComponents:
         The optical flow consistency loss, if enabled.
     layer_sync_loss: Optional[torch.Tensor]
         The LayerSync self-alignment projection loss, if enabled.
+    layer_sync_similarity: Optional[torch.Tensor]
+        The LayerSync mean cosine similarity between source and target blocks.
     repa_loss: Optional[torch.Tensor]
         The REPA alignment loss, if enabled.
+    crepa_loss: Optional[torch.Tensor]
+        The CREPA cross-frame alignment loss, if enabled.
+    crepa_similarity: Optional[torch.Tensor]
+        The CREPA mean similarity across frames.
     sara_loss: Optional[torch.Tensor]
         The SARA loss component, if enabled.
     wanvideo_cfm_loss: Optional[torch.Tensor]
@@ -99,7 +105,10 @@ class LossComponents:
     dispersive_loss: Optional[torch.Tensor] = None
     optical_flow_loss: Optional[torch.Tensor] = None
     layer_sync_loss: Optional[torch.Tensor] = None
+    layer_sync_similarity: Optional[torch.Tensor] = None
     repa_loss: Optional[torch.Tensor] = None
+    crepa_loss: Optional[torch.Tensor] = None
+    crepa_similarity: Optional[torch.Tensor] = None
     sara_loss: Optional[torch.Tensor] = None
     wanvideo_cfm_loss: Optional[torch.Tensor] = None
     memflow_guidance_loss: Optional[torch.Tensor] = None
@@ -379,6 +388,7 @@ class TrainingLossComputer:
         repa_helper: Optional[Any] = None,
         sara_helper: Optional[Any] = None,
         layer_sync_helper: Optional[Any] = None,
+        crepa_helper: Optional[Any] = None,
         raft: Optional[Any] = None,
         warp_fn: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
         adaptive_manager: Optional[Any] = None,
@@ -871,8 +881,30 @@ class TrainingLossComputer:
             except Exception as e:
                 logger.warning(f"REPA loss computation failed: {e}")
 
+        # ---- Optional CREPA Loss ----
+        crepa_loss_value: Optional[torch.Tensor] = None
+        crepa_similarity_value: Optional[torch.Tensor] = None
+        if crepa_helper is not None and getattr(args, "crepa_enabled", False):
+            try:
+                clean_pixels = batch.get("pixels")
+                crepa_loss, crepa_logs = crepa_helper.compute_loss(
+                    clean_pixels=clean_pixels,
+                    latents=latents,
+                    vae=vae,
+                )
+                if crepa_loss is not None:
+                    loss = loss + crepa_loss
+                    crepa_loss_value = crepa_loss.detach()
+                if crepa_logs and "crepa_similarity" in crepa_logs:
+                    crepa_similarity_value = torch.tensor(
+                        crepa_logs["crepa_similarity"], device=loss.device
+                    )
+            except Exception as e:
+                logger.warning(f"CREPA loss computation failed: {e}")
+
         # ---- Optional LayerSync Loss ----
         layer_sync_loss_value: Optional[torch.Tensor] = None
+        layer_sync_similarity_value: Optional[torch.Tensor] = None
         layer_sync_weight = float(getattr(args, "layer_sync_weight", 0.0))
         if (
             layer_sync_helper is not None
@@ -884,6 +916,9 @@ class TrainingLossComputer:
                 if ls_val is not None:
                     loss = loss + layer_sync_weight * ls_val
                     layer_sync_loss_value = ls_val.detach()
+                ls_sim = getattr(layer_sync_helper, "last_similarity", None)
+                if ls_sim is not None:
+                    layer_sync_similarity_value = ls_sim.detach()
             except Exception as e:
                 logger.warning(f"LayerSync loss computation failed: {e}")
 
@@ -1155,7 +1190,10 @@ class TrainingLossComputer:
             dispersive_loss=dispersive_loss_value,
             optical_flow_loss=optical_flow_loss_value,
             layer_sync_loss=layer_sync_loss_value,
+            layer_sync_similarity=layer_sync_similarity_value,
             repa_loss=repa_loss_value,
+            crepa_loss=crepa_loss_value,
+            crepa_similarity=crepa_similarity_value,
             sara_loss=sara_loss_value,
             wanvideo_cfm_loss=wanvideo_cfm_loss_value,
             ortho_reg_p=ortho_p_val,

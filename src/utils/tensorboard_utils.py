@@ -56,7 +56,12 @@ def get_default_metric_descriptions() -> Dict[str, str]:
         "train/dispersive_loss": "InfoNCE-style dispersive loss for representation diversity (lower is better).",
         "train/optical_flow_loss": "Temporal consistency loss using optical flow (lower is better).",
         "train/layer_sync_loss": "LayerSync self-alignment loss between transformer blocks (lower is better).",
+        "layersync_similarity": "Mean cosine similarity between LayerSync source/target blocks (higher is better).",
+        "layersync_loss": "LayerSync self-alignment loss between transformer blocks (lower is better).",
         "train/repa_loss": "REPA alignment loss for visual quality (lower is better).",
+        "crepa_loss": "CREPA cross-frame alignment loss for video consistency (lower is better).",
+        "crepa_similarity": "Mean CREPA similarity across frames (higher is better).",
+        "loss/crepa": "CREPA cross-frame alignment loss for video consistency (lower is better).",
         # Validation metrics - velocity prediction
         "val/velocity_loss_avg": "Average velocity loss across validation timesteps (lower is better).",
         "val/velocity_loss_avg_weighted": "Sample-weighted average velocity loss across all validation data (lower is better).",

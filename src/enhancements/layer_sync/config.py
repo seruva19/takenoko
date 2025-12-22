@@ -10,27 +10,45 @@ def parse_layer_sync_config(config: Any, args: Any, logger: logging.Logger) -> N
     and safety checks used by the main config parser.
     """
     try:
+        args.enable_layer_sync = bool(
+            config.get("enable_layer_sync", config.get("layersync_enabled", False))
+        )
+        weight_raw = config.get("layer_sync_weight", config.get("layersync_lambda", None))
+        if weight_raw is None:
+            args.layer_sync_weight = 0.2 if args.enable_layer_sync else 0.0
+        else:
+            args.layer_sync_weight = float(weight_raw)
 
-        args.enable_layer_sync = bool(config.get("enable_layer_sync", False))
-        args.layer_sync_weight = float(config.get("layer_sync_weight", 0.2))
-        args.layer_sync_source_block = int(config.get("layer_sync_source_block", 8))
-        args.layer_sync_target_block = int(config.get("layer_sync_target_block", 16))
+        args.layer_sync_source_block = int(
+            config.get(
+                "layer_sync_source_block", config.get("layersync_student_block", 8)
+            )
+        )
+        target_raw = config.get(
+            "layer_sync_target_block", config.get("layersync_teacher_block", None)
+        )
+        if target_raw is None:
+            args.layer_sync_target_block = args.layer_sync_source_block
+        else:
+            args.layer_sync_target_block = int(target_raw)
         args.layer_sync_pairs = config.get("layer_sync_pairs", None)
         args.layer_sync_pair_weights = config.get("layer_sync_pair_weights", None)
         args.layer_sync_detach_guidance = bool(
-            config.get("layer_sync_detach_guidance", True)
+            config.get("layer_sync_detach_guidance", config.get("layersync_detach_guidance", True))
         )
         args.layer_sync_normalization = str(
-            config.get("layer_sync_normalization", "cosine")
+            config.get("layer_sync_normalization", config.get("layersync_normalization", "cosine"))
         ).lower()
 
         if args.layer_sync_weight < 0:
             raise ValueError("layer_sync_weight must be non-negative")
-        if args.layer_sync_source_block < 1 or args.layer_sync_target_block < 1:
-            raise ValueError("LayerSync block indices must be >= 1")
-        if args.layer_sync_source_block >= args.layer_sync_target_block:
+        if args.enable_layer_sync and args.layer_sync_weight <= 0:
+            raise ValueError("layer_sync_weight must be > 0 when LayerSync is enabled")
+        if args.layer_sync_source_block < 0 or args.layer_sync_target_block < 0:
+            raise ValueError("LayerSync block indices must be >= 0")
+        if args.layer_sync_source_block > args.layer_sync_target_block:
             raise ValueError(
-                "layer_sync_target_block must be greater than layer_sync_source_block"
+                "layer_sync_target_block must be >= layer_sync_source_block"
             )
 
         if args.layer_sync_pairs is not None:
@@ -47,9 +65,9 @@ def parse_layer_sync_config(config: Any, args: Any, logger: logging.Logger) -> N
                     and all(isinstance(v, (int, float)) for v in pair)
                 ):
                     src_block, tgt_block = int(pair[0]), int(pair[1])
-                    if src_block < 1 or tgt_block < 1:
+                    if src_block < 0 or tgt_block < 0:
                         raise ValueError(
-                            f"LayerSync pair values must be >=1, got {pair}"
+                            f"LayerSync pair values must be >=0, got {pair}"
                         )
                     if src_block >= tgt_block:
                         raise ValueError(
