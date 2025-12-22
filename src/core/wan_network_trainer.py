@@ -163,6 +163,12 @@ class WanNetworkTrainer:
                 f"Failed to initialize temporal consistency enhancement: {e}"
             )
 
+        # Initialize MemFlow guidance if available
+        try:
+            self.training_core.initialize_memflow_guidance(args)
+        except Exception as e:
+            logger.warning(f"Failed to initialize MemFlow guidance: {e}")
+
         # Initialize differential guidance enhancement if available
         try:
             self.training_core.initialize_differential_guidance(args)

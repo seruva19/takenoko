@@ -84,6 +84,8 @@ class LossComponents:
         The SARA loss component, if enabled.
     wanvideo_cfm_loss: Optional[torch.Tensor]
         WanVideo cross-batch CFM regularizer (if enabled).
+    memflow_guidance_loss: Optional[torch.Tensor]
+        MemFlow guidance auxiliary loss (if enabled).
     ortho_reg_p: Optional[torch.Tensor]
         The orthogonal regularization loss component for p, if enabled.
     ortho_reg_q: Optional[torch.Tensor]
@@ -100,6 +102,7 @@ class LossComponents:
     repa_loss: Optional[torch.Tensor] = None
     sara_loss: Optional[torch.Tensor] = None
     wanvideo_cfm_loss: Optional[torch.Tensor] = None
+    memflow_guidance_loss: Optional[torch.Tensor] = None
     ortho_reg_p: Optional[torch.Tensor] = None
     ortho_reg_q: Optional[torch.Tensor] = None
 

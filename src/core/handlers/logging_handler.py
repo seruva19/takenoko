@@ -143,6 +143,10 @@ def collect_and_log_training_metrics(
         logs["loss/wanvideo_cfm"] = float(
             loss_components.wanvideo_cfm_loss.item()
         )
+    if getattr(loss_components, "memflow_guidance_loss", None) is not None:
+        logs["loss/memflow_guidance"] = float(
+            loss_components.memflow_guidance_loss.item()
+        )
 
     # Optionally compute extra training metrics periodically
     try:

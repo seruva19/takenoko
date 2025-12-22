@@ -245,6 +245,22 @@ class ModelManager:
             except Exception as e:
                 logger.error(f"Failed to enable Sprint: {e}")
 
+        # Enable MemFlow guidance if requested (training-only)
+        if bool(getattr(args, "enable_memflow_guidance", False)):
+            try:
+                from enhancements.memflow_guidance.config import MemFlowGuidanceConfig
+                from enhancements.memflow_guidance.training_integration import (
+                    get_memflow_guidance_collector,
+                )
+
+                cfg = MemFlowGuidanceConfig.from_args(args)
+                transformer.enable_memflow_guidance(
+                    cfg, get_memflow_guidance_collector()
+                )
+                logger.info("MemFlow guidance enabled for Wan attention blocks")
+            except Exception as e:
+                logger.error(f"Failed to enable MemFlow guidance: {e}")
+
         # If dual-model training is disabled, return as-is
         enable_dual = bool(getattr(args, "enable_dual_model_training", False))
         if not enable_dual:

@@ -2349,6 +2349,37 @@ ctxmem_use_context_caching = true
 ctxmem_async_memory_updates = false
 
 # =============================================================================
+# MEMFLOW GUIDANCE SETTINGS
+# =============================================================================
+# Enable MemFlow-inspired rolling cache guidance loss during training.
+# guidance is applied as an auxiliary loss only.
+# Intended for video LoRA consistency; skip for image-only runs.
+enable_memflow_guidance = false
+
+# Weight for the guidance loss (0.0 disables even if enabled flag is true)
+# Recommended range: 0.01 to 0.10 for LoRA tuning
+memflow_guidance_weight = 0.05
+
+# Memory bank size in frames (how many historical frames to retain)
+# Must be >= 1. Higher values increase compute and memory in guidance path.
+memflow_guidance_bank_size = 3
+
+# Record interval in frames for bank updates (store every Nth frame)
+# Must be >= 1. Example: 3 means keep frames 0,3,6,...
+memflow_guidance_record_interval = 3
+
+# Local attention window size in frames for rolling cache (set -1 for global)
+# Must be -1 or >= 1. Smaller values emphasize short-term continuity.
+memflow_guidance_local_attn_size = 8
+
+# Top-k frame routing for bank selection (0 disables top-k filtering)
+# Must be >= 0. Example: 3 keeps the 3 most relevant bank frames.
+memflow_guidance_top_k = 3
+
+# Minimum number of frames required to apply guidance (skip shorter clips)
+memflow_guidance_min_frames = 2
+
+# =============================================================================
 # ⚠️ FVDM SETTINGS
 # =============================================================================
 

@@ -24,6 +24,13 @@ logger = get_logger(__name__, level=logging.INFO)
 from enhancements.temporal_consistency.training_integration import (
     enhance_loss_with_temporal_consistency,
 )
+from enhancements.memflow_guidance.training_integration import (
+    begin_memflow_guidance_step,
+    consume_memflow_guidance_loss,
+    end_memflow_guidance_step,
+    initialize_memflow_guidance_from_args,
+    suspend_memflow_guidance,
+)
 
 
 from enhancements.differential_guidance.training_integration import (
@@ -202,6 +209,9 @@ class TrainingCore:
         # Initialize differential guidance enhancement
         self.differential_guidance_integration = None
 
+        # MemFlow guidance configuration (training-only)
+        self.memflow_guidance_config = None
+
         # Weight EMA tracking (initialized when enabled)
         self.weight_ema: Optional[ExponentialMovingAverage] = None
         self.weight_ema_start_step: int = 0
@@ -297,6 +307,10 @@ class TrainingCore:
         self.temporal_consistency_integration = create_temporal_consistency_integration(
             args
         )
+
+    def initialize_memflow_guidance(self, args: argparse.Namespace) -> None:
+        """Initialize MemFlow guidance configuration if enabled."""
+        self.memflow_guidance_config = initialize_memflow_guidance_from_args(args)
 
     def initialize_differential_guidance(self, args: argparse.Namespace) -> None:
         """Initialize differential guidance enhancement if enabled."""
@@ -1112,6 +1126,12 @@ class TrainingCore:
                         )
 
                     with ivon_sampled_params(args, optimizer):
+                        if (
+                            self.memflow_guidance_config is not None
+                            and self.memflow_guidance_config.enable_memflow_guidance
+                        ):
+                            begin_memflow_guidance_step()
+
                         # Start forward pass timing
                         start_forward_pass_timing()
 
@@ -1249,21 +1269,22 @@ class TrainingCore:
                                     )
                                 )
                                 with local_ctx:
-                                    pred, _, _ = self.call_dit(
-                                        args,
-                                        accelerator,
-                                        active_transformer,
-                                        latents,
-                                        batch,
-                                        noise,
-                                        model_input,
-                                        step_tensor,
-                                        network_dtype,
-                                        control_signal_processor,
-                                        controlnet,
-                                        return_intermediate=False,
-                                        override_target=True,
-                                    )
+                                    with suspend_memflow_guidance():
+                                        pred, _, _ = self.call_dit(
+                                            args,
+                                            accelerator,
+                                            active_transformer,
+                                            latents,
+                                            batch,
+                                            noise,
+                                            model_input,
+                                            step_tensor,
+                                            network_dtype,
+                                            control_signal_processor,
+                                            controlnet,
+                                            return_intermediate=False,
+                                            override_target=True,
+                                        )
                                 return pred
 
                             (
@@ -1401,6 +1422,26 @@ class TrainingCore:
                                 adaptive_manager=self.adaptive_manager,
                                 transition_loss_context=transition_loss_context,
                             )
+
+                    memflow_loss = None
+                    if (
+                        self.memflow_guidance_config is not None
+                        and self.memflow_guidance_config.enable_memflow_guidance
+                    ):
+                        memflow_loss = consume_memflow_guidance_loss()
+                        if (
+                            memflow_loss is not None
+                            and self.memflow_guidance_config.memflow_guidance_weight > 0.0
+                        ):
+                            weighted = (
+                                memflow_loss
+                                * self.memflow_guidance_config.memflow_guidance_weight
+                            )
+                            loss_components.total_loss = (
+                                loss_components.total_loss + weighted
+                            )
+                            loss_components.memflow_guidance_loss = weighted.detach()
+                        end_memflow_guidance_step()
 
                     # Integrate context memory loss into total loss
                     self.context_memory_manager.integrate_context_loss(

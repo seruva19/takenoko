@@ -1014,6 +1014,7 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
         self.sprint_fusion: Optional[nn.Module] = None
         self._sprint_global_step: Optional[int] = None
         self._sprint_stage_name: Optional[str] = None
+        self._memflow_guidance_enabled: bool = False
 
     def set_router(self, router: TREADRouter, routes: list[dict]) -> None:
         """Enable TREAD routing for this model.
@@ -1068,6 +1069,20 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
         except ImportError:
             logger.error(
                 "Sprint module not found. Please ensure enhancements.sprint is installed."
+            )
+
+    def enable_memflow_guidance(self, config, collector) -> None:
+        """Enable MemFlow guidance on Wan attention modules (training-only)."""
+        try:
+            from enhancements.memflow_guidance.model_integration import (
+                enable_memflow_guidance,
+            )
+
+            enable_memflow_guidance(self, config, collector)
+            self._memflow_guidance_enabled = True
+        except ImportError:
+            logger.error(
+                "MemFlow guidance module not found. Please ensure enhancements.memflow_guidance is installed."
             )
 
     @property

@@ -1369,6 +1369,16 @@ def create_args_from_config(
         # Sprint module not available, set defaults
         args.enable_sprint = False
 
+    # MemFlow guidance configuration (parsed by MemFlow module)
+    try:
+        from enhancements.memflow_guidance.config_parser import (
+            parse_memflow_guidance_config,
+        )
+
+        parse_memflow_guidance_config(config, args)
+    except ImportError:
+        args.enable_memflow_guidance = False
+
     # Masked Training Configuration
     args.use_masked_training_with_prior = config.get(
         "use_masked_training_with_prior", False
