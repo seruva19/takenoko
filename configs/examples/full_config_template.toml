@@ -323,7 +323,8 @@ lr_scheduler_args = ''
 # =============================================================================
 
 # Network module to train: "networks.lora_wan", "networks.control_lora_wan", "networks.reward_lora", "networks.vae_wan",
-# "lycoris.kohya", "networks.t_lora", "networks.moc_lora", "networks.singlora_wan", "networks.wan_finetune", "networks.slider_lora_wan"
+# "lycoris.kohya", "networks.t_lora", "networks.moc_lora", "networks.singlora_wan", "networks.wan_finetune",
+# "networks.slider_lora_wan", "networks.relora_wan"
 # The module defines trainable adapters and is imported dynamically by the trainer.
 network_module = "networks.lora_wan"
 
@@ -446,6 +447,41 @@ network_alpha = 32
 # This applies to regularization datasets (is_reg=true) vs main dataset
 # NOT related to masked training's "masked_prior_preservation_weight"
 prior_loss_weight = 1.0
+
+# =============================================================================
+# ⚠️ RELORA TRAINING SETTINGS
+# =============================================================================
+
+# ReLoRA (periodic LoRA merge-and-reinit) is activated when network_module = "networks.relora_wan".
+# ReLoRA requires lr_scheduler_type = "per_cycle_cosine" with cycle_steps=relora_cycle_length and warmup_steps=relora_restart_warmup_steps.
+# Exactly one of relora_reset_optimizer_on_relora, relora_optimizer_random_pruning, relora_optimizer_magnitude_pruning must be enabled when relora_cycle_length > 0.
+
+# merge-and-reinit frequency in update steps (0 disables) (int >= 0)
+relora_interval = 5000
+
+# optimizer-reset frequency in update steps (0 disables) (int >= 0)
+relora_cycle_length = 5000
+
+# delay ReLoRA until this update step (int >= 0)
+relora_start_step = 0
+
+# offset applied to update step before modulo checks (int >= 0)
+relora_adjust_step = 0
+
+# warmup length to align with cycle restarts (int >= 0)
+relora_restart_warmup_steps = 100
+
+# reset optimizer states via high-ratio pruning (bool)
+relora_reset_optimizer_on_relora = true
+
+# random pruning ratio for optimizer state (float in [0,1])
+relora_optimizer_random_pruning = 0.0
+
+# magnitude pruning ratio for optimizer state (float in [0,1])
+relora_optimizer_magnitude_pruning = 0.0
+
+# optimizer state tensors to reset (list of strings)
+relora_optimizer_state_keys = ["exp_avg", "exp_avg_sq"]
 
 # =============================================================================
 # ⚠️ SLIDER TRAINING SETTINGS

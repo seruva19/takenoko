@@ -10,6 +10,7 @@ logger = get_logger(__name__, level=logging.INFO)
 from dataset.config_utils import (
     validate_dataset_config,
 )
+from configs.relora_config import apply_relora_config
 
 
 def create_args_from_config(
@@ -439,6 +440,8 @@ def create_args_from_config(
                     args.ggpo_beta = float(v)
                 except Exception:
                     args.ggpo_beta = None
+
+    apply_relora_config(args, config, logger)
     args.training_comment = config.get("training_comment", "trained with Takenoko")
     args.dim_from_weights = config.get("dim_from_weights", False)
     args.lycoris = config.get("lycoris", False)

@@ -102,4 +102,4 @@ Keep in mind that work on some features is not yet complete due to time and hard
 | [Improved Variational Online Newton (IVON)](https://github.com/team-approx-bayes/ivon) | repo | - IVON implementation | [team-approx-bayes](https://github.com/team-approx-bayes) | GPL-3.0 | <sub>with code from [PR](https://github.com/team-approx-bayes/ivon/pull/7) by [rockerBOO](https://github.com/rockerBOO)</sub> |
 | [MemFlow](https://github.com/KlingTeam/MemFlow) | repo | - Memory bank<br>- Sparse memory activation guidance | [KlingTeam](https://github.com/KlingTeam) | Apache 2.0 | <sub>see also [paper](https://arxiv.org/abs/2512.14699)</sub> |
 | [HASTE](https://github.com/NUS-HPC-AI-Lab/HASTE) | repo | - Holistic alignment loss<br>- Semantic anchor feature projections<br>- Attention alignment with teacher offset<br>- Stage‑wise termination | [NUS-HPC-AI-Lab](https://github.com/NUS-HPC-AI-Lab) | Apache 2.0 | <sub>see also [paper](https://arxiv.org/abs/2505.16792)</sub> |
-
+| [relora](https://github.com/Guitaricet/relora) | repo | - ReLoRA pipeline | [Guitaricet](https://github.com/Guitaricet) | Apache 2.0 | <sub>see also [paper](https://arxiv.org/abs/2307.05695)</sub> |

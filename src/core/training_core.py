@@ -114,6 +114,7 @@ from core.handlers.saving_handler import (
 )
 from core.handlers.adaptive_handler import handle_adaptive_timestep_sampling
 from core.handlers.self_correction_handler import handle_self_correction_update
+from core.handlers.relora_handler import handle_relora_reset
 from core.handlers.vram_validation_handler import (
     handle_vram_validation_if_enabled,
     handle_windows_shared_memory_check,
@@ -1653,6 +1654,14 @@ class TrainingCore:
                         raise e
                     # End optimizer step timing
                     end_optimizer_step_timing()
+
+                    handle_relora_reset(
+                        args,
+                        accelerator,
+                        network,
+                        optimizer,
+                        global_step,
+                    )
 
                     # Trigger after_optimizer_step junction event
                     trigger_event(

@@ -342,6 +342,7 @@ class CheckpointManager:
                 return
 
             is_control_lora = getattr(args, "enable_control_lora", False)
+            is_relora = getattr(args, "network_module", "") == "networks.relora_wan"
 
             if is_control_lora:
                 logger.info(
@@ -450,6 +451,44 @@ class CheckpointManager:
                 )
                 return
 
+            if is_relora:
+                logger.info("🔧 ReLoRA save: Keeping transformer and LoRA network")
+                relora_metadata_path = os.path.join(output_dir, "relora_metadata.json")
+                relora_metadata = {
+                    "enabled": True,
+                    "relora_interval": getattr(args, "relora_interval", 0),
+                    "relora_cycle_length": getattr(args, "relora_cycle_length", 0),
+                    "relora_start_step": getattr(args, "relora_start_step", 0),
+                    "relora_adjust_step": getattr(args, "relora_adjust_step", 0),
+                    "relora_restart_warmup_steps": getattr(
+                        args, "relora_restart_warmup_steps", 0
+                    ),
+                    "relora_reset_optimizer_on_relora": getattr(
+                        args, "relora_reset_optimizer_on_relora", True
+                    ),
+                    "relora_optimizer_random_pruning": getattr(
+                        args, "relora_optimizer_random_pruning", 0.0
+                    ),
+                    "relora_optimizer_magnitude_pruning": getattr(
+                        args, "relora_optimizer_magnitude_pruning", 0.0
+                    ),
+                    "relora_optimizer_state_keys": getattr(
+                        args,
+                        "relora_optimizer_state_keys",
+                        ["exp_avg", "exp_avg_sq"],
+                    ),
+                    "network_module": getattr(args, "network_module", ""),
+                }
+                try:
+                    with open(relora_metadata_path, "w") as f:
+                        json.dump(relora_metadata, f, indent=2)
+                    logger.info(
+                        "🔧 Saved ReLoRA metadata to: %s", relora_metadata_path
+                    )
+                except Exception as e:
+                    logger.warning("🔧 Failed to save ReLoRA metadata: %s", e)
+                return
+
             # Original behaviour (LoRA-only checkpoint) for regular LoRA
             logger.info("🔧 Regular LoRA save: Keeping only LoRA network")
             remove_indices = []
@@ -509,6 +548,7 @@ class CheckpointManager:
 
             # Handle control LoRA state loading
             current_is_control_lora = getattr(args, "enable_control_lora", False)
+            is_relora = getattr(args, "network_module", "") == "networks.relora_wan"
             saved_is_control_lora = (
                 control_metadata is not None and control_metadata.get("enabled", False)
             )
@@ -740,6 +780,10 @@ class CheckpointManager:
                 for i, model in enumerate(models):
                     if not isinstance(model, type(accelerator.unwrap_model(network))):
                         remove_indices.append(i)
+
+            if is_relora:
+                logger.info("🔧 ReLoRA load: Keeping transformer and LoRA network")
+                remove_indices = []
 
             logger.info(f"🗑️  Removing {len(remove_indices)} models from loading")
             for i in reversed(remove_indices):
