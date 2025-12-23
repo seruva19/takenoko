@@ -165,10 +165,12 @@ class SliderTrainingManager:
                 sara_helper=kwargs.get("sara_helper"),
                 layer_sync_helper=kwargs.get("layer_sync_helper"),
                 crepa_helper=kwargs.get("crepa_helper"),
+                haste_helper=kwargs.get("haste_helper"),
                 raft=kwargs.get("raft"),
                 warp_fn=kwargs.get("warp_fn"),
                 adaptive_manager=kwargs.get("adaptive_manager"),
                 transition_loss_context=kwargs.get("transition_loss_context"),
+                global_step=kwargs.get("global_step"),
             )
 
         # Slider training - compute guided loss
@@ -220,9 +222,11 @@ class SliderTrainingManager:
                 sara_helper=kwargs.get("sara_helper"),
                 layer_sync_helper=kwargs.get("layer_sync_helper"),
                 crepa_helper=kwargs.get("crepa_helper"),
+                haste_helper=kwargs.get("haste_helper"),
                 raft=kwargs.get("raft"),
                 warp_fn=kwargs.get("warp_fn"),
                 adaptive_manager=kwargs.get("adaptive_manager"),
+                global_step=kwargs.get("global_step"),
             )
 
     def get_config_dict(self) -> Dict[str, Any]:

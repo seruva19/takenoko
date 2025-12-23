@@ -1309,6 +1309,7 @@ class WanNetworkTrainer:
             repa_helper = None
             layer_sync_helper = None
             crepa_helper = None
+            haste_helper = None
             crepa_enabled = bool(getattr(args, "crepa_enabled", False))
             if crepa_enabled:
                 try:
@@ -1380,8 +1381,16 @@ class WanNetworkTrainer:
                     logger.warning(f"LayerSync setup failed: {exc}")
                     layer_sync_helper = None
 
+            from enhancements.haste.integration import (
+                add_haste_params,
+                setup_haste_helper,
+            )
+
+            haste_helper = setup_haste_helper(args, transformer, accelerator)
+
             if crepa_helper is not None:
                 self._maybe_add_crepa_params(optimizer, crepa_helper, args)
+            add_haste_params(optimizer, haste_helper, args)
 
             # Run the main training loop using TrainingCore
             # Attach a self-correction manager instance if enabled so the core can call it
@@ -1444,6 +1453,7 @@ class WanNetworkTrainer:
                 sara_helper=sara_helper,
                 layer_sync_helper=layer_sync_helper,
                 crepa_helper=crepa_helper,
+                haste_helper=haste_helper,
                 dual_model_manager=dual_model_manager,
             )
 
@@ -1453,6 +1463,10 @@ class WanNetworkTrainer:
             repa_helper.remove_hooks()
         if "layer_sync_helper" in locals() and layer_sync_helper is not None:
             layer_sync_helper.remove_hooks()
+        if "haste_helper" in locals() and haste_helper is not None:
+            from enhancements.haste.integration import remove_haste_helper
+
+            remove_haste_helper(haste_helper)
         if "crepa_helper" in locals() and crepa_helper is not None:
             crepa_helper.remove_hooks()
 
@@ -1524,6 +1538,7 @@ class WanNetworkTrainer:
         lr = float(getattr(args, "learning_rate", 1e-4)) * float(getattr(args, "input_lr_scale", 1.0))
         optimizer.add_param_group({"params": new_params, "lr": lr})
         logger.info("CREPA: added %d projector params to optimizer (lr=%.6f).", len(new_params), lr)
+
 
         # Count different types of parameters
         total_params = 0

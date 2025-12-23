@@ -738,11 +738,13 @@ class WanFinetuneTrainer:
             sara_helper=sara_helper,
             layer_sync_helper=layer_sync_helper,
             crepa_helper=crepa_helper,
+            haste_helper=haste_helper,
             raft=None,
             warp_fn=None,
             adaptive_manager=None,
             transition_loss_context=None,
             noise_scheduler=noise_scheduler,
+            global_step=global_step,
         )
 
         return loss_components
@@ -784,6 +786,7 @@ class WanFinetuneTrainer:
         lr = float(getattr(args, "learning_rate", 1e-4)) * float(getattr(args, "input_lr_scale", 1.0))
         optimizer.add_param_group({"params": new_params, "lr": lr})
         logger.info("CREPA: added %d projector params to optimizer (lr=%.6f).", len(new_params), lr)
+
 
     def train(self, args: argparse.Namespace) -> None:
         """
@@ -1331,6 +1334,7 @@ class WanFinetuneTrainer:
 
         # Initialize REPA/iREPA helper if enabled
         repa_helper = None
+        haste_helper = None
         if getattr(args, "enable_irepa", False):
             try:
                 from enhancements.repa.enhanced_repa_helper import EnhancedRepaHelper
@@ -1374,8 +1378,16 @@ class WanFinetuneTrainer:
                 except Exception as e2:
                     logger.warning(f"Failed to initialize basic REPA helper: {e2}")
 
+        from enhancements.haste.integration import (
+            add_haste_params,
+            setup_haste_helper,
+        )
+
+        haste_helper = setup_haste_helper(args, transformer, accelerator)
+
         if crepa_helper is not None:
             self._maybe_add_crepa_params(optimizer, crepa_helper, args)
+        add_haste_params(optimizer, haste_helper, args)
 
         # Set training mode and ensure proper device placement
         # Always use training mode for fine-tuning to ensure weight updates
@@ -2045,6 +2057,10 @@ class WanFinetuneTrainer:
             repa_helper.remove_hooks()
         if "layer_sync_helper" in locals() and layer_sync_helper is not None:
             layer_sync_helper.remove_hooks()
+        if "haste_helper" in locals() and haste_helper is not None:
+            from enhancements.haste.integration import remove_haste_helper
+
+            remove_haste_helper(haste_helper)
         if "crepa_helper" in locals() and crepa_helper is not None:
             crepa_helper.remove_hooks()
         progress_bar.close()

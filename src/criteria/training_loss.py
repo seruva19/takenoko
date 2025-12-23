@@ -86,6 +86,10 @@ class LossComponents:
         The CREPA cross-frame alignment loss, if enabled.
     crepa_similarity: Optional[torch.Tensor]
         The CREPA mean similarity across frames.
+    haste_attn_loss: Optional[torch.Tensor]
+        The HASTE attention alignment loss, if enabled.
+    haste_proj_loss: Optional[torch.Tensor]
+        The HASTE projection alignment loss, if enabled.
     sara_loss: Optional[torch.Tensor]
         The SARA loss component, if enabled.
     wanvideo_cfm_loss: Optional[torch.Tensor]
@@ -109,6 +113,8 @@ class LossComponents:
     repa_loss: Optional[torch.Tensor] = None
     crepa_loss: Optional[torch.Tensor] = None
     crepa_similarity: Optional[torch.Tensor] = None
+    haste_attn_loss: Optional[torch.Tensor] = None
+    haste_proj_loss: Optional[torch.Tensor] = None
     sara_loss: Optional[torch.Tensor] = None
     wanvideo_cfm_loss: Optional[torch.Tensor] = None
     memflow_guidance_loss: Optional[torch.Tensor] = None
@@ -389,11 +395,13 @@ class TrainingLossComputer:
         sara_helper: Optional[Any] = None,
         layer_sync_helper: Optional[Any] = None,
         crepa_helper: Optional[Any] = None,
+        haste_helper: Optional[Any] = None,
         raft: Optional[Any] = None,
         warp_fn: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
         adaptive_manager: Optional[Any] = None,
         transition_loss_context: Optional[Dict[str, Any]] = None,
         noise_scheduler: Optional[Any] = None,
+        global_step: Optional[int] = None,
     ) -> LossComponents:
         """Compute the full training loss and its components.
 
@@ -881,6 +889,26 @@ class TrainingLossComputer:
             except Exception as e:
                 logger.warning(f"REPA loss computation failed: {e}")
 
+        # ---- Optional HASTE Loss ----
+        haste_attn_loss_value: Optional[torch.Tensor] = None
+        haste_proj_loss_value: Optional[torch.Tensor] = None
+        if haste_helper is not None and getattr(args, "enable_haste", False):
+            try:
+                if "pixels" in batch:
+                    clean_pixels = torch.stack(batch["pixels"], dim=0)
+                    haste_total, haste_attn_loss_value, haste_proj_loss_value = (
+                        haste_helper.compute_weighted_losses(
+                            clean_pixels, global_step
+                        )
+                    )
+                    loss = loss + haste_total
+                else:
+                    logger.warning(
+                        "HASTE enabled, but no 'pixels' found in batch. Skipping HASTE loss."
+                    )
+            except Exception as e:
+                logger.warning(f"HASTE loss computation failed: {e}")
+
         # ---- Optional CREPA Loss ----
         crepa_loss_value: Optional[torch.Tensor] = None
         crepa_similarity_value: Optional[torch.Tensor] = None
@@ -1194,6 +1222,8 @@ class TrainingLossComputer:
             repa_loss=repa_loss_value,
             crepa_loss=crepa_loss_value,
             crepa_similarity=crepa_similarity_value,
+            haste_attn_loss=haste_attn_loss_value,
+            haste_proj_loss=haste_proj_loss_value,
             sara_loss=sara_loss_value,
             wanvideo_cfm_loss=wanvideo_cfm_loss_value,
             ortho_reg_p=ortho_p_val,

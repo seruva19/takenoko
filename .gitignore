@@ -35,6 +35,7 @@ uv.lock
 
 # Takenoko
 .artifacts
+/skills
 /prebuilt
 /cache
 /temp

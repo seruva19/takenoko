@@ -1241,6 +1241,11 @@ def create_args_from_config(
     args.enable_optical_flow_loss = config.get("enable_optical_flow_loss", False)
     args.lambda_optical_flow = config.get("lambda_optical_flow", 0.0)
 
+    # HASTE (Holistic Alignment with Stage-wise Termination) settings
+    from enhancements.haste.config_parser import parse_haste_config
+
+    parse_haste_config(config, args)
+
     # REPA (Representation Alignment) settings
     args.enable_repa = config.get("enable_repa", False)
     args.enable_irepa = bool(config.get("enable_irepa", False))

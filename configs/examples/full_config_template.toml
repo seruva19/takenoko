@@ -1331,6 +1331,50 @@ sara_cache_encoder_outputs = true
 sara_use_mixed_precision = true
 
 # =============================================================================
+# ⚠️ HASTE (HOLISTIC ALIGNMENT WITH STAGE-WISE TERMINATION) SETTINGS
+# =============================================================================
+
+# Enable HASTE alignment (train-time only, default off)
+enable_haste = false
+
+# Teacher encoder specification for HASTE (same format as REPA encoders)
+# Examples: "dinov2-vit-b", "dinov2-vit-l"
+haste_encoder_name = "dinov2-vit-b"
+
+# Use DINOv2 teacher attention maps instead of token affinity proxy
+# Requires a DINOv2 encoder; if unavailable, falls back to token affinity
+haste_use_teacher_attention = true
+
+# Offset applied to teacher attention layers (student layer i aligns to teacher i + offset)
+# Defaults to 4 to match the HASTE reference mapping (student 4-7 -> teacher 8-11)
+haste_teacher_attn_layer_offset = 4
+
+# Limit the number of attention heads used for alignment (0 = use all heads)
+haste_attn_head_limit = 12
+
+# Diffusion layer alignment depth for projection loss (0-based block index)
+haste_alignment_depth = 8
+
+# Attention alignment layer range [start, end) (end is exclusive)
+# Attention alignment start layer
+haste_attn_layer_start = 10
+
+# Attention alignment end layer
+haste_attn_layer_end = 20
+
+# Projection alignment loss weight (>= 0, 0.5 matches HASTE default)
+haste_proj_coeff = 0.5
+
+# Attention alignment loss weight (>= 0, 0.5 matches HASTE default)
+haste_attn_coeff = 0.5
+
+# Early-stop step when alignment losses are disabled (must be > 0)
+haste_early_stop_step = 250000
+
+# Input resolution for the teacher encoder (256 or 512; 512 requires DINOv2)
+haste_input_resolution = 256
+
+# =============================================================================
 # ⚠️ SPRINT (SPARSE-DENSE RESIDUAL FUSION) SETTINGS
 # =============================================================================
 

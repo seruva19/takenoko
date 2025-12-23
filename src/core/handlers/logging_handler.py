@@ -144,6 +144,10 @@ def collect_and_log_training_metrics(
         )
     if loss_components.repa_loss is not None:
         logs["loss/repa"] = float(loss_components.repa_loss.item())
+    if getattr(loss_components, "haste_attn_loss", None) is not None:
+        logs["loss/haste_attn"] = float(loss_components.haste_attn_loss.item())
+    if getattr(loss_components, "haste_proj_loss", None) is not None:
+        logs["loss/haste_proj"] = float(loss_components.haste_proj_loss.item())
     if getattr(loss_components, "crepa_loss", None) is not None:
         logs["loss/crepa"] = float(loss_components.crepa_loss.item())
         logs["crepa_loss"] = float(loss_components.crepa_loss.item())

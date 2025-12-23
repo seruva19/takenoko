@@ -757,6 +757,7 @@ class TrainingCore:
         sara_helper: Optional[Any] = None,
         layer_sync_helper: Optional[Any] = None,
         crepa_helper: Optional[Any] = None,
+        haste_helper: Optional[Any] = None,
         controlnet: Optional[Any] = None,
         dual_model_manager: Optional[Any] = None,
     ) -> Tuple[int, Any]:
@@ -1419,10 +1420,12 @@ class TrainingCore:
                                 sara_helper=sara_helper,
                                 layer_sync_helper=layer_sync_helper,
                                 crepa_helper=crepa_helper,
+                                haste_helper=haste_helper,
                                 raft=getattr(self, "raft", None),
                                 warp_fn=getattr(self, "warp", None),
                                 adaptive_manager=self.adaptive_manager,
                                 transition_loss_context=transition_loss_context,
+                                global_step=global_step,
                             )
 
                     memflow_loss = None
