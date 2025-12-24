@@ -6,6 +6,7 @@ organization and maintainability.
 """
 
 import ast
+import fnmatch
 import importlib
 import argparse
 from typing import Any, Dict, List, Optional, Tuple, Union, Callable
@@ -66,6 +67,226 @@ class OptimizerManager:
         )
 
     @staticmethod
+    def _apply_galore_param_groups(
+        args: argparse.Namespace,
+        trainable_params: List[Any],
+        galore_settings: Dict[str, Any],
+        param_name_map: Optional[Dict[int, str]] = None,
+    ) -> List[Any]:
+        apply_to = str(galore_settings.get("galore_apply_to", "matrix_only")).lower()
+        if apply_to not in {"matrix_only", "matrix_and_tensor"}:
+            raise ValueError(
+                "galore_apply_to must be 'matrix_only' or 'matrix_and_tensor'"
+            )
+
+        if not trainable_params:
+            return trainable_params
+
+        if (
+            isinstance(trainable_params, list)
+            and len(trainable_params) > 0
+            and isinstance(trainable_params[0], dict)
+        ):
+            base_groups = trainable_params
+        else:
+            base_groups = [{"params": trainable_params}]
+
+        if any(isinstance(group, dict) and "rank" in group for group in base_groups):
+            logger.info(
+                "GaLore: using existing parameter groups that already define rank."
+            )
+            return base_groups
+
+        try:
+            rank = int(galore_settings.get("galore_rank", 128))
+        except (TypeError, ValueError):
+            raise ValueError("galore_rank must be an int") from None
+        if rank <= 0:
+            raise ValueError("galore_rank must be > 0")
+
+        try:
+            update_proj_gap = int(galore_settings.get("galore_update_proj_gap", 200))
+        except (TypeError, ValueError):
+            raise ValueError("galore_update_proj_gap must be an int") from None
+        if update_proj_gap < 1:
+            raise ValueError("galore_update_proj_gap must be >= 1")
+
+        try:
+            scale = float(galore_settings.get("galore_scale", 0.25))
+        except (TypeError, ValueError):
+            raise ValueError("galore_scale must be a float") from None
+        if scale <= 0:
+            raise ValueError("galore_scale must be > 0")
+
+        proj_type = str(galore_settings.get("galore_proj_type", "std"))
+        allowed_proj_types = {"std", "reverse_std", "right", "left", "full"}
+        if proj_type not in allowed_proj_types:
+            raise ValueError(
+                f"galore_proj_type must be one of {sorted(allowed_proj_types)}"
+            )
+
+        group_by = str(galore_settings.get("galore_group_by", "none")).lower()
+        allowed_group_by = {"none", "layer", "param"}
+        if group_by not in allowed_group_by:
+            raise ValueError(
+                f"galore_group_by must be one of {sorted(allowed_group_by)}"
+            )
+
+        overrides = galore_settings.get("galore_group_overrides")
+        if overrides is None:
+            override_rules: List[Dict[str, Any]] = []
+        elif isinstance(overrides, dict):
+            override_rules = [overrides]
+        elif isinstance(overrides, list):
+            override_rules = [rule for rule in overrides if isinstance(rule, dict)]
+        else:
+            raise ValueError("galore_group_overrides must be a dict or list of dicts")
+
+        logger.info(
+            "GaLore enabled: apply_to=%s rank=%d update_proj_gap=%d scale=%.3f proj_type=%s group_by=%s",
+            apply_to,
+            rank,
+            update_proj_gap,
+            scale,
+            proj_type,
+            group_by,
+        )
+
+        def clone_group(group: Dict[str, Any], params: List[torch.nn.Parameter]) -> Dict[str, Any]:
+            new_group = {key: value for key, value in group.items() if key != "params"}
+            new_group["params"] = params
+            return new_group
+
+        def clone_galore_group(
+            group: Dict[str, Any],
+            params: List[torch.nn.Parameter],
+            dim: int,
+            group_settings: Optional[Dict[str, Any]] = None,
+        ) -> Dict[str, Any]:
+            group_settings = group_settings or {}
+            new_group = clone_group(group, params)
+            new_group.update(
+                {
+                    "rank": group_settings.get("rank", rank),
+                    "update_proj_gap": group_settings.get(
+                        "update_proj_gap", update_proj_gap
+                    ),
+                    "scale": group_settings.get("scale", scale),
+                    "proj_type": group_settings.get("proj_type", proj_type),
+                    "dim": dim,
+                }
+            )
+            return new_group
+
+        def resolve_group_key(param: torch.nn.Parameter) -> str:
+            if group_by == "none":
+                return "all"
+            if param_name_map is None:
+                return "unmapped"
+            name = param_name_map.get(id(param))
+            if not name:
+                return "unmapped"
+            if group_by == "param":
+                return name
+            return name.rsplit(".", 1)[0] if "." in name else name
+
+        def resolve_param_name(param: torch.nn.Parameter) -> Optional[str]:
+            if param_name_map is None:
+                return None
+            return param_name_map.get(id(param))
+
+        def resolve_group_settings(param_name: Optional[str]) -> Dict[str, Any]:
+            if not param_name:
+                return {}
+            for rule in override_rules:
+                pattern = rule.get("pattern")
+                if not isinstance(pattern, str):
+                    continue
+                if fnmatch.fnmatchcase(param_name, pattern):
+                    return {
+                        key: rule[key]
+                        for key in ("rank", "update_proj_gap", "scale", "proj_type")
+                        if key in rule
+                    }
+            return {}
+
+        def group_params(
+            params: List[torch.nn.Parameter],
+        ) -> List[Tuple[List[torch.nn.Parameter], Dict[str, Any]]]:
+            if group_by == "none":
+                rep_name = resolve_param_name(params[0]) if params else None
+                return [(params, resolve_group_settings(rep_name))]
+            grouped: Dict[str, List[torch.nn.Parameter]] = {}
+            for param in params:
+                key = resolve_group_key(param)
+                grouped.setdefault(key, []).append(param)
+            grouped_params: List[Tuple[List[torch.nn.Parameter], Dict[str, Any]]] = []
+            for grouped_list in grouped.values():
+                rep_name = resolve_param_name(grouped_list[0]) if grouped_list else None
+                grouped_params.append((grouped_list, resolve_group_settings(rep_name)))
+            return grouped_params
+
+        new_groups: List[Dict[str, Any]] = []
+        for group in base_groups:
+            if not isinstance(group, dict):
+                raise TypeError("Optimizer parameter groups must be dictionaries.")
+
+            params = list(group.get("params", []))
+            if not params:
+                continue
+
+            matrix_params = [p for p in params if p.ndim == 2]
+            tensor_params = [p for p in params if p.ndim > 2]
+            scalar_params = [p for p in params if p.ndim < 2]
+
+            if apply_to == "matrix_only":
+                if matrix_params:
+                    grouped_matrices = group_params(matrix_params)
+                    for grouped_params, group_settings in grouped_matrices:
+                        new_groups.append(
+                            clone_galore_group(
+                                group,
+                                grouped_params,
+                                dim=2,
+                                group_settings=group_settings,
+                            )
+                        )
+                if tensor_params or scalar_params:
+                    remaining = tensor_params + scalar_params
+                    new_groups.append(clone_group(group, remaining))
+            else:
+                if matrix_params:
+                    grouped_matrices = group_params(matrix_params)
+                    for grouped_params, group_settings in grouped_matrices:
+                        new_groups.append(
+                            clone_galore_group(
+                                group,
+                                grouped_params,
+                                dim=2,
+                                group_settings=group_settings,
+                            )
+                        )
+                if tensor_params:
+                    grouped_tensors = group_params(tensor_params)
+                    for grouped_params, group_settings in grouped_tensors:
+                        max_dim = max(p.ndim for p in grouped_params)
+                        new_groups.append(
+                            clone_galore_group(
+                                group,
+                                grouped_params,
+                                dim=max_dim,
+                                group_settings=group_settings,
+                            )
+                        )
+                if scalar_params:
+                    new_groups.append(clone_group(group, scalar_params))
+
+        if not new_groups:
+            return trainable_params
+
+        return new_groups
+
+    @staticmethod
     def get_optimizer(
         args: argparse.Namespace,
         transformer: torch.nn.Module,
@@ -78,6 +299,15 @@ class OptimizerManager:
         """
         # adamw, adamw8bit, adafactor
         optimizer_type = args.optimizer_type.lower()
+        galore_types = {
+            "galoreadamw",
+            "galore_adamw",
+            "galoreadamw8bit",
+            "galore_adamw8bit",
+            "galoreadafactor",
+            "galore_adafactor",
+        }
+        is_galore_optimizer = optimizer_type in galore_types
 
         # split optimizer_type and optimizer_args
         optimizer_kwargs = {}
@@ -95,6 +325,19 @@ class OptimizerManager:
                 logger.info(
                     f"  Parsed: {key} = {parsed_value} (type: {type(parsed_value)})"
                 )
+
+        galore_settings: Dict[str, Any] = {}
+        for key in (
+            "galore_rank",
+            "galore_update_proj_gap",
+            "galore_scale",
+            "galore_proj_type",
+            "galore_apply_to",
+            "galore_group_by",
+            "galore_group_overrides",
+        ):
+            if key in optimizer_kwargs:
+                galore_settings[key] = optimizer_kwargs.pop(key)
 
         def extract_params(params_list: List[Any]) -> List[torch.nn.Parameter]:
             """Extract individual parameters from parameter groups or parameter lists."""
@@ -161,6 +404,12 @@ class OptimizerManager:
                 f"{scalar_label}: {len(scalar_params)} bias/gain parameters (<2D)"
             )
 
+        if is_galore_optimizer:
+            param_name_map = {id(p): name for name, p in transformer.named_parameters()}
+            trainable_params = OptimizerManager._apply_galore_param_groups(
+                args, trainable_params, galore_settings, param_name_map
+            )
+
         lr = args.learning_rate
         optimizer = None
         optimizer_class = None
@@ -221,6 +470,39 @@ class OptimizerManager:
         elif optimizer_type == "AdamW".lower():
             logger.info(f"using AdamW optimizer | {optimizer_kwargs}")
             optimizer_class = torch.optim.AdamW
+            optimizer = optimizer_class(trainable_params, lr=lr, **optimizer_kwargs)
+
+        elif optimizer_type in {"galoreadamw", "galore_adamw"}:
+            logger.info(f"using GaLoreAdamW optimizer | {optimizer_kwargs}")
+            try:
+                from galore_torch import GaLoreAdamW
+            except Exception as err:
+                raise ImportError(
+                    "GaLoreAdamW requires galore-torch. Install with `pip install galore-torch`."
+                ) from err
+            optimizer_class = GaLoreAdamW
+            optimizer = optimizer_class(trainable_params, lr=lr, **optimizer_kwargs)
+
+        elif optimizer_type in {"galoreadamw8bit", "galore_adamw8bit"}:
+            logger.info(f"using GaLoreAdamW8bit optimizer | {optimizer_kwargs}")
+            try:
+                from galore_torch import GaLoreAdamW8bit
+            except Exception as err:
+                raise ImportError(
+                    "GaLoreAdamW8bit requires galore-torch and bitsandbytes."
+                ) from err
+            optimizer_class = GaLoreAdamW8bit
+            optimizer = optimizer_class(trainable_params, lr=lr, **optimizer_kwargs)
+
+        elif optimizer_type in {"galoreadafactor", "galore_adafactor"}:
+            logger.info(f"using GaLoreAdafactor optimizer | {optimizer_kwargs}")
+            try:
+                from galore_torch import GaLoreAdafactor
+            except Exception as err:
+                raise ImportError(
+                    "GaLoreAdafactor requires galore-torch. Install with `pip install galore-torch`."
+                ) from err
+            optimizer_class = GaLoreAdafactor
             optimizer = optimizer_class(trainable_params, lr=lr, **optimizer_kwargs)
 
         elif optimizer_type == "IVON".lower():
