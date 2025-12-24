@@ -1121,6 +1121,36 @@ contrastive_flow_skip_unconditional = false
 # contrastive_flow_null_class_idx = 0
 
 # =============================================================================
+# ⚠️ CDC-FM (CARRE DU CHAMP FLOW MATCHING) SETTINGS
+# =============================================================================
+
+# Enable CDC-FM geometry-aware noise during training (LoRA trainer only).
+# Works for both image and video latents; CDC caches are keyed by latent shape.
+# Requires latent caching to be enabled (CDC uses cached latents to build k-NN geometry).
+# When enabled, CDC caches are stored per latent file alongside the latent cache:
+# image_0512x0768_latents.safetensors -> image_0512x0768_latents_cdc_1x96x96_<hash>.npz
+# If FAISS is not installed, CDC preprocessing is skipped and training falls back to Gaussian noise.
+enable_cdc_fm = false
+
+# Number of neighbors for the k-NN graph (>= 2). Larger values increase compute and memory.
+cdc_k_neighbors = 256
+
+# Number of neighbors used to estimate bandwidth (>= 1).
+cdc_k_bandwidth = 8
+
+# CDC subspace dimension (>= 1). Controls the rank of the anisotropic noise.
+cdc_d_cdc = 8
+
+# Global CDC scaling factor (> 0).
+cdc_gamma = 1.0
+
+# Minimum bucket size for CDC computation. Buckets smaller than this fall back to Gaussian noise.
+cdc_min_bucket_size = 16
+
+# Force recompute CDC caches even if matching caches already exist.
+cdc_force_recache = false
+
+# =============================================================================
 # ⚠️ REPA (REPRESENTATIONAL ALIGNMENT) SETTINGS
 # =============================================================================
 

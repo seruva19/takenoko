@@ -803,6 +803,11 @@ class WanFinetuneTrainer:
             args.seed = random.randint(0, 2**32)
         set_seed(args.seed)
 
+        if getattr(args, "enable_cdc_fm", False):
+            logger.warning(
+                "CDC-FM is supported only for LoRA training; ignoring enable_cdc_fm in finetune mode."
+            )
+
         # Validate training configuration and provide helpful warnings
         from common.training_validators import validate_training_config
 

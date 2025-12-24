@@ -1809,6 +1809,74 @@ class DatasetGroup(torch.utils.data.ConcatDataset):
         for i, dataset in enumerate(self.datasets):
             dataset.set_current_step(step)
 
+    def cache_cdc_gamma_b(
+        self,
+        *,
+        k_neighbors: int,
+        k_bandwidth: int,
+        d_cdc: int,
+        gamma: float,
+        min_bucket_size: int,
+        force_recache: bool = False,
+        device: Optional[str] = None,
+    ) -> Optional[str]:
+        """Build per-latent CDC caches and return the config hash."""
+        from enhancements.cdc.cdc_fm import (
+            CDCPreprocessor,
+            _hash_cdc_config,
+            _load_latent_tensor,
+            get_cdc_npz_path,
+        )
+
+        latent_cache_files: list[str] = []
+        for dataset in self.datasets:
+            if getattr(dataset, "cache_directory", None):
+                latent_cache_files.extend(dataset.get_all_latent_cache_files())
+
+        if not latent_cache_files:
+            logger.warning(
+                "CDC-FM requires latent caches; no latent cache files were found."
+            )
+            return None
+
+        hash_payload = {
+            "latent_cache_files": sorted(os.path.normpath(p) for p in latent_cache_files),
+            "k_neighbors": k_neighbors,
+            "k_bandwidth": k_bandwidth,
+            "d_cdc": d_cdc,
+            "gamma": gamma,
+            "min_bucket_size": min_bucket_size,
+        }
+        config_hash = _hash_cdc_config(hash_payload)
+
+        if not force_recache:
+            all_cached = True
+            for cache_path in latent_cache_files:
+                latent_tensor = _load_latent_tensor(cache_path)
+                latent_shape = tuple(int(x) for x in latent_tensor.shape)
+                cdc_path = get_cdc_npz_path(cache_path, config_hash, latent_shape)
+                if not os.path.exists(cdc_path):
+                    all_cached = False
+                    break
+            if all_cached:
+                logger.info("CDC-FM cache already complete (hash=%s).", config_hash)
+                return config_hash
+
+        preprocessor = CDCPreprocessor(
+            latent_cache_paths=latent_cache_files,
+            config_hash=config_hash,
+            k_neighbors=k_neighbors,
+            k_bandwidth=k_bandwidth,
+            d_cdc=d_cdc,
+            gamma=gamma,
+            min_bucket_size=min_bucket_size,
+            device=device or "cuda",
+        )
+        if not preprocessor.compute_all(force_recache=force_recache):
+            return None
+
+        return config_hash
+
     def set_max_train_steps(self, max_train_steps):
         group_id = self.get_dataset_identifier()
         logger.debug(

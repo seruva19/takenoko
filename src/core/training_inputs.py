@@ -21,6 +21,8 @@ def prepare_standard_training_inputs(
     timestep_distribution,
     dual_model_manager,
     batch: Dict[str, Tensor],
+    cdc_gamma_b=None,
+    item_info=None,
 ) -> Tuple[Tensor, Tensor, Optional[Tensor], Tensor]:
     """
     Prepare noisy latents / timesteps / sigmas / weighting using the legacy logic
@@ -92,6 +94,8 @@ def prepare_standard_training_inputs(
         dit_dtype,
         timestep_distribution,
         batch_timesteps_uniform,
+        cdc_gamma_b=cdc_gamma_b,
+        item_info=item_info,
     )
     weighting = compute_loss_weighting_for_sd3(
         args.weighting_scheme,

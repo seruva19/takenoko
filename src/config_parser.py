@@ -1249,6 +1249,11 @@ def create_args_from_config(
 
     parse_haste_config(config, args)
 
+    # CDC-FM (Carre du Champ Flow Matching) settings
+    from enhancements.cdc.config_parser import parse_cdc_config
+
+    parse_cdc_config(config, args, logger)
+
     # REPA (Representation Alignment) settings
     args.enable_repa = config.get("enable_repa", False)
     args.enable_irepa = bool(config.get("enable_irepa", False))

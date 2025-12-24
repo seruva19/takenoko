@@ -154,6 +154,9 @@ class TrainingCore:
         # Noise scheduler reference (set in run_training_loop)
         self.noise_scheduler: Optional[Any] = None
 
+        # CDC-FM dataset handle (set by trainer when enabled)
+        self.cdc_gamma_b = None
+
         # EMA loss tracking for smoother TensorBoard visualization
         self.ema_loss: Optional[float] = None
         self.ema_beta: float = 0.98  # Smoothing factor (0.9-0.99 are good choices)
@@ -1075,6 +1078,8 @@ class TrainingCore:
                                 self.timestep_distribution,
                                 dual_model_manager,
                                 batch,
+                                cdc_gamma_b=self.cdc_gamma_b,
+                                item_info=batch.get("item_info"),
                             )
                         )
 

@@ -31,6 +31,7 @@ logger = get_logger(__name__)
 
 # Guard flags to avoid spamming logs
 _warned_double_constraint: bool = False
+_warned_cdc_missing: bool = False
 
 
 def time_shift(mu: float, sigma: float, t: torch.Tensor) -> torch.Tensor:
@@ -866,6 +867,8 @@ def get_noisy_model_input_and_timesteps(
     dtype: torch.dtype,
     timestep_distribution: Optional[TimestepDistribution] = None,
     presampled_uniform: Optional[torch.Tensor] = None,
+    cdc_gamma_b=None,
+    item_info=None,
 ) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
     """Generate noisy model input and timesteps for training.
 
@@ -888,6 +891,13 @@ def get_noisy_model_input_and_timesteps(
         Tuple of (noisy_model_input, timesteps, sigmas)
     """
     batch_size = noise.shape[0]
+    if getattr(args, "enable_cdc_fm", False) and cdc_gamma_b is None:
+        global _warned_cdc_missing
+        if not _warned_cdc_missing:
+            logger.warning(
+                "CDC-FM enabled but no CDC cache is available; using Gaussian noise."
+            )
+            _warned_cdc_missing = True
 
     # FoPP AR-Diffusion branch
     if getattr(args, "timestep_sampling", None) == "fopp":
@@ -978,6 +988,19 @@ def get_noisy_model_input_and_timesteps(
             # Convert to timestep indices and create noisy input
             timesteps = t * 1000.0
             t = t.view(-1, 1, 1, 1, 1) if latents.ndim == 5 else t.view(-1, 1, 1, 1)
+            if getattr(args, "enable_cdc_fm", False) and cdc_gamma_b is not None:
+                try:
+                    from enhancements.cdc.cdc_fm import apply_cdc_noise_transformation
+
+                    noise = apply_cdc_noise_transformation(
+                        noise,
+                        timesteps / 1000.0,
+                        cdc_gamma_b,
+                        item_info,
+                    )
+                except Exception as exc:
+                    logger.warning("CDC-FM noise transform failed: %s", exc)
+
             noisy_model_input = (1 - t) * latents + t * noise
 
             timesteps = timesteps + 1  # 1 to 1000
@@ -1013,6 +1036,25 @@ def get_noisy_model_input_and_timesteps(
                 dtype=dtype,
                 source="training/sigma-path",
             )
+            if getattr(args, "enable_cdc_fm", False) and cdc_gamma_b is not None:
+                try:
+                    from enhancements.cdc.cdc_fm import apply_cdc_noise_transformation
+
+                    num_ts = float(
+                        getattr(
+                            getattr(noise_scheduler, "config", object()),
+                            "num_train_timesteps",
+                            1000,
+                        )
+                    )
+                    noise = apply_cdc_noise_transformation(
+                        noise,
+                        timesteps.float() / max(num_ts, 1.0),
+                        cdc_gamma_b,
+                        item_info,
+                    )
+                except Exception as exc:
+                    logger.warning("CDC-FM noise transform failed: %s", exc)
             noisy_model_input = sigmas * noise + (1.0 - sigmas) * latents
 
     # Ensure return types are correct

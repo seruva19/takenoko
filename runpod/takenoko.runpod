@@ -2,7 +2,7 @@
 # Copy/edit this file and run takenoko_train.sh
 
 # Takenoko repository
-REPO_ROOT = https://github.com/seruva19/takenoko
+REPO_ROOT=https://github.com/seruva19/takenoko
 
 # Persistent root on RunPod volume
 PERSIST_ROOT=/runpod-volume/takenoko

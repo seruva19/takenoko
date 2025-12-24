@@ -460,6 +460,31 @@ class WanNetworkTrainer:
         log_regularization_info(train_dataset_group)
         validate_regularization_config(args)
 
+        # CDC-FM preprocessing (LoRA-only path)
+        if getattr(args, "enable_cdc_fm", False):
+            logger.info("CDC-FM enabled, preparing per-latent CDC caches...")
+            cdc_config_hash = train_dataset_group.cache_cdc_gamma_b(
+                k_neighbors=args.cdc_k_neighbors,
+                k_bandwidth=args.cdc_k_bandwidth,
+                d_cdc=args.cdc_d_cdc,
+                gamma=args.cdc_gamma,
+                min_bucket_size=args.cdc_min_bucket_size,
+                force_recache=args.cdc_force_recache,
+                device="cuda" if torch.cuda.is_available() else "cpu",
+            )
+            if cdc_config_hash is None:
+                logger.warning(
+                    "CDC-FM preprocessing failed; training will continue without CDC-FM."
+                )
+            else:
+                from enhancements.cdc.cdc_fm import GammaBDataset
+
+                self.training_core.cdc_gamma_b = GammaBDataset(
+                    config_hash=cdc_config_hash,
+                    device="cuda" if torch.cuda.is_available() else "cpu",
+                )
+                logger.info("CDC-FM caches ready (hash=%s).", cdc_config_hash)
+
         # Only create validation dataset group if there are validation datasets
         val_dataset_group = None
         val_current_epoch = None
