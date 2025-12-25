@@ -769,23 +769,36 @@ class WanFinetuneTrainer:
             logger.warning("CREPA: failed to drop VAE encoder modules: %s", exc)
 
     @staticmethod
-    def _maybe_add_crepa_params(optimizer: Any, crepa_helper: Any, args: argparse.Namespace) -> None:
-        """Ensure CREPA projector parameters are included in the optimizer."""
-        if optimizer is None:
-            return
+    def _maybe_add_crepa_params(
+        params_to_optimize: list[dict[str, Any]],
+        param_names: list[list[str]],
+        crepa_helper: Any,
+        args: argparse.Namespace,
+    ) -> None:
+        """Ensure CREPA projector parameters are included in the optimizer groups."""
         params = getattr(crepa_helper, "get_trainable_params", None)
         if not callable(params):
             return
         trainable = list(params())
         if not trainable:
             return
-        existing = {id(p) for group in optimizer.param_groups for p in group.get("params", [])}
+        existing = set()
+        for group in params_to_optimize:
+            if "params" in group:
+                existing.update(id(p) for p in group["params"])
         new_params = [p for p in trainable if id(p) not in existing]
         if not new_params:
             return
-        lr = float(getattr(args, "learning_rate", 1e-4)) * float(getattr(args, "input_lr_scale", 1.0))
-        optimizer.add_param_group({"params": new_params, "lr": lr})
-        logger.info("CREPA: added %d projector params to optimizer (lr=%.6f).", len(new_params), lr)
+        lr = float(getattr(args, "learning_rate", 1e-4)) * float(
+            getattr(args, "input_lr_scale", 1.0)
+        )
+        params_to_optimize.append({"params": new_params, "lr": lr})
+        param_names.append([f"crepa_projector.{i}" for i in range(len(new_params))])
+        logger.info(
+            "CREPA: added %d projector params to optimizer groups (lr=%.6f).",
+            len(new_params),
+            lr,
+        )
 
 
     def train(self, args: argparse.Namespace) -> None:
@@ -1016,6 +1029,21 @@ class WanFinetuneTrainer:
         params_to_optimize, param_names = self.prepare_optimizer_params(
             transformer, args, text_encoder
         )
+
+        crepa_helper = None
+        if getattr(args, "crepa_enabled", False):
+            try:
+                from enhancements.repa.crepa_helper import CrepaHelper
+
+                logger.info("CREPA is enabled. Initializing helper module.")
+                crepa_helper = CrepaHelper(transformer, args, accelerator)
+                crepa_helper.attach_to_model(transformer)
+                self._maybe_add_crepa_params(
+                    params_to_optimize, param_names, crepa_helper, args
+                )
+            except Exception as exc:
+                logger.warning(f"CREPA setup failed: {exc}")
+                crepa_helper = None
 
         # Log detailed network information if verbose mode is enabled
         if getattr(args, "verbose_network", False):
@@ -1310,13 +1338,9 @@ class WanFinetuneTrainer:
             self.weight_analyzer.initialize_baseline_statistics(training_model)
 
         # Initialize CREPA helper if enabled
-        crepa_helper = None
-        if getattr(args, "crepa_enabled", False):
+        if crepa_helper is not None:
             try:
-                from enhancements.repa.crepa_helper import CrepaHelper
-
                 logger.info("CREPA is enabled. Setting up the helper module.")
-                crepa_helper = CrepaHelper(transformer, args, accelerator)
                 crepa_helper.setup_hooks()
                 crepa_helper = accelerator.prepare(crepa_helper)
             except Exception as exc:
@@ -1390,8 +1414,6 @@ class WanFinetuneTrainer:
 
         haste_helper = setup_haste_helper(args, transformer, accelerator)
 
-        if crepa_helper is not None:
-            self._maybe_add_crepa_params(optimizer, crepa_helper, args)
         add_haste_params(optimizer, haste_helper, args)
 
         # Set training mode and ensure proper device placement

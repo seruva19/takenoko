@@ -808,6 +808,21 @@ class WanNetworkTrainer:
                     )
                     lr_descriptions.append("patch_embedding")
 
+        crepa_helper = None
+        if getattr(args, "crepa_enabled", False):
+            try:
+                from enhancements.repa.crepa_helper import CrepaHelper
+
+                logger.info("CREPA is enabled. Initializing helper module.")
+                crepa_helper = CrepaHelper(transformer, args, accelerator)
+                crepa_helper.attach_to_model(network)
+                self._maybe_add_crepa_params(
+                    trainable_params, lr_descriptions, crepa_helper, args
+                )
+            except Exception as exc:
+                logger.warning(f"CREPA setup failed: {exc}")
+                crepa_helper = None
+
         (
             optimizer_name,
             optimizer_args,
@@ -1333,15 +1348,10 @@ class WanNetworkTrainer:
             sara_helper = None
             repa_helper = None
             layer_sync_helper = None
-            crepa_helper = None
             haste_helper = None
-            crepa_enabled = bool(getattr(args, "crepa_enabled", False))
-            if crepa_enabled:
+            if crepa_helper is not None:
                 try:
-                    from enhancements.repa.crepa_helper import CrepaHelper
-
                     logger.info("CREPA is enabled. Setting up the helper module.")
-                    crepa_helper = CrepaHelper(transformer, args, accelerator)
                     crepa_helper.setup_hooks()
                     crepa_helper = accelerator.prepare(crepa_helper)
                 except Exception as exc:
@@ -1413,8 +1423,6 @@ class WanNetworkTrainer:
 
             haste_helper = setup_haste_helper(args, transformer, accelerator)
 
-            if crepa_helper is not None:
-                self._maybe_add_crepa_params(optimizer, crepa_helper, args)
             add_haste_params(optimizer, haste_helper, args)
 
             # Run the main training loop using TrainingCore
@@ -1546,23 +1554,38 @@ class WanNetworkTrainer:
             logger.warning("CREPA: failed to drop VAE encoder modules: %s", exc)
 
     @staticmethod
-    def _maybe_add_crepa_params(optimizer: Any, crepa_helper: Any, args: argparse.Namespace) -> None:
-        """Ensure CREPA projector parameters are included in the optimizer."""
-        if optimizer is None:
-            return
+    def _maybe_add_crepa_params(
+        trainable_params: list[Any],
+        lr_descriptions: list[str],
+        crepa_helper: Any,
+        args: argparse.Namespace,
+    ) -> None:
+        """Ensure CREPA projector parameters are included in the optimizer groups."""
         params = getattr(crepa_helper, "get_trainable_params", None)
         if not callable(params):
             return
         trainable = list(params())
         if not trainable:
             return
-        existing = {id(p) for group in optimizer.param_groups for p in group.get("params", [])}
+        existing = set()
+        for group in trainable_params:
+            if isinstance(group, dict) and "params" in group:
+                existing.update(id(p) for p in group["params"])
+            elif isinstance(group, torch.nn.Parameter):
+                existing.add(id(group))
         new_params = [p for p in trainable if id(p) not in existing]
         if not new_params:
             return
-        lr = float(getattr(args, "learning_rate", 1e-4)) * float(getattr(args, "input_lr_scale", 1.0))
-        optimizer.add_param_group({"params": new_params, "lr": lr})
-        logger.info("CREPA: added %d projector params to optimizer (lr=%.6f).", len(new_params), lr)
+        lr = float(getattr(args, "learning_rate", 1e-4)) * float(
+            getattr(args, "input_lr_scale", 1.0)
+        )
+        trainable_params.append({"params": new_params, "lr": lr})
+        lr_descriptions.append("crepa_projector")
+        logger.info(
+            "CREPA: added %d projector params to optimizer groups (lr=%.6f).",
+            len(new_params),
+            lr,
+        )
 
 
         # Count different types of parameters

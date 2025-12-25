@@ -915,6 +915,10 @@ class TrainingLossComputer:
         if crepa_helper is not None and getattr(args, "crepa_enabled", False):
             try:
                 clean_pixels = batch.get("pixels")
+                if isinstance(clean_pixels, list):
+                    clean_pixels = torch.stack(clean_pixels, dim=0)
+                if torch.is_tensor(clean_pixels):
+                    clean_pixels = clean_pixels.to(loss.device)
                 crepa_loss, crepa_logs = crepa_helper.compute_loss(
                     clean_pixels=clean_pixels,
                     latents=latents,

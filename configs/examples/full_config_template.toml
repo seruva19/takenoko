@@ -1257,11 +1257,11 @@ layer_sync_normalization = "cosine"
 # Recommended: true for video fine-tuning, false for image training
 crepa_enabled = false
 
-# Transformer block index to align from (1-indexed; 0-based values are accepted for compatibility).
+# Transformer block index to align from (0-based).
 # Required when crepa_enabled = true.
 crepa_block_index = 8
 
-# Optional teacher block index for backbone-feature mode (1-indexed; 0-based values accepted).
+# Optional teacher block index for backbone-feature mode (0-based).
 # If unset, defaults to crepa_block_index.
 crepa_teacher_block_index = 16
 

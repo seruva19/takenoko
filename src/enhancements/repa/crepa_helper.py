@@ -95,6 +95,12 @@ class CrepaHelper(nn.Module):
         self.projector.to(device=self.device, dtype=torch.float32)
         self.projector.requires_grad_(True)
 
+    def attach_to_model(self, model: nn.Module) -> None:
+        if not self.enabled or self.projector is None:
+            return
+        if getattr(model, "crepa_projector", None) is not self.projector:
+            setattr(model, "crepa_projector", self.projector)
+
     def _load_encoder(self) -> None:
         if self.encoder is not None:
             return
@@ -148,10 +154,8 @@ class CrepaHelper(nn.Module):
             idx_int = int(idx)
         except Exception as exc:
             raise ValueError(f"CREPA block index {idx!r} is not an int.") from exc
-        candidates = [idx_int - 1, idx_int]
-        for cand in candidates:
-            if 0 <= cand < num_blocks:
-                return cand + 1
+        if 0 <= idx_int < num_blocks:
+            return idx_int
         raise ValueError(
             f"CREPA block index {idx_int} is outside available range [0, {num_blocks - 1}]"
         )
@@ -191,7 +195,7 @@ class CrepaHelper(nn.Module):
             raise ValueError("crepa_block_index must be set when CREPA is enabled.")
         student_idx = self._resolve_block_index(self.block_index, num_blocks)
         self.hooks.append(
-            blocks[student_idx - 1].register_forward_hook(self._make_hook("student"))
+            blocks[student_idx].register_forward_hook(self._make_hook("student"))
         )
 
         if self.use_backbone_features:
@@ -206,7 +210,7 @@ class CrepaHelper(nn.Module):
                 )
             resolved_teacher = self._resolve_block_index(teacher_idx, num_blocks)
             self.hooks.append(
-                blocks[resolved_teacher - 1].register_forward_hook(
+                blocks[resolved_teacher].register_forward_hook(
                     self._make_hook("teacher")
                 )
             )
