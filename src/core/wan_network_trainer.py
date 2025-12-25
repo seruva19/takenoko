@@ -1344,9 +1344,10 @@ class WanNetworkTrainer:
 
             log_loss_type_info(args)
 
-            # ========== SARA / REPA / CREPA Helper Setup ==========
+            # ========== SARA / REPA / CREPA / REG Helper Setup ==========
             sara_helper = None
             repa_helper = None
+            reg_helper = None
             layer_sync_helper = None
             haste_helper = None
             if crepa_helper is not None:
@@ -1357,6 +1358,18 @@ class WanNetworkTrainer:
                 except Exception as exc:
                     logger.warning(f"CREPA setup failed: {exc}")
                     crepa_helper = None
+            if getattr(args, "enable_reg", False):
+                try:
+                    from enhancements.reg.reg_helper import RegHelper
+
+                    logger.info("REG is enabled. Setting up the helper module.")
+                    reg_helper = RegHelper(transformer, args)
+                    reg_helper.attach_to_model(transformer)
+                    reg_helper.setup_hooks()
+                    reg_helper = accelerator.prepare(reg_helper)
+                except Exception as exc:
+                    logger.warning(f"REG setup failed: {exc}")
+                    reg_helper = None
             if getattr(args, "sara_enabled", False):
                 from enhancements.sara.sara_helper import create_sara_helper
 
@@ -1482,7 +1495,8 @@ class WanNetworkTrainer:
                 remove_model=remove_model,
                 is_main_process=is_main_process,
                 val_epoch_step_sync=val_epoch_step_sync,
-                repa_helper=repa_helper if sara_helper is None else None,
+                repa_helper=repa_helper if sara_helper is None else None,       
+                reg_helper=reg_helper,
                 sara_helper=sara_helper,
                 layer_sync_helper=layer_sync_helper,
                 crepa_helper=crepa_helper,
@@ -1494,6 +1508,8 @@ class WanNetworkTrainer:
             sara_helper.remove_hooks()
         if "repa_helper" in locals() and repa_helper is not None:
             repa_helper.remove_hooks()
+        if "reg_helper" in locals() and reg_helper is not None:
+            reg_helper.remove_hooks()
         if "layer_sync_helper" in locals() and layer_sync_helper is not None:
             layer_sync_helper.remove_hooks()
         if "haste_helper" in locals() and haste_helper is not None:

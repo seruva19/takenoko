@@ -1219,6 +1219,42 @@ repa_shared_projection = false
 repa_spatial_align = true
 
 # =============================================================================
+# ⚠️ REG (REPRESENTATION ENTANGLEMENT FOR GENERATION) SETTINGS
+# =============================================================================
+
+# Enable REG for class-token entanglement during training (default off).
+enable_reg = false
+
+# Visual encoder specification for REG (used to determine class-token size and targets).
+# Single encoder: "dinov2-vit-b", "dinov2-vit-l", "dinov2-vit-g", "clip-vit-L"
+reg_encoder_name = "dinov2-vit-b"
+
+# Diffusion layer alignment depth (n = 4 for small models; n = 8 for others in the paper).
+reg_alignment_depth = 8
+
+# Alignment loss weight (lambda, > 0; reference default 0.5).
+reg_proj_coeff = 0.5
+
+# Class-token denoising loss weight (beta, > 0; reference default 0.03).
+reg_cls_loss_weight = 0.03
+
+# Similarity function for alignment ("cosine" recommended, "mse" alternative).
+reg_similarity_fn = "cosine"
+
+# Input resolution for encoder preprocessing (256 or 512; 512 DINOv2-only).
+reg_input_resolution = 256
+
+# Class-token embedding dimension (0 = infer from encoder; 768 matches DINOv2-B).
+reg_cls_dim = 0
+
+# Target type for class-token denoising loss: "flow" (noise - x) or "velocity".
+# "flow" matches Takenoko's flow-matching objective; "velocity" follows Eq. 10.
+reg_target_type = "flow"
+
+# Spatial alignment via interpolation when token counts mismatch (recommended true).
+reg_spatial_align = true
+
+# =============================================================================
 # ⚠️ LAYER SYNC (SELF ALIGNMENT) SETTINGS
 # =============================================================================
 

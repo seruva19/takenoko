@@ -104,3 +104,5 @@ Keep in mind that work on some features is not yet complete due to time and hard
 | [relora](https://github.com/Guitaricet/relora) | repo | - ReLoRA pipeline | [Guitaricet](https://github.com/Guitaricet) | Apache 2.0 | <sub>see also [paper](https://arxiv.org/abs/2307.05695)</sub> |
 | [sd-scripts (pr)](https://github.com/kohya-ss/sd-scripts/pull/2221) | repo | - CDC-FM flow matching | [rockerBOO](https://github.com/rockerBOO) | Apache 2.0 | <sub>see also [paper](https://arxiv.org/abs/2510.05930)</sub> |
 | [GaLore](https://github.com/jiaweizzhao/GaLore) | repo | - GaLore optimizer | [jiaweizzhao](https://github.com/jiaweizzhao) | Apache 2.0 | <sub>see also [paper](https://arxiv.org/abs/2403.03507)</sub> |
+| [REG](https://github.com/Martinser/REG) | repo | -  Class‑token entanglement<br>- Class‑token denoising loss<br>- Alignment loss to encoder features| [Martinser](https://github.com/Martinser) | MIT | <sub>see also [paper](https://arxiv.org/abs/2507.01467v2)</sub> |
+

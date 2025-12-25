@@ -427,7 +427,9 @@ def run_distillation(
                 controlnet=None,
                 **rcm_call_kwargs_local,
             )
-            if isinstance(teacher_call, tuple) and len(teacher_call) == 4:
+            if isinstance(teacher_call, tuple) and len(teacher_call) == 5:
+                teacher_outputs, teacher_target, _, teacher_rcm, _ = teacher_call
+            elif isinstance(teacher_call, tuple) and len(teacher_call) == 4:
                 teacher_outputs, teacher_target, _, teacher_rcm = teacher_call
             else:
                 teacher_outputs, teacher_target, _ = teacher_call  # type: ignore[misc]
@@ -448,7 +450,9 @@ def run_distillation(
             controlnet=None,
             **rcm_call_kwargs_local,
         )
-        if isinstance(student_call, tuple) and len(student_call) == 4:
+        if isinstance(student_call, tuple) and len(student_call) == 5:
+            student_outputs, student_target, _, student_rcm, _ = student_call
+        elif isinstance(student_call, tuple) and len(student_call) == 4:
             student_outputs, student_target, _, student_rcm = student_call
         else:
             student_outputs, student_target, _ = student_call  # type: ignore[misc]

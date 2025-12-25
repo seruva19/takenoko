@@ -20,6 +20,7 @@ def forward_wan22_lean_block(
     context_lens: Optional[torch.Tensor],
     sparse_attention: bool,
     batched_rotary: Optional[torch.Tensor],
+    extra_tokens: int,
     force_fp16: bool,
     fp32_default: bool,
 ) -> torch.Tensor:
@@ -82,6 +83,7 @@ def forward_wan22_lean_block(
         freqs,
         sparse_attention=sparse_attention,
         batched_rotary=batched_rotary,  # type: ignore[arg-type]
+        extra_tokens=extra_tokens,
     )
     # Gate multiply in attention dtype, then cast back to original dtype for residual add
     x = x + (y.to(attention_dtype, copy=False) * s2).to(x_orig_dtype, copy=False)

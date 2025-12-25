@@ -144,6 +144,12 @@ def collect_and_log_training_metrics(
         )
     if loss_components.repa_loss is not None:
         logs["loss/repa"] = float(loss_components.repa_loss.item())
+    if getattr(loss_components, "reg_align_loss", None) is not None:
+        logs["loss/reg_align"] = float(loss_components.reg_align_loss.item())
+    if getattr(loss_components, "reg_cls_loss", None) is not None:
+        logs["loss/reg_cls"] = float(loss_components.reg_cls_loss.item())
+    if getattr(loss_components, "reg_similarity", None) is not None:
+        logs["reg_similarity"] = float(loss_components.reg_similarity.item())
     if getattr(loss_components, "haste_attn_loss", None) is not None:
         logs["loss/haste_attn"] = float(loss_components.haste_attn_loss.item())
     if getattr(loss_components, "haste_proj_loss", None) is not None:

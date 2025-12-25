@@ -1294,6 +1294,60 @@ def create_args_from_config(
     args.repa_loss_lambda = config.get("repa_loss_lambda", 0.5)
     args.repa_similarity_fn = config.get("repa_similarity_fn", "cosine")
 
+    # REG (Representation Entanglement for Generation) settings
+    args.enable_reg = bool(config.get("enable_reg", False))
+    args.reg_encoder_name = config.get("reg_encoder_name", "dinov2-vit-b")
+    args.reg_alignment_depth = int(config.get("reg_alignment_depth", 8))
+    if args.reg_alignment_depth <= 0:
+        raise ValueError(
+            f"reg_alignment_depth must be > 0, got {args.reg_alignment_depth}"
+        )
+    args.reg_proj_coeff = float(config.get("reg_proj_coeff", 0.5))
+    if args.reg_proj_coeff <= 0:
+        raise ValueError(f"reg_proj_coeff must be > 0, got {args.reg_proj_coeff}")
+    args.reg_cls_loss_weight = float(config.get("reg_cls_loss_weight", 0.03))
+    if args.reg_cls_loss_weight < 0:
+        raise ValueError(
+            f"reg_cls_loss_weight must be >= 0, got {args.reg_cls_loss_weight}"
+        )
+    if args.enable_reg and args.reg_cls_loss_weight <= 0:
+        raise ValueError(
+            "reg_cls_loss_weight must be > 0 when REG is enabled"
+        )
+    args.reg_similarity_fn = str(config.get("reg_similarity_fn", "cosine"))
+    allowed_reg_similarity = {"cosine", "mse"}
+    if args.reg_similarity_fn not in allowed_reg_similarity:
+        raise ValueError(
+            f"Invalid reg_similarity_fn '{args.reg_similarity_fn}'. "
+            f"Expected one of {sorted(allowed_reg_similarity)}."
+        )
+    args.reg_input_resolution = int(config.get("reg_input_resolution", 256))
+    if args.reg_input_resolution not in (256, 512):
+        raise ValueError(
+            f"reg_input_resolution must be 256 or 512, got {args.reg_input_resolution}"
+        )
+    args.reg_cls_dim = int(config.get("reg_cls_dim", 0))
+    if args.reg_cls_dim < 0:
+        raise ValueError(f"reg_cls_dim must be >= 0, got {args.reg_cls_dim}")
+    args.reg_target_type = str(config.get("reg_target_type", "flow"))
+    allowed_reg_target_types = {"flow", "velocity"}
+    if args.reg_target_type not in allowed_reg_target_types:
+        raise ValueError(
+            f"Invalid reg_target_type '{args.reg_target_type}'. "
+            f"Expected one of {sorted(allowed_reg_target_types)}."
+        )
+    args.reg_spatial_align = bool(config.get("reg_spatial_align", True))
+    if args.enable_reg:
+        logger.info(
+            "REG enabled (encoder=%s, depth=%d, lambda=%.3f, beta=%.3f, cls_dim=%d, target=%s)",
+            args.reg_encoder_name,
+            args.reg_alignment_depth,
+            args.reg_proj_coeff,
+            args.reg_cls_loss_weight,
+            args.reg_cls_dim,
+            args.reg_target_type,
+        )
+
     # LayerSync (self-alignment) settings
     from enhancements.layer_sync.config import parse_layer_sync_config
 

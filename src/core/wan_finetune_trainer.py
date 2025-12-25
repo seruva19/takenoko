@@ -686,9 +686,26 @@ class WanFinetuneTrainer:
         # Set noise scheduler for custom loss target support
         self.training_core.noise_scheduler = noise_scheduler
 
+        reg_cls_input = None
+        reg_cls_target = None
+        if getattr(args, "enable_reg", False) and reg_helper is not None:
+            if "pixels" in batch:
+                clean_pixels = torch.stack(batch["pixels"], dim=0)
+                reg_cls_input, reg_cls_target = reg_helper.prepare_class_token_inputs(
+                    clean_pixels,
+                    timesteps,
+                    noise_scheduler,
+                    device,
+                    transformer.dtype,
+                )
+            else:
+                logger.warning(
+                    "REG enabled, but no 'pixels' found in batch. Skipping REG class token."
+                )
+
         # Use TrainingCore's call_dit method
         with accelerator.autocast():
-            model_pred, target, intermediate_z = self.training_core.call_dit(
+            model_result = self.training_core.call_dit(
                 args,
                 accelerator,
                 transformer,
@@ -698,7 +715,13 @@ class WanFinetuneTrainer:
                 noisy_model_input,
                 timesteps,
                 transformer.dtype,
+                reg_cls_token=reg_cls_input,
             )
+            reg_cls_pred = None
+            if len(model_result) == 4:
+                model_pred, target, intermediate_z, reg_cls_pred = model_result
+            else:
+                model_pred, target, intermediate_z = model_result
 
         # Loss computation with weighting (reuse centralized loss computer)
         weighting = None
@@ -735,6 +758,9 @@ class WanFinetuneTrainer:
             network=transformer,
             control_signal_processor=None,
             repa_helper=repa_helper if sara_helper is None else None,
+            reg_helper=reg_helper,
+            reg_cls_pred=reg_cls_pred,
+            reg_cls_target=reg_cls_target,
             sara_helper=sara_helper,
             layer_sync_helper=layer_sync_helper,
             crepa_helper=crepa_helper,
@@ -1346,6 +1372,21 @@ class WanFinetuneTrainer:
             except Exception as exc:
                 logger.warning(f"CREPA setup failed: {exc}")
                 crepa_helper = None
+
+        # Initialize REG helper if enabled
+        reg_helper = None
+        if getattr(args, "enable_reg", False):
+            try:
+                from enhancements.reg.reg_helper import RegHelper
+
+                logger.info("REG is enabled. Setting up the helper module.")
+                reg_helper = RegHelper(transformer, args)
+                reg_helper.attach_to_model(transformer)
+                reg_helper.setup_hooks()
+                reg_helper = accelerator.prepare(reg_helper)
+            except Exception as exc:
+                logger.warning(f"REG setup failed: {exc}")
+                reg_helper = None
 
         # Initialize LayerSync helper if enabled
         layer_sync_helper = None
@@ -2082,6 +2123,8 @@ class WanFinetuneTrainer:
         # Close progress bar
         if "repa_helper" in locals() and repa_helper is not None:
             repa_helper.remove_hooks()
+        if "reg_helper" in locals() and reg_helper is not None:
+            reg_helper.remove_hooks()
         if "layer_sync_helper" in locals() and layer_sync_helper is not None:
             layer_sync_helper.remove_hooks()
         if "haste_helper" in locals() and haste_helper is not None:

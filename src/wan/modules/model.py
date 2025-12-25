@@ -97,7 +97,7 @@ except Exception:  # pragma: no cover - fallback for older torch
 
 
 @compiler_disable
-def rope_apply(x, grid_sizes, freqs, fractal=False):
+def rope_apply(x, grid_sizes, freqs, fractal=False, extra_tokens: int = 0):
     device_type = x.device.type
     with torch.amp.autocast(device_type=device_type, enabled=False):  # type: ignore
         n, c = x.size(2), x.size(3) // 2
@@ -110,9 +110,16 @@ def rope_apply(x, grid_sizes, freqs, fractal=False):
         for i, (f, h, w) in enumerate(grid_sizes.tolist()):
             seq_len = f * h * w
 
+            prefix = None
+            if extra_tokens > 0:
+                prefix = x[i, :extra_tokens]
+                x_i_tokens = x[i, extra_tokens : extra_tokens + seq_len]
+            else:
+                x_i_tokens = x[i, :seq_len]
+
             # precompute multipliers
             x_i = torch.view_as_complex(
-                x[i, :seq_len].to(torch.float64).reshape(seq_len, n, -1, 2)
+                x_i_tokens.to(torch.float64).reshape(seq_len, n, -1, 2)
             )
             freqs_i = torch.cat(
                 [
@@ -129,7 +136,13 @@ def rope_apply(x, grid_sizes, freqs, fractal=False):
 
             # apply rotary embedding
             x_i = torch.view_as_real(x_i * freqs_i).flatten(2)
-            x_i = torch.cat([x_i, x[i, seq_len:]])
+            if prefix is not None:
+                x_i = torch.cat(
+                    [prefix.to(x_i.dtype), x_i, x[i, extra_tokens + seq_len :]],
+                    dim=0,
+                )
+            else:
+                x_i = torch.cat([x_i, x[i, seq_len:]])
 
             # append to collection
             output.append(x_i)
@@ -153,7 +166,7 @@ def calculate_freqs_i(fhw, c, freqs):
 
 # inplace version of rope_apply
 @compiler_disable
-def rope_apply_inplace_cached(x, grid_sizes, freqs_list):
+def rope_apply_inplace_cached(x, grid_sizes, freqs_list, extra_tokens: int = 0):
     # with torch.amp.autocast(device_type=device_type, enabled=False):
     rope_dtype = torch.float64  # float32 does not reduce memory usage significantly
 
@@ -162,10 +175,12 @@ def rope_apply_inplace_cached(x, grid_sizes, freqs_list):
     # loop over samples
     for i, (f, h, w) in enumerate(grid_sizes.tolist()):
         seq_len = f * h * w
+        start = extra_tokens
+        end = extra_tokens + seq_len
 
         # precompute multipliers
         x_i = torch.view_as_complex(
-            x[i, :seq_len].to(rope_dtype).reshape(seq_len, n, -1, 2)
+            x[i, start:end].to(rope_dtype).reshape(seq_len, n, -1, 2)
         )
         freqs_i = freqs_list[i]
 
@@ -174,7 +189,7 @@ def rope_apply_inplace_cached(x, grid_sizes, freqs_list):
         # x_i = torch.cat([x_i, x[i, seq_len:]])
 
         # inplace update
-        x[i, :seq_len] = x_i.to(x.dtype)
+        x[i, start:end] = x_i.to(x.dtype)
 
     return x
 
@@ -294,6 +309,7 @@ class WanSelfAttention(nn.Module):
         freqs,
         sparse_attention: bool = False,
         batched_rotary: Optional[torch.Tensor] = None,
+        extra_tokens: int = 0,
     ):
         r"""
         Args:
@@ -325,12 +341,16 @@ class WanSelfAttention(nn.Module):
             q, k, v = qkv_fn(x)
             # This block is only executed if sparse attention is configured
             q_rope = (
-                rope_apply(q, grid_sizes, freqs, fractal=True)
+                rope_apply(
+                    q, grid_sizes, freqs, fractal=True, extra_tokens=extra_tokens
+                )
                 .to(dtype=torch.bfloat16)
                 .transpose(1, 2)
             )
             k_rope = (
-                rope_apply(k, grid_sizes, freqs, fractal=True)
+                rope_apply(
+                    k, grid_sizes, freqs, fractal=True, extra_tokens=extra_tokens
+                )
                 .to(dtype=torch.bfloat16)
                 .transpose(1, 2)
             )
@@ -368,17 +388,29 @@ class WanSelfAttention(nn.Module):
                         q_rope, k_rope = self.comfyrope(q, k, freqs)  # type: ignore[attr-defined]
                         qkv = [q_rope, k_rope, v]
                     except Exception:
-                        rope_apply_inplace_cached(q, grid_sizes, freqs)
-                        rope_apply_inplace_cached(k, grid_sizes, freqs)
+                        rope_apply_inplace_cached(
+                            q, grid_sizes, freqs, extra_tokens=extra_tokens
+                        )
+                        rope_apply_inplace_cached(
+                            k, grid_sizes, freqs, extra_tokens=extra_tokens
+                        )
                         qkv = [q, k, v]
                 elif self.rope_on_the_fly:
                     # freqs is expected to be base frequencies tensor when rope_on_the_fly=True
-                    q_rope = rope_apply(q, grid_sizes, freqs)
-                    k_rope = rope_apply(k, grid_sizes, freqs)
+                    q_rope = rope_apply(
+                        q, grid_sizes, freqs, extra_tokens=extra_tokens
+                    )
+                    k_rope = rope_apply(
+                        k, grid_sizes, freqs, extra_tokens=extra_tokens
+                    )
                     qkv = [q_rope, k_rope, v]
                 else:
-                    rope_apply_inplace_cached(q, grid_sizes, freqs)
-                    rope_apply_inplace_cached(k, grid_sizes, freqs)
+                    rope_apply_inplace_cached(
+                        q, grid_sizes, freqs, extra_tokens=extra_tokens
+                    )
+                    rope_apply_inplace_cached(
+                        k, grid_sizes, freqs, extra_tokens=extra_tokens
+                    )
                     qkv = [q, k, v]
             else:
                 qkv = [q, k, v]
@@ -573,6 +605,7 @@ class WanAttentionBlock(nn.Module):
         context_lens,
         sparse_attention: bool = False,
         batched_rotary: torch.Tensor | None = None,
+        extra_tokens: int = 0,
     ):
         r"""
         Args:
@@ -606,6 +639,7 @@ class WanAttentionBlock(nn.Module):
                 context_lens,
                 sparse_attention,
                 batched_rotary,
+                extra_tokens,
                 force_fp16=bool(getattr(self, "_lower_precision_attention", False)),
                 fp32_default=bool(getattr(self, "_lean_attn_fp32_default", True)),
             )
@@ -624,6 +658,7 @@ class WanAttentionBlock(nn.Module):
                 freqs if batched_rotary is None else None,
                 sparse_attention=sparse_attention,
                 batched_rotary=batched_rotary,  # type: ignore[arg-type]
+                extra_tokens=extra_tokens,
             )
             x = x + (y * s2).to(x_orig_dtype, copy=False)
             del y
@@ -657,6 +692,7 @@ class WanAttentionBlock(nn.Module):
         context_lens,
         sparse_attention: bool = False,
         batched_rotary: torch.Tensor | None = None,
+        extra_tokens: int = 0,
     ):
         """
         Forward pass for WanAttentionBlock.
@@ -688,6 +724,7 @@ class WanAttentionBlock(nn.Module):
                 context_lens,
                 sparse_attention,
                 batched_rotary,
+                extra_tokens,
                 use_reentrant=False,
             )
         return self._forward(
@@ -700,6 +737,7 @@ class WanAttentionBlock(nn.Module):
             context_lens,
             sparse_attention,
             batched_rotary,
+            extra_tokens,
         )
 
 
@@ -923,6 +961,11 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
         self.optimized_torch_compile = bool(optimized_torch_compile)
         self.compile_args: list | tuple | None = None
 
+        # REG (class token) modules are attached lazily when enabled
+        self.reg_cls_dim: Optional[int] = None
+        self.reg_cls_proj: Optional[nn.Module] = None
+        self.reg_cls_head: Optional[nn.Module] = None
+
         # embeddings
         self.patch_embedding = nn.Conv3d(
             in_dim, dim, kernel_size=patch_size, stride=patch_size
@@ -1015,6 +1058,23 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
         self._sprint_global_step: Optional[int] = None
         self._sprint_stage_name: Optional[str] = None
         self._memflow_guidance_enabled: bool = False
+
+    def configure_reg(self, cls_dim: int) -> None:
+        """Attach REG class-token projection heads when enabled."""
+        if cls_dim <= 0:
+            return
+        if self.reg_cls_dim == cls_dim and self.reg_cls_proj and self.reg_cls_head:
+            return
+        self.reg_cls_dim = int(cls_dim)
+        self.reg_cls_proj = make_linear(
+            self.reg_cls_dim, self.dim, True, tag="reg_cls_in"
+        )
+        self.reg_cls_head = make_linear(
+            self.dim, self.reg_cls_dim, True, tag="reg_cls_out"
+        )
+        device = self.patch_embedding.weight.device
+        self.reg_cls_proj.to(device)
+        self.reg_cls_head.to(device)
 
     def set_router(self, router: TREADRouter, routes: list[dict]) -> None:
         """Enable TREAD routing for this model.
@@ -1257,6 +1317,7 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
         controlnet_stride: int = 1,
         dispersive_loss_target_block: int | None = None,
         return_intermediate: bool = False,
+        reg_cls_token: torch.Tensor | None = None,
     ):
         r"""
         Forward pass through the diffusion model
@@ -1319,6 +1380,27 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
                 freqs_list.append(self.freqs_fhw[fhw])
 
         x = [u.flatten(2).transpose(1, 2) for u in x]
+
+        reg_extra_tokens = 0
+        reg_cls_pred = None
+        if reg_cls_token is not None:
+            if self.reg_cls_proj is None or self.reg_cls_head is None:
+                self.configure_reg(reg_cls_token.shape[-1])
+            if self.reg_cls_proj is not None:
+                reg_cls_embed = self.reg_cls_proj(
+                    reg_cls_token.to(self.patch_embedding.weight.dtype)
+                )
+                reg_extra_tokens = 1
+                x = [
+                    torch.cat(
+                        [
+                            reg_cls_embed[i : i + 1].unsqueeze(1).to(u.dtype),
+                            u,
+                        ],
+                        dim=1,
+                    )
+                    for i, u in enumerate(x)
+                ]
         seq_lens = torch.tensor([u.size(1) for u in x], dtype=torch.long)
         assert (
             seq_lens.max() <= seq_len
@@ -1491,6 +1573,12 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
             except Exception:
                 pass
 
+        if reg_extra_tokens and sparse_attention:
+            logger.warning(
+                "REG extra token detected; disabling sparse attention for compatibility."
+            )
+            sparse_attention = False
+
         kwargs = dict(
             e=e0,
             seq_lens=seq_lens,
@@ -1499,6 +1587,7 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
             context=context,
             context_lens=context_lens,
             sparse_attention=sparse_attention,
+            extra_tokens=reg_extra_tokens,
         )
 
         if sparse_attention:
@@ -1693,6 +1782,13 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
         if x.device != input_device:
             x = x.to(input_device)
 
+        # Split REG class token before head
+        if reg_extra_tokens:
+            reg_cls_hidden = x[:, :reg_extra_tokens, :]
+            x = x[:, reg_extra_tokens:, :]
+            if self.reg_cls_head is not None:
+                reg_cls_pred = self.reg_cls_head(reg_cls_hidden.squeeze(1))
+
         # head
         x = self.head(x, e)
 
@@ -1709,7 +1805,11 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
         x = self.unpatchify(x, grid_sizes)
         outputs = [u.float() for u in x]
         if return_intermediate:
+            if reg_cls_pred is not None:
+                return outputs, intermediate_z, reg_cls_pred
             return outputs, intermediate_z
+        if reg_cls_pred is not None:
+            return outputs, reg_cls_pred
         return outputs
 
     def unpatchify(self, x, grid_sizes):

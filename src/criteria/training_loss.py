@@ -82,6 +82,12 @@ class LossComponents:
         The LayerSync mean cosine similarity between source and target blocks.
     repa_loss: Optional[torch.Tensor]
         The REPA alignment loss, if enabled.
+    reg_align_loss: Optional[torch.Tensor]
+        The REG alignment loss, if enabled.
+    reg_cls_loss: Optional[torch.Tensor]
+        The REG class-token denoising loss, if enabled.
+    reg_similarity: Optional[torch.Tensor]
+        The REG mean similarity across tokens, if available.
     crepa_loss: Optional[torch.Tensor]
         The CREPA cross-frame alignment loss, if enabled.
     crepa_similarity: Optional[torch.Tensor]
@@ -111,6 +117,9 @@ class LossComponents:
     layer_sync_loss: Optional[torch.Tensor] = None
     layer_sync_similarity: Optional[torch.Tensor] = None
     repa_loss: Optional[torch.Tensor] = None
+    reg_align_loss: Optional[torch.Tensor] = None
+    reg_cls_loss: Optional[torch.Tensor] = None
+    reg_similarity: Optional[torch.Tensor] = None
     crepa_loss: Optional[torch.Tensor] = None
     crepa_similarity: Optional[torch.Tensor] = None
     haste_attn_loss: Optional[torch.Tensor] = None
@@ -392,6 +401,9 @@ class TrainingLossComputer:
         network: Optional[Any] = None,
         control_signal_processor: Optional[Any] = None,
         repa_helper: Optional[Any] = None,
+        reg_helper: Optional[Any] = None,
+        reg_cls_pred: Optional[torch.Tensor] = None,
+        reg_cls_target: Optional[torch.Tensor] = None,
         sara_helper: Optional[Any] = None,
         layer_sync_helper: Optional[Any] = None,
         crepa_helper: Optional[Any] = None,
@@ -823,6 +835,39 @@ class TrainingLossComputer:
             except Exception as e:
                 logger.warning(f"Dispersive loss computation failed: {e}")
 
+        # ---- Optional REG Loss ----
+        reg_align_loss_value: Optional[torch.Tensor] = None
+        reg_cls_loss_value: Optional[torch.Tensor] = None
+        reg_similarity_value: Optional[torch.Tensor] = None
+        if reg_helper is not None and getattr(args, "enable_reg", False):
+            try:
+                if "pixels" in batch:
+                    clean_pixels = torch.stack(batch["pixels"], dim=0)
+                    reg_align_loss, reg_similarity = reg_helper.get_alignment_loss(
+                        clean_pixels
+                    )
+                    reg_align_loss_value = reg_align_loss.detach()
+                    if reg_similarity is not None:
+                        reg_similarity_value = reg_similarity.detach()
+                    loss = loss + float(getattr(args, "reg_proj_coeff", 0.5)) * reg_align_loss
+                else:
+                    logger.warning(
+                        "REG enabled, but no 'pixels' found in batch. Skipping REG alignment loss."
+                    )
+            except Exception as e:
+                logger.warning(f"REG alignment loss computation failed: {e}")
+            try:
+                if reg_cls_pred is not None and reg_cls_target is not None:
+                    reg_cls_loss = F.mse_loss(reg_cls_pred, reg_cls_target)
+                    reg_cls_loss_value = reg_cls_loss.detach()
+                    loss = loss + float(getattr(args, "reg_cls_loss_weight", 0.03)) * reg_cls_loss
+                elif getattr(args, "enable_reg", False):
+                    logger.warning(
+                        "REG enabled, but class token predictions/targets are missing."
+                    )
+            except Exception as e:
+                logger.warning(f"REG class-token loss computation failed: {e}")
+
         # ---- Optional SARA or REPA Loss ----
         sara_loss_value: Optional[torch.Tensor] = None
         repa_loss_value: Optional[torch.Tensor] = None
@@ -1224,6 +1269,9 @@ class TrainingLossComputer:
             layer_sync_loss=layer_sync_loss_value,
             layer_sync_similarity=layer_sync_similarity_value,
             repa_loss=repa_loss_value,
+            reg_align_loss=reg_align_loss_value,
+            reg_cls_loss=reg_cls_loss_value,
+            reg_similarity=reg_similarity_value,
             crepa_loss=crepa_loss_value,
             crepa_similarity=crepa_similarity_value,
             haste_attn_loss=haste_attn_loss_value,

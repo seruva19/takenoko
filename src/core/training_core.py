@@ -378,6 +378,7 @@ class TrainingCore:
         rcm_mode: bool = False,
         rcm_trigflow: Optional[torch.Tensor] = None,
         rcm_t_scaling_factor: Optional[float] = None,
+        reg_cls_token: Optional[torch.Tensor] = None,
     ) -> Union[
         Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]],
         Tuple[
@@ -548,6 +549,8 @@ class TrainingCore:
                 * self.config.patch_size[2]
             )
         )
+        if reg_cls_token is not None:
+            seq_len += 1
         latents = latents.to(device=accelerator.device, dtype=network_dtype)
         noisy_model_input = noisy_model_input.to(
             device=accelerator.device, dtype=network_dtype
@@ -647,11 +650,20 @@ class TrainingCore:
                 return_intermediate=bool(
                     getattr(args, "enable_dispersive_loss", False)
                 ),
+                reg_cls_token=reg_cls_token,
             )
         # Unpack optional intermediate
         intermediate_z: Optional[torch.Tensor] = None
-        if isinstance(model_pred, tuple) and len(model_pred) == 2:
-            model_pred, intermediate_z = model_pred  # type: ignore
+        reg_cls_pred: Optional[torch.Tensor] = None
+        if isinstance(model_pred, tuple):
+            if len(model_pred) == 2:
+                model_pred, second = model_pred  # type: ignore
+                if torch.is_tensor(second) and second.dim() == 2:
+                    reg_cls_pred = second
+                else:
+                    intermediate_z = second
+            elif len(model_pred) == 3:
+                model_pred, intermediate_z, reg_cls_pred = model_pred  # type: ignore
         model_pred = torch.stack(model_pred, dim=0)  # list to tensor
 
         if model_pred.grad_fn is None:
@@ -721,7 +733,11 @@ class TrainingCore:
             )
 
         if rcm_mode:
-            return model_pred, target, intermediate_z, rcm_result
+                if reg_cls_pred is not None:
+                    return model_pred, target, intermediate_z, rcm_result, reg_cls_pred
+                return model_pred, target, intermediate_z, rcm_result
+        if reg_cls_pred is not None:
+            return model_pred, target, intermediate_z, reg_cls_pred
         return model_pred, target, intermediate_z
 
     def run_training_loop(
@@ -758,6 +774,7 @@ class TrainingCore:
         is_main_process: bool = False,
         val_epoch_step_sync: Optional[Tuple[Any, Any]] = None,
         repa_helper: Optional[Any] = None,
+        reg_helper: Optional[Any] = None,
         sara_helper: Optional[Any] = None,
         layer_sync_helper: Optional[Any] = None,
         crepa_helper: Optional[Any] = None,
@@ -1230,6 +1247,30 @@ class TrainingCore:
                                 weighting=weighting,
                             )
 
+                            reg_cls_input = None
+                            reg_cls_target = None
+                            if (
+                                getattr(args, "enable_reg", False)
+                                and reg_helper is not None
+                            ):
+                                if "pixels" in batch:
+                                    clean_pixels = torch.stack(
+                                        batch["pixels"], dim=0
+                                    )
+                                    reg_cls_input, reg_cls_target = (
+                                        reg_helper.prepare_class_token_inputs(
+                                            clean_pixels,
+                                            timesteps,
+                                            self.noise_scheduler,
+                                            accelerator.device,
+                                            network_dtype,
+                                        )
+                                    )
+                                else:
+                                    logger.warning(
+                                        "REG enabled, but no 'pixels' found in batch. Skipping REG class token."
+                                    )
+
                             model_result = self.call_dit(
                                 args,
                                 accelerator,
@@ -1242,6 +1283,7 @@ class TrainingCore:
                                 network_dtype,
                                 control_signal_processor,
                                 controlnet,
+                                reg_cls_token=reg_cls_input,
                             )
 
                             # End forward pass timing
@@ -1254,10 +1296,12 @@ class TrainingCore:
                                 )
                                 continue
 
-                            # Unpack model result - handle both 3-tuple and 4-tuple returns
-                            # (4-tuple is returned when rcm_mode=True, includes rcm_result)
+                            # Unpack model result
+                            reg_cls_pred = None
                             if len(model_result) == 4:
-                                model_pred, target, intermediate_z, _ = model_result
+                                model_pred, target, intermediate_z, reg_cls_pred = (
+                                    model_result
+                                )
                             else:
                                 model_pred, target, intermediate_z = model_result
 
@@ -1278,7 +1322,7 @@ class TrainingCore:
                                 )
                                 with local_ctx:
                                     with suspend_memflow_guidance():
-                                        pred, _, _ = self.call_dit(
+                                        call_result = self.call_dit(
                                             args,
                                             accelerator,
                                             active_transformer,
@@ -1293,6 +1337,7 @@ class TrainingCore:
                                             return_intermediate=False,
                                             override_target=True,
                                         )
+                                pred = call_result[0]
                                 return pred
 
                             (
@@ -1423,6 +1468,9 @@ class TrainingCore:
                                 repa_helper=(
                                     repa_helper if sara_helper is None else None
                                 ),
+                                reg_helper=reg_helper,
+                                reg_cls_pred=reg_cls_pred,
+                                reg_cls_target=reg_cls_target,
                                 sara_helper=sara_helper,
                                 layer_sync_helper=layer_sync_helper,
                                 crepa_helper=crepa_helper,

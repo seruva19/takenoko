@@ -739,6 +739,15 @@ class SamplingManager:
                 * lat_w
                 // (patch_size[0] * patch_size[1] * patch_size[2])
             )
+            reg_enabled = bool(getattr(args, "enable_reg", False))
+            reg_cls_dim = int(getattr(args, "reg_cls_dim", 0) or 0)
+            if reg_enabled and reg_cls_dim <= 0:
+                logger.warning(
+                    "REG enabled but reg_cls_dim is unset; defaulting to 768 for sampling."
+                )
+                reg_cls_dim = 768
+            if reg_enabled:
+                max_seq_len += 1
             arg_c = {"context": [context], "seq_len": max_seq_len}
             arg_null = {"context": [context_null], "seq_len": max_seq_len}
             if getattr(args, "sprint_uncond_path_drop", False):
@@ -754,6 +763,18 @@ class SamplingManager:
                 boundary = boundary / 1000.0
 
             with torch.no_grad():
+                reg_cls_token = None
+                reg_scheduler = None
+                if reg_enabled:
+                    reg_cls_token = torch.randn(
+                        1, reg_cls_dim, device=device, dtype=latent.dtype
+                    )
+                    reg_scheduler = FlowUniPCMultistepScheduler(
+                        shift=1, use_dynamic_shifting=False
+                    )
+                    reg_scheduler.set_timesteps(
+                        sample_steps, device=device, shift=discrete_flow_shift
+                    )
                 for i, t in enumerate(
                     tqdm(
                         timesteps,
@@ -838,22 +859,48 @@ class SamplingManager:
                         except Exception:
                             pass
 
-                        noise_pred_cond = model(
+                        if reg_enabled and reg_cls_token is not None:
+                            arg_c["reg_cls_token"] = reg_cls_token
+                            arg_null["reg_cls_token"] = reg_cls_token
+                        model_out_cond = model(
                             latent_model_input, t=timestep, **arg_c
-                        )[0]
+                        )
+                        reg_cls_pred_cond = None
+                        if isinstance(model_out_cond, tuple):
+                            out_cond, reg_cls_pred_cond = model_out_cond
+                        else:
+                            out_cond = model_out_cond
+                        noise_pred_cond = out_cond[0]
                         if do_classifier_free_guidance:
-                            noise_pred_uncond = model(
+                            model_out_uncond = model(
                                 latent_model_input, t=timestep, **arg_null
-                            )[0]
+                            )
+                            reg_cls_pred_uncond = None
+                            if isinstance(model_out_uncond, tuple):
+                                out_uncond, reg_cls_pred_uncond = model_out_uncond
+                            else:
+                                out_uncond = model_out_uncond
+                            noise_pred_uncond = out_uncond[0]
                         else:
                             noise_pred_uncond = None
+                            reg_cls_pred_uncond = None
 
                     if do_classifier_free_guidance:
                         noise_pred = noise_pred_uncond + cfg_scale * (
                             noise_pred_cond - noise_pred_uncond
                         )
+                        if (
+                            reg_cls_pred_cond is not None
+                            and reg_cls_pred_uncond is not None
+                        ):
+                            reg_cls_pred = reg_cls_pred_uncond + cfg_scale * (
+                                reg_cls_pred_cond - reg_cls_pred_uncond
+                            )
+                        else:
+                            reg_cls_pred = reg_cls_pred_cond
                     else:
                         noise_pred = noise_pred_cond
+                        reg_cls_pred = reg_cls_pred_cond
 
                     temp_x0 = scheduler.step(
                         noise_pred.unsqueeze(0),
@@ -863,6 +910,19 @@ class SamplingManager:
                         generator=generator,
                     )[0]
                     latent = temp_x0.squeeze(0)
+                    if (
+                        reg_enabled
+                        and reg_cls_token is not None
+                        and reg_cls_pred is not None
+                        and reg_scheduler is not None
+                    ):
+                        reg_cls_token = reg_scheduler.step(
+                            reg_cls_pred,
+                            t,
+                            reg_cls_token,
+                            return_dict=False,
+                            generator=generator,
+                        )[0]
 
         # Move VAE to the appropriate device for sampling
         vae.to(device)
