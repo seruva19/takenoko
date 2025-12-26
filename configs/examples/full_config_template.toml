@@ -1322,6 +1322,14 @@ crepa_encoder = "dinov2_vitg14"
 # Input image size for CREPA encoder (default: 518 for DINOv2).
 crepa_encoder_image_size = 518
 
+# How many frames the external CREPA vision encoder processes in parallel.
+# - <= 0: process all frames (B*T) at once (fastest, highest VRAM)
+# - > 0: split frames into chunks of this size and run the encoder multiple times
+# If this value is not a divisor of (B*T), the last chunk will be smaller.
+# This only affects CREPA when crepa_use_backbone_features = false.
+# Default: -1
+crepa_encoder_frame_chunk_size = -1
+
 # Spatial alignment strategy for CREPA:
 # - true: interpolate patch tokens to align spatial grids
 # - false: pool to global tokens when counts differ

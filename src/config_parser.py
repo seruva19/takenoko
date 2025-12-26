@@ -1312,9 +1312,7 @@ def create_args_from_config(
             f"reg_cls_loss_weight must be >= 0, got {args.reg_cls_loss_weight}"
         )
     if args.enable_reg and args.reg_cls_loss_weight <= 0:
-        raise ValueError(
-            "reg_cls_loss_weight must be > 0 when REG is enabled"
-        )
+        raise ValueError("reg_cls_loss_weight must be > 0 when REG is enabled")
     args.reg_similarity_fn = str(config.get("reg_similarity_fn", "cosine"))
     allowed_reg_similarity = {"cosine", "mse"}
     if args.reg_similarity_fn not in allowed_reg_similarity:
@@ -1379,9 +1377,7 @@ def create_args_from_config(
         )
     )
     args.crepa_adjacent_tau = float(
-        config.get(
-            "crepa_adjacent_tau", 1.0 if tau_fallback is None else tau_fallback
-        )
+        config.get("crepa_adjacent_tau", 1.0 if tau_fallback is None else tau_fallback)
     )
     args.crepa_cumulative_neighbors = bool(
         config.get("crepa_cumulative_neighbors", False)
@@ -1389,16 +1385,18 @@ def create_args_from_config(
     args.crepa_encoder = config.get(
         "crepa_encoder", config.get("crepa_model", "dinov2_vitg14")
     )
-    args.crepa_encoder_image_size = int(
-        config.get("crepa_encoder_image_size", 518)
+    args.crepa_encoder_image_size = int(config.get("crepa_encoder_image_size", 518))
+    raw_crepa_encoder_frame_chunk_size = config.get(
+        "crepa_encoder_frame_chunk_size", -1
     )
+    if raw_crepa_encoder_frame_chunk_size is None:
+        raw_crepa_encoder_frame_chunk_size = -1
+    args.crepa_encoder_frame_chunk_size = int(raw_crepa_encoder_frame_chunk_size)
     args.crepa_spatial_align = bool(config.get("crepa_spatial_align", True))
     args.crepa_use_backbone_features = bool(
         config.get("crepa_use_backbone_features", False)
     )
-    args.crepa_drop_vae_encoder = bool(
-        config.get("crepa_drop_vae_encoder", False)
-    )
+    args.crepa_drop_vae_encoder = bool(config.get("crepa_drop_vae_encoder", False))
     args.crepa_normalize_by_frames = config.get("crepa_normalize_by_frames", True)
     # Back-compat aliases for existing REPA-based CREPA path
     args.crepa_adjacency = args.crepa_adjacent_distance

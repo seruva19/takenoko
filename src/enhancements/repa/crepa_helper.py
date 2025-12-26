@@ -35,6 +35,9 @@ class CrepaHelper(nn.Module):
         self.encoder_image_size = int(
             getattr(args, "crepa_encoder_image_size", 518) or 518
         )
+        self.encoder_frame_chunk_size = int(
+            getattr(args, "crepa_encoder_frame_chunk_size", -1) or -1
+        )
         self.normalize_by_frames = bool(
             getattr(args, "crepa_normalize_by_frames", True)
         )
@@ -54,7 +57,9 @@ class CrepaHelper(nn.Module):
 
         if self.enabled:
             if self.hidden_size is None:
-                raise ValueError("CREPA enabled but unable to infer transformer hidden size.")
+                raise ValueError(
+                    "CREPA enabled but unable to infer transformer hidden size."
+                )
             self._init_projector()
             if not self.use_backbone_features:
                 self._load_encoder()
@@ -235,11 +240,15 @@ class CrepaHelper(nn.Module):
         if not self.enabled or self.weight == 0:
             return None, None
         if self._captured_hidden is None:
-            raise ValueError("CREPA is enabled but no intermediate hidden states were captured.")
+            raise ValueError(
+                "CREPA is enabled but no intermediate hidden states were captured."
+            )
 
         if self.use_backbone_features:
             if self._captured_teacher is None:
-                raise ValueError("CREPA backbone feature mode requires teacher hidden states.")
+                raise ValueError(
+                    "CREPA backbone feature mode requires teacher hidden states."
+                )
             frame_features = self._normalize_frame_features(self._captured_teacher)
         else:
             if clean_pixels is None:
@@ -251,7 +260,9 @@ class CrepaHelper(nn.Module):
             frame_features = self._encode_frames(clean_pixels)
 
         projected = self._project_hidden_states(self._captured_hidden)
-        projected, frame_features = self._maybe_align_temporal(projected, frame_features)
+        projected, frame_features = self._maybe_align_temporal(
+            projected, frame_features
+        )
         projected, frame_features = self._maybe_align_tokens(projected, frame_features)
 
         projected = F.normalize(projected, dim=-1)
@@ -267,15 +278,31 @@ class CrepaHelper(nn.Module):
             if self.cumulative_neighbors:
                 for offset in range(1, d + 1):
                     weight = math.exp(-float(offset) / tau)
-                    fwd = (projected[:, :-offset, ...] * frame_features[:, offset:, ...]).sum(dim=-1).mean(dim=-1)
+                    fwd = (
+                        (projected[:, :-offset, ...] * frame_features[:, offset:, ...])
+                        .sum(dim=-1)
+                        .mean(dim=-1)
+                    )
                     total_sim[:, :-offset] += weight * fwd
-                    back = (projected[:, offset:, ...] * frame_features[:, :-offset, ...]).sum(dim=-1).mean(dim=-1)
+                    back = (
+                        (projected[:, offset:, ...] * frame_features[:, :-offset, ...])
+                        .sum(dim=-1)
+                        .mean(dim=-1)
+                    )
                     total_sim[:, offset:] += weight * back
             else:
                 weight = math.exp(-float(d) / tau)
-                fwd = (projected[:, :-d, ...] * frame_features[:, d:, ...]).sum(dim=-1).mean(dim=-1)
+                fwd = (
+                    (projected[:, :-d, ...] * frame_features[:, d:, ...])
+                    .sum(dim=-1)
+                    .mean(dim=-1)
+                )
                 total_sim[:, :-d] += weight * fwd
-                back = (projected[:, d:, ...] * frame_features[:, :-d, ...]).sum(dim=-1).mean(dim=-1)
+                back = (
+                    (projected[:, d:, ...] * frame_features[:, :-d, ...])
+                    .sum(dim=-1)
+                    .mean(dim=-1)
+                )
                 total_sim[:, d:] += weight * back
 
         per_video_sum = total_sim.sum(dim=1)
@@ -314,10 +341,14 @@ class CrepaHelper(nn.Module):
         if t_proj == t_feat:
             return projected, frame_features
         if t_feat > t_proj:
-            indices = torch.linspace(0, t_feat - 1, t_proj, device=frame_features.device).long()
+            indices = torch.linspace(
+                0, t_feat - 1, t_proj, device=frame_features.device
+            ).long()
             frame_features = frame_features.index_select(1, indices)
         else:
-            indices = torch.linspace(0, t_proj - 1, t_feat, device=projected.device).long()
+            indices = torch.linspace(
+                0, t_proj - 1, t_feat, device=projected.device
+            ).long()
             projected = projected.index_select(1, indices)
         return projected, frame_features
 
@@ -337,7 +368,9 @@ class CrepaHelper(nn.Module):
         frame_features = self._interpolate_tokens(frame_features, target_tokens)
         return projected, frame_features
 
-    def _interpolate_tokens(self, tokens: torch.Tensor, target_tokens: int) -> torch.Tensor:
+    def _interpolate_tokens(
+        self, tokens: torch.Tensor, target_tokens: int
+    ) -> torch.Tensor:
         if tokens.shape[2] == target_tokens:
             return tokens
         b, t, n, d = tokens.shape
@@ -351,7 +384,9 @@ class CrepaHelper(nn.Module):
             )
             interpolated = interpolated.view(b * t, d, target_tokens)
         else:
-            interpolated = F.interpolate(flat, size=target_tokens, mode="linear", align_corners=False)
+            interpolated = F.interpolate(
+                flat, size=target_tokens, mode="linear", align_corners=False
+            )
         return interpolated.permute(0, 2, 1).reshape(b, t, target_tokens, d)
 
     def _forward_encoder(self, images: torch.Tensor) -> torch.Tensor:
@@ -389,10 +424,22 @@ class CrepaHelper(nn.Module):
         )
         enc_dtype = next(self.encoder.parameters()).dtype
         frames = frames.to(dtype=enc_dtype)
-        mean = torch.tensor([0.485, 0.456, 0.406], device=self.device, dtype=enc_dtype).view(1, 3, 1, 1)
-        std = torch.tensor([0.229, 0.224, 0.225], device=self.device, dtype=enc_dtype).view(1, 3, 1, 1)
+        # ImageNet normalization (used by DINO/DINOv2-style vision encoders).
+        mean = torch.tensor(
+            [0.485, 0.456, 0.406], device=self.device, dtype=enc_dtype
+        ).view(1, 3, 1, 1)
+        std = torch.tensor(
+            [0.229, 0.224, 0.225], device=self.device, dtype=enc_dtype
+        ).view(1, 3, 1, 1)
         frames = (frames - mean) / std
-        tokens = self._forward_encoder(frames)
+        if self.encoder_frame_chunk_size > 0:
+            frame_chunks = torch.split(frames, self.encoder_frame_chunk_size, dim=0)
+            tokens = torch.cat(
+                [self._forward_encoder(chunk) for chunk in frame_chunks],
+                dim=0,
+            )
+        else:
+            tokens = self._forward_encoder(frames)
         return tokens.view(b, t, tokens.shape[1], -1)
 
     def _decode_latents(self, latents: torch.Tensor, vae: nn.Module) -> torch.Tensor:
@@ -406,8 +453,12 @@ class CrepaHelper(nn.Module):
             latents = latents / scaling_factor
         if hasattr(vae.config, "latents_mean") and hasattr(vae.config, "latents_std"):
             view_shape = [1, latents.shape[1]] + [1] * (latents.ndim - 2)
-            mean = torch.tensor(vae.config.latents_mean, device=self.device, dtype=latents.dtype).view(view_shape)
-            std = torch.tensor(vae.config.latents_std, device=self.device, dtype=latents.dtype).view(view_shape)
+            mean = torch.tensor(
+                vae.config.latents_mean, device=self.device, dtype=latents.dtype
+            ).view(view_shape)
+            std = torch.tensor(
+                vae.config.latents_std, device=self.device, dtype=latents.dtype
+            ).view(view_shape)
             latents = latents * std + mean
         with torch.no_grad():
             decoded = vae.decode(latents).sample
