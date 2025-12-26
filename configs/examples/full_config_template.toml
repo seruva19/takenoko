@@ -1342,6 +1342,86 @@ crepa_drop_vae_encoder = false
 crepa_normalize_by_frames = true
 
 # =============================================================================
+# ⚠️ SEMANTICGEN LORA SETTINGS
+# =============================================================================
+# Enable SemanticGen-inspired semantic conditioning for LoRA training (train-only, default off).
+enable_semanticgen_lora = false
+
+# Semantic encoder model name (REPA-style encoders or HF models like Qwen-VL).
+semantic_encoder_name = "dinov2-vit-b14"
+
+# Semantic encoder backend:
+# - "repa": use Takenoko's REPA encoder manager (DINO/CLIP/MAE/I-JEPA, downloads via torch.hub)
+# - "hf": use HuggingFace AutoModel/AutoProcessor (supports Qwen-VL)
+# - "qwen_vl": alias of "hf"
+semantic_encoder_type = "repa"
+
+# Encoder dtype ("float16", "bfloat16", "float32").
+semantic_encoder_dtype = "float16"
+
+# Input resolution for semantic encoder preprocessing (REPA encoders only).
+semantic_encoder_resolution = 256
+
+# Low-FPS semantic sampling (frames per second).
+semantic_encoder_fps = 2.0
+
+# Target FPS used for stride calculation
+semantic_encoder_target_fps = 16.0
+
+# Additional stride applied on top of FPS-based sampling (>= 1).
+semantic_encoder_stride = 1
+
+# Optional hard cap on number of semantic frames per clip (comment out to disable).
+# semantic_encoder_frame_limit = 16
+
+# Semantic embedding dimension expected from encoder (must match encoder output).
+semantic_embed_dim = 1024
+
+# Compression dimension for semantic MLP (must be <= semantic_embed_dim).
+semantic_compress_dim = 256
+
+# KL regularization weight for semantic compression (>= 0).
+semantic_kl_weight = 0.1
+
+# Optional noise applied to compressed semantic embeddings (>= 0).
+semantic_noise_std = 0.0
+
+# Semantic context injection mode:
+# - "concat_text": append semantic tokens after text tokens
+# - "concat_tokens": prepend semantic tokens before text tokens
+semantic_context_mode = "concat_text"
+
+# Global scale for semantic conditioning (>= 0).
+semantic_context_scale = 1.0
+
+# Drop semantic conditioning with this probability (0-1).
+semantic_condition_dropout = 0.0
+
+# Anneal semantic conditioning scale to semantic_condition_min_scale over these steps.
+semantic_condition_anneal_steps = 0
+
+# Semantic conditioning minimal scale.
+semantic_condition_min_scale = 0.0
+
+# Optional cache settings for semantic embeddings (default off).
+semantic_cache_enabled = false
+
+# semantic_cache_directory = "cache/semantic"
+semantic_cache_require = false
+
+# Semantic alignment loss (train-only) using diffusion block features.
+semantic_align_enabled = false
+
+# Weight for semantic alignment loss (>= 0). Higher values enforce stronger feature alignment.
+semantic_align_lambda = 0.1
+
+# Transformer block index to tap for alignment (0 = earliest block). Use a mid block for semantic structure.
+semantic_align_block_index = 8
+
+# Optional LR override for SemanticGen helper params (defaults to learning_rate).
+# semanticgen_lr = 0.0001
+
+# =============================================================================
 # ⚠️ SARA (STRUCTURAL AND ADVERSARIAL REPRESENTATION ALIGNMENT) SETTINGS
 # =============================================================================
 

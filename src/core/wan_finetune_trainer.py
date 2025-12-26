@@ -715,6 +715,7 @@ class WanFinetuneTrainer:
                 noisy_model_input,
                 timesteps,
                 transformer.dtype,
+                global_step=None,
                 reg_cls_token=reg_cls_input,
             )
             reg_cls_pred = None
@@ -928,6 +929,8 @@ class WanFinetuneTrainer:
             getattr(args, "enable_control_lora", False)
             or getattr(args, "sara_enabled", False)
             or getattr(args, "enable_repa", False)
+            or getattr(args, "enable_semanticgen_lora", False)
+            or getattr(args, "semantic_align_enabled", False)
         )
 
         train_dataset_group = config_utils.generate_dataset_group_by_blueprint(
@@ -941,6 +944,11 @@ class WanFinetuneTrainer:
                 else getattr(args, "num_timestep_buckets", None)
             ),
             shared_epoch=current_epoch,  # NEW: Pass shared epoch counter
+            require_semantic_encoder_cache=bool(
+                getattr(args, "semantic_cache_enabled", False)
+                and getattr(args, "semantic_cache_require", False)
+            ),
+            semantic_cache_directory=getattr(args, "semantic_cache_directory", None),
         )
 
         if train_dataset_group.num_train_items == 0:

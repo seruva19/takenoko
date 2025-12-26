@@ -2,6 +2,7 @@ import argparse
 import logging
 from typing import Any, Dict
 from common.logger import get_logger
+from enhancements.semanticgen.config import parse_semanticgen_config
 from memory.config import parse_memory_optimization_config
 from transition.configuration import parse_transition_config
 
@@ -1431,6 +1432,9 @@ def create_args_from_config(
             args.crepa_adjacent_tau,
             args.crepa_use_backbone_features,
         )
+
+    # SemanticGen LoRA settings
+    parse_semanticgen_config(args, config, logger)
 
     # SARA (Structural and Adversarial Representation Alignment) settings
     args.sara_enabled = config.get("sara_enabled", False)

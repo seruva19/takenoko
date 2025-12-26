@@ -425,6 +425,7 @@ def run_distillation(
                 network_dtype=dit_dtype,
                 control_signal_processor=None,
                 controlnet=None,
+                global_step=None,
                 **rcm_call_kwargs_local,
             )
             if isinstance(teacher_call, tuple) and len(teacher_call) == 5:
@@ -448,6 +449,7 @@ def run_distillation(
             network_dtype=dit_dtype,
             control_signal_processor=None,
             controlnet=None,
+            global_step=None,
             **rcm_call_kwargs_local,
         )
         if isinstance(student_call, tuple) and len(student_call) == 5:

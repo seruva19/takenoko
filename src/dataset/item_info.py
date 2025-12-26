@@ -34,6 +34,7 @@ class ItemInfo:
         self.content = content
         self.latent_cache_path = latent_cache_path
         self.text_encoder_output_cache_path: Optional[str] = None
+        self.semantic_encoder_output_cache_path: Optional[str] = None
         self.weight = weight
         self.control_content = control_content
         self.mask_content = mask_content

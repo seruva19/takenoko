@@ -43,6 +43,13 @@ from memory.safe_memory_manager import SafeMemoryManager
 from core.vae_training_core import VaeTrainingCore
 from reward.reward_training_core import RewardTrainingCore
 from enhancements.repa.repa_helper import RepaHelper
+from enhancements.semanticgen.trainer_integration import (
+    build_semantic_prepare_items,
+    create_semantic_helpers,
+    get_semantic_cache_requirements,
+    setup_semantic_training_integration,
+    teardown_semantic_training_integration,
+)
 from scheduling.timestep_utils import (
     initialize_timestep_distribution,
     get_noisy_model_input_and_timesteps,
@@ -436,7 +443,10 @@ class WanNetworkTrainer:
             getattr(args, "enable_control_lora", False)
             or getattr(args, "sara_enabled", False)
             or getattr(args, "enable_repa", False)
+            or getattr(args, "enable_semanticgen_lora", False)
+            or getattr(args, "semantic_align_enabled", False)
         )
+        semantic_cache_kwargs = get_semantic_cache_requirements(args)
 
         train_dataset_group = config_utils.generate_dataset_group_by_blueprint(
             blueprint.train_dataset_group,
@@ -449,6 +459,7 @@ class WanNetworkTrainer:
                 else getattr(args, "num_timestep_buckets", None)
             ),
             shared_epoch=current_epoch,  # NEW: Pass shared epoch counter
+            **semantic_cache_kwargs,
         )
 
         # Log regularization information
@@ -824,6 +835,17 @@ class WanNetworkTrainer:
                 crepa_helper = None
 
         (
+            semantic_conditioning_helper,
+            semantic_alignment_helper,
+        ) = create_semantic_helpers(
+            args=args,
+            transformer=transformer,
+            accelerator=accelerator,
+            trainable_params=trainable_params,
+            lr_descriptions=lr_descriptions,
+        )
+
+        (
             optimizer_name,
             optimizer_args,
             optimizer,
@@ -916,18 +938,31 @@ class WanNetworkTrainer:
         if trace_memory:
             snapshot_gpu_memory("train/after_prepare_transformer")
 
+        prepare_items, prepare_slots = build_semantic_prepare_items(
+            network=network,
+            controlnet=controlnet,
+            optimizer=optimizer,
+            train_dataloader=train_dataloader,
+            lr_scheduler=lr_scheduler,
+            semantic_conditioning_helper=semantic_conditioning_helper,
+            semantic_alignment_helper=semantic_alignment_helper,
+        )
+        prepared = accelerator.prepare(*prepare_items)
+        prepared_map = dict(zip(prepare_slots, prepared))
+        network = prepared_map["network"]
+        controlnet = prepared_map.get("controlnet", controlnet)
+        semantic_conditioning_helper = prepared_map.get(
+            "semantic_conditioning_helper", semantic_conditioning_helper
+        )
+        semantic_alignment_helper = prepared_map.get(
+            "semantic_alignment_helper", semantic_alignment_helper
+        )
+        optimizer = prepared_map["optimizer"]
+        train_dataloader = prepared_map["train_dataloader"]
+        lr_scheduler = prepared_map["lr_scheduler"]
         if controlnet is not None:
-            network, controlnet, optimizer, train_dataloader, lr_scheduler = (
-                accelerator.prepare(
-                    network, controlnet, optimizer, train_dataloader, lr_scheduler
-                )
-            )
             # update prepared instance back to model_manager
             self.model_manager.controlnet = controlnet
-        else:
-            network, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
-                network, optimizer, train_dataloader, lr_scheduler
-            )
         training_model = network
 
         if args.gradient_checkpointing:
@@ -1460,6 +1495,18 @@ class WanNetworkTrainer:
             if dual_model_manager is not None:
                 args.dual_model_manager = dual_model_manager
 
+            (
+                semantic_conditioning_helper,
+                semantic_alignment_helper,
+            ) = setup_semantic_training_integration(
+                training_core=self.training_core,
+                transformer=transformer,
+                args=args,
+                accelerator=accelerator,
+                semantic_conditioning_helper=semantic_conditioning_helper,
+                semantic_alignment_helper=semantic_alignment_helper,
+            )
+
             global_step, network = self.training_core.run_training_loop(  # type: ignore
                 args=args,
                 accelerator=accelerator,
@@ -1518,6 +1565,8 @@ class WanNetworkTrainer:
             remove_haste_helper(haste_helper)
         if "crepa_helper" in locals() and crepa_helper is not None:
             crepa_helper.remove_hooks()
+        if "semantic_alignment_helper" in locals():
+            teardown_semantic_training_integration(semantic_alignment_helper)
 
         metadata["takenoko_training_finished_at"] = str(time.time())
 
@@ -1602,7 +1651,6 @@ class WanNetworkTrainer:
             len(new_params),
             lr,
         )
-
 
         # Count different types of parameters
         total_params = 0

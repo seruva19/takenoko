@@ -52,6 +52,12 @@ def get_cache_postfix(target_model: Optional[str] = None) -> Tuple[str, str]:
         return "wan2x", "wan2x_te"
 
 
+def _derive_semantic_cache_postfix(text_postfix: str, latent_postfix: str) -> str:
+    if text_postfix.endswith("_te"):
+        return text_postfix.replace("_te", "_sem")
+    return f"{latent_postfix}_sem"
+
+
 # Keep these for backwards compatibility, but they will be overridden by dynamic values
 LATENT_CACHE_POSTFIX = "wan2x"
 TEXT_ENCODER_CACHE_POSTFIX = "wan2x_te"
@@ -103,6 +109,11 @@ class BaseDataset(torch.utils.data.Dataset):
         self.latent_cache_postfix, self.text_encoder_cache_postfix = get_cache_postfix(
             target_model
         )
+        self.semantic_cache_postfix = _derive_semantic_cache_postfix(
+            self.text_encoder_cache_postfix,
+            self.latent_cache_postfix,
+        )
+        self.semantic_cache_directory: Optional[str] = None
 
         if not self.enable_bucket:
             self.bucket_no_upscale = False
@@ -177,6 +188,14 @@ class BaseDataset(torch.utils.data.Dataset):
             )  # type: ignore
         )
 
+    def get_all_semantic_encoder_output_cache_files(self):
+        cache_dir = self.semantic_cache_directory or self.cache_directory
+        return glob.glob(
+            os.path.join(
+                cache_dir, f"*_{self.semantic_cache_postfix}.safetensors"  # type: ignore
+            )  # type: ignore
+        )
+
     def get_latent_cache_path(self, item_info: ItemInfo) -> str:
         """
         Returns the cache path for the latent tensor.
@@ -204,10 +223,31 @@ class BaseDataset(torch.utils.data.Dataset):
             f"{basename}_{self.text_encoder_cache_postfix}.safetensors",
         )
 
+    def get_semantic_encoder_output_cache_path(self, item_info: ItemInfo) -> str:
+        basename = os.path.splitext(os.path.basename(item_info.item_key))[0]
+        cache_dir = self.semantic_cache_directory or self.cache_directory
+        assert cache_dir is not None, "semantic_cache_directory is required"
+        return os.path.join(
+            cache_dir,
+            f"{basename}_{self.semantic_cache_postfix}.safetensors",
+        )
+
+    def get_semantic_encoder_output_cache_path_from_key(self, item_key: str) -> str:
+        basename = os.path.splitext(os.path.basename(item_key))[0]
+        cache_dir = self.semantic_cache_directory or self.cache_directory
+        assert cache_dir is not None, "semantic_cache_directory is required"
+        return os.path.join(
+            cache_dir,
+            f"{basename}_{self.semantic_cache_postfix}.safetensors",
+        )
+
     def retrieve_latent_cache_batches(self, num_workers: int):
         raise NotImplementedError
 
     def retrieve_text_encoder_output_cache_batches(self, num_workers: int):
+        raise NotImplementedError
+
+    def retrieve_semantic_encoder_output_cache_batches(self, num_workers: int):
         raise NotImplementedError
 
     def set_seed(self, seed: int, shared_epoch: Optional["Synchronized[int]"] = None):
@@ -378,6 +418,62 @@ class BaseDataset(torch.utils.data.Dataset):
 
         executor.shutdown()
 
+    def _default_retrieve_semantic_encoder_output_cache_batches(
+        self, datasource: ContentDataSource, batch_size: int, num_workers: int
+    ):
+        datasource.set_caption_only(False)
+        executor = ThreadPoolExecutor(max_workers=num_workers)
+
+        data: list[ItemInfo] = []
+        futures = []
+
+        def aggregate_future(consume_all: bool = False):
+            while len(futures) >= num_workers or (consume_all and len(futures) > 0):
+                completed_futures = [future for future in futures if future.done()]
+                if len(completed_futures) == 0:
+                    if len(futures) >= num_workers or consume_all:
+                        time.sleep(0.1)
+                        continue
+                    break
+
+                for future in completed_futures:
+                    item_key, _caption, _content = future.result()
+                    item_info = ItemInfo(item_key, "", (0, 0), (0, 0), is_reg=self.is_reg)  # type: ignore
+                    item_info.semantic_encoder_output_cache_path = (
+                        self.get_semantic_encoder_output_cache_path(item_info)
+                    )
+                    data.append(item_info)
+                    futures.remove(future)
+
+        def submit_batch(flush: bool = False):
+            nonlocal data
+            if len(data) >= batch_size or (len(data) > 0 and flush):
+                batch = data[0:batch_size]
+                if len(data) > batch_size:
+                    data = data[batch_size:]
+                else:
+                    data = []
+                return batch
+            return None
+
+        for fetch_op in datasource:
+            future = executor.submit(fetch_op)
+            futures.append(future)
+            aggregate_future()
+            while True:
+                batch = submit_batch()
+                if batch is None:
+                    break
+                yield batch
+
+        aggregate_future(consume_all=True)
+        while True:
+            batch = submit_batch(flush=True)
+            if batch is None:
+                break
+            yield batch
+
+        executor.shutdown()
 
 class ImageDataset(BaseDataset):
     def __init__(
@@ -626,17 +722,25 @@ class ImageDataset(BaseDataset):
             self.datasource, self.batch_size, num_workers
         )
 
+    def retrieve_semantic_encoder_output_cache_batches(self, num_workers: int):
+        return self._default_retrieve_semantic_encoder_output_cache_batches(
+            self.datasource, self.batch_size, num_workers
+        )
+
     def prepare_for_training(
         self,
         load_pixels_for_control=False,
         require_text_encoder_cache=True,
+        require_semantic_encoder_cache=False,
+        semantic_cache_directory: Optional[str] = None,
         prior_loss_weight: float = 1.0,
         num_timestep_buckets: Optional[int] = None,
     ):
         dataset_id = self.get_dataset_identifier()
         logger.info(
-            f"[{dataset_id}] Preparing for training (load_pixels_for_control={load_pixels_for_control}, require_text_encoder_cache={require_text_encoder_cache})"
+            f"[{dataset_id}] Preparing for training (load_pixels_for_control={load_pixels_for_control}, require_text_encoder_cache={require_text_encoder_cache}, require_semantic_encoder_cache={require_semantic_encoder_cache})"
         )
+        self.semantic_cache_directory = semantic_cache_directory or self.cache_directory
 
         bucket_selector = BucketSelector(
             self.resolution,
@@ -691,6 +795,10 @@ class ImageDataset(BaseDataset):
                 self.cache_directory,  # type: ignore
                 f"{item_key}_{self.text_encoder_cache_postfix}.safetensors",
             )
+            semantic_cache_file = os.path.join(
+                self.semantic_cache_directory or self.cache_directory,  # type: ignore
+                f"{item_key}_{self.semantic_cache_postfix}.safetensors",
+            )
 
             # Check text encoder cache existence based on requirement
             text_encoder_cache_exists = os.path.exists(text_encoder_output_cache_file)
@@ -705,6 +813,15 @@ class ImageDataset(BaseDataset):
                 logger.debug(
                     f"Text encoder cache not yet available: {text_encoder_output_cache_file}"
                 )
+
+            semantic_cache_exists = os.path.exists(semantic_cache_file)
+            if require_semantic_encoder_cache and not semantic_cache_exists:
+                logger.warning(
+                    f"[{dataset_id}] Semantic encoder cache missing for {item_key} - skipping item"
+                )
+                skipped_items += 1
+                semantic_skipped_items += 1
+                continue
 
             bucket_reso = bucket_selector.get_bucket_resolution(image_size)
 
@@ -749,6 +866,14 @@ class ImageDataset(BaseDataset):
                 )
             else:
                 item_info.text_encoder_output_cache_path = None
+            if semantic_cache_exists:
+                item_info.semantic_encoder_output_cache_path = semantic_cache_file
+            else:
+                item_info.semantic_encoder_output_cache_path = None
+            if semantic_cache_exists:
+                item_info.semantic_encoder_output_cache_path = semantic_cache_file
+            else:
+                item_info.semantic_encoder_output_cache_path = None
 
             if self.epoch_slide_enabled:
                 bucket_groups = epoch_slide_groups.setdefault(bucket_reso, {})
@@ -765,13 +890,19 @@ class ImageDataset(BaseDataset):
         # Enhanced reporting
         if skipped_items > 0:
             logger.warning(
-                f"[{dataset_id}] ⚠️  Skipped {skipped_items} items due to missing text encoder cache files"
+                f"[{dataset_id}] ⚠️  Skipped {skipped_items} items due to missing encoder cache files"
             )
             if require_text_encoder_cache:
                 logger.info("💡 To include these items:")
                 logger.info("   1. Run text encoder caching for the missing files")
                 logger.info(
                     "   2. Or set require_text_encoder_cache=False (not recommended for training)"
+                )
+            if require_semantic_encoder_cache:
+                logger.info("💡 To include these items:")
+                logger.info("   1. Run semantic encoder caching for the missing files")
+                logger.info(
+                    "   2. Or set require_semantic_encoder_cache=False (not recommended for training)"
                 )
 
         if self.epoch_slide_enabled:
@@ -1368,16 +1499,24 @@ class VideoDataset(BaseDataset):
             self.datasource, self.batch_size, num_workers
         )
 
+    def retrieve_semantic_encoder_output_cache_batches(self, num_workers: int):
+        return self._default_retrieve_semantic_encoder_output_cache_batches(
+            self.datasource, self.batch_size, num_workers
+        )
+
     def prepare_for_training(
         self,
         load_pixels_for_control=False,
         require_text_encoder_cache=True,
+        require_semantic_encoder_cache=False,
+        semantic_cache_directory: Optional[str] = None,
         prior_loss_weight: float = 1.0,
     ):
         dataset_id = self.get_dataset_identifier()
         logger.info(
-            f"[{dataset_id}] Preparing for training (load_pixels_for_control={load_pixels_for_control}, require_text_encoder_cache={require_text_encoder_cache})"
+            f"[{dataset_id}] Preparing for training (load_pixels_for_control={load_pixels_for_control}, require_text_encoder_cache={require_text_encoder_cache}, require_semantic_encoder_cache={require_semantic_encoder_cache})"
         )
+        self.semantic_cache_directory = semantic_cache_directory or self.cache_directory
 
         bucket_selector = BucketSelector(
             self.resolution,
@@ -1420,6 +1559,10 @@ class VideoDataset(BaseDataset):
                 self.cache_directory,  # type: ignore
                 f"{item_key}_{self.text_encoder_cache_postfix}.safetensors",
             )
+            semantic_cache_file = os.path.join(
+                self.semantic_cache_directory or self.cache_directory,  # type: ignore
+                f"{item_key}_{self.semantic_cache_postfix}.safetensors",
+            )
 
             # Check text encoder cache existence based on requirement
             text_encoder_cache_exists = os.path.exists(text_encoder_output_cache_file)
@@ -1433,6 +1576,13 @@ class VideoDataset(BaseDataset):
                 logger.debug(
                     f"Text encoder cache not yet available: {text_encoder_output_cache_file}"
                 )
+
+            semantic_cache_exists = os.path.exists(semantic_cache_file)
+            if require_semantic_encoder_cache and not semantic_cache_exists:
+                logger.warning(
+                    f"Semantic encoder output cache file not found: {semantic_cache_file}"
+                )
+                continue
 
             bucket_reso = bucket_selector.get_bucket_resolution(image_size)
             bucket_reso = (*bucket_reso, frame_count)

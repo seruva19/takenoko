@@ -308,7 +308,12 @@ class BucketBatchManager:
             else:
                 sd_te = {}
 
-            sd = {**sd_latent, **sd_te}
+            if getattr(item_info, "semantic_encoder_output_cache_path", None):
+                sd_sem = load_file(item_info.semantic_encoder_output_cache_path)
+            else:
+                sd_sem = {}
+
+            sd = {**sd_latent, **sd_te, **sd_sem}
 
             # Add weight to the batch
             # This is the key change: determine the weight for this specific item

@@ -102,6 +102,12 @@ class LossComponents:
         WanVideo cross-batch CFM regularizer (if enabled).
     memflow_guidance_loss: Optional[torch.Tensor]
         MemFlow guidance auxiliary loss (if enabled).
+    semantic_kl_loss: Optional[torch.Tensor]
+        SemanticGen KL loss for compressed semantic embeddings (if enabled).
+    semantic_align_loss: Optional[torch.Tensor]
+        SemanticGen alignment loss between diffusion features and semantics.
+    semantic_align_similarity: Optional[torch.Tensor]
+        Semantic alignment cosine similarity (if enabled).
     ortho_reg_p: Optional[torch.Tensor]
         The orthogonal regularization loss component for p, if enabled.
     ortho_reg_q: Optional[torch.Tensor]
@@ -127,6 +133,9 @@ class LossComponents:
     sara_loss: Optional[torch.Tensor] = None
     wanvideo_cfm_loss: Optional[torch.Tensor] = None
     memflow_guidance_loss: Optional[torch.Tensor] = None
+    semantic_kl_loss: Optional[torch.Tensor] = None
+    semantic_align_loss: Optional[torch.Tensor] = None
+    semantic_align_similarity: Optional[torch.Tensor] = None
     ortho_reg_p: Optional[torch.Tensor] = None
     ortho_reg_q: Optional[torch.Tensor] = None
 

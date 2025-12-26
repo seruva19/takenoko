@@ -136,3 +136,42 @@ def save_text_encoder_output_cache_common(
     safetensors_utils.mem_eff_save_file(
         sd, item_info.text_encoder_output_cache_path, metadata=metadata  # type: ignore
     )
+
+
+def save_semantic_encoder_output_cache_wan(
+    item_info: ItemInfo,
+    embed: torch.Tensor,
+):
+    # SPEC:semanticgen_lora:cache - persist semantic embeddings for optional reuse.
+    sd = {}
+    dtype_str = dtype_to_str(embed.dtype)
+    sd[f"varlen_semantic_embeddings_{dtype_str}"] = embed.detach().cpu()
+    save_semantic_encoder_output_cache_common(item_info, sd)
+
+
+def save_semantic_encoder_output_cache_common(
+    item_info: ItemInfo, sd: dict[str, torch.Tensor]
+):
+    for key, value in sd.items():
+        if torch.isnan(value).any():
+            logger.warning(
+                f"{key} tensor has NaN: {item_info.item_key}, replace NaN with 0"
+            )
+            value[torch.isnan(value)] = 0
+
+    metadata = {
+        "architecture": "wan21",
+        "format_version": "1.0.1",
+    }
+
+    semantic_cache_path = getattr(
+        item_info, "semantic_encoder_output_cache_path", None
+    )
+    if semantic_cache_path is None:
+        raise ValueError("semantic_encoder_output_cache_path is required")
+
+    semantic_dir = os.path.dirname(semantic_cache_path)
+    os.makedirs(semantic_dir, exist_ok=True)
+    safetensors_utils.mem_eff_save_file(
+        sd, semantic_cache_path, metadata=metadata  # type: ignore
+    )

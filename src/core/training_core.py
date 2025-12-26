@@ -31,6 +31,7 @@ from enhancements.memflow_guidance.training_integration import (
     initialize_memflow_guidance_from_args,
     suspend_memflow_guidance,
 )
+from enhancements.semanticgen.training_integration import SemanticGenTrainingState
 
 
 from enhancements.differential_guidance.training_integration import (
@@ -216,6 +217,11 @@ class TrainingCore:
         # MemFlow guidance configuration (training-only)
         self.memflow_guidance_config = None
 
+        # SemanticGen helpers (optional, training-only)
+        self.semantic_conditioning_helper = None
+        self.semantic_alignment_helper = None
+        self.semanticgen_state = SemanticGenTrainingState()
+
         # Weight EMA tracking (initialized when enabled)
         self.weight_ema: Optional[ExponentialMovingAverage] = None
         self.weight_ema_start_step: int = 0
@@ -375,6 +381,7 @@ class TrainingCore:
         control_signal_processor: Optional[Any] = None,
         controlnet: Optional[Any] = None,
         *,
+        global_step: Optional[int] = None,
         rcm_mode: bool = False,
         rcm_trigflow: Optional[torch.Tensor] = None,
         rcm_t_scaling_factor: Optional[float] = None,
@@ -443,6 +450,16 @@ class TrainingCore:
         context = [
             t.to(device=accelerator.device, dtype=network_dtype) for t in batch["t5"]
         ]
+
+        self.semanticgen_state.reset()
+        context = self.semanticgen_state.apply_context(
+            args=args,
+            accelerator=accelerator,
+            context=context,
+            batch=batch,
+            global_step=global_step,
+            conditioning_helper=self.semantic_conditioning_helper,
+        )
 
         # ensure the hidden state will require grad
         if args.gradient_checkpointing:
@@ -1283,6 +1300,7 @@ class TrainingCore:
                                 network_dtype,
                                 control_signal_processor,
                                 controlnet,
+                                global_step=global_step,
                                 reg_cls_token=reg_cls_input,
                             )
 
@@ -1334,6 +1352,7 @@ class TrainingCore:
                                             network_dtype,
                                             control_signal_processor,
                                             controlnet,
+                                            global_step=global_step,
                                             return_intermediate=False,
                                             override_target=True,
                                         )
@@ -1480,6 +1499,12 @@ class TrainingCore:
                                 adaptive_manager=self.adaptive_manager,
                                 transition_loss_context=transition_loss_context,
                                 global_step=global_step,
+                            )
+
+                            self.semanticgen_state.apply_losses(
+                                args=args,
+                                loss_components=loss_components,
+                                alignment_helper=self.semantic_alignment_helper,
                             )
 
                     memflow_loss = None

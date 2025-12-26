@@ -599,6 +599,8 @@ def generate_dataset_group_by_blueprint(
     prior_loss_weight: float = 1.0,
     num_timestep_buckets: Optional[int] = None,
     shared_epoch: SharedEpoch = None,
+    require_semantic_encoder_cache: bool = False,
+    semantic_cache_directory: Optional[str] = None,
 ) -> DatasetGroup:
     datasets: List[Union[ImageDataset, VideoDataset]] = []
 
@@ -648,6 +650,12 @@ def generate_dataset_group_by_blueprint(
                 kwargs = {}
                 if "require_text_encoder_cache" in sig.parameters:
                     kwargs["require_text_encoder_cache"] = True
+                if "require_semantic_encoder_cache" in sig.parameters:
+                    kwargs["require_semantic_encoder_cache"] = (
+                        require_semantic_encoder_cache
+                    )
+                if "semantic_cache_directory" in sig.parameters:
+                    kwargs["semantic_cache_directory"] = semantic_cache_directory
                 if "load_pixels_for_control" in sig.parameters:
                     # This flag controls whether original pixels are included in batches
                     # for things like perceptual metrics or control preprocessing.
