@@ -57,6 +57,7 @@ from scheduling.fvdm_manager import create_fvdm_manager
 from modules.scheduling_flow_match_discrete import FlowMatchDiscreteScheduler
 from utils.train_utils import (
     compute_loss_weighting_for_sd3,
+    get_sigmas,
     should_sample_images,
     LossRecorder,
 )
@@ -136,6 +137,32 @@ from distillation.rcm_core.forward import (
     estimate_trigflow_from_timesteps,
     rcm_compute_forward,
 )
+
+
+def _compute_snr_weight_scale(
+    noise_scheduler: Any,
+    timesteps: torch.Tensor,
+    latents: torch.Tensor,
+    gamma: float,
+) -> float:
+    sigmas = get_sigmas(
+        noise_scheduler,
+        timesteps,
+        device=latents.device,
+        n_dim=latents.dim(),
+        dtype=torch.float32,
+        source="temporal_adamw_snr",
+    )
+    if sigmas.dim() > 1:
+        sigmas_reduced = sigmas.view(sigmas.shape[0], -1).mean(dim=1)
+    else:
+        sigmas_reduced = sigmas
+    snr = 1.0 / (sigmas_reduced.to(torch.float32).clamp_min(1e-12) ** 2)
+    gamma_tensor = torch.tensor(gamma, device=snr.device, dtype=snr.dtype)
+    weights = torch.minimum(snr, gamma_tensor) / snr
+    if weights.numel() == 0:
+        return 1.0
+    return float(weights.mean().item())
 
 
 class TrainingCore:
@@ -1625,6 +1652,23 @@ class TrainingCore:
                             _sched.update_gradient_stats()  # type: ignore[attr-defined]
                     except Exception:
                         pass
+
+                    if hasattr(optimizer, "set_snr_scale") and getattr(
+                        optimizer, "snr_weighting", False
+                    ):
+                        try:
+                            gamma = float(getattr(optimizer, "snr_gamma", 5.0))
+                            snr_scale = _compute_snr_weight_scale(
+                                noise_scheduler,
+                                timesteps,
+                                latents,
+                                gamma,
+                            )
+                            optimizer.set_snr_scale(snr_scale)
+                        except Exception as e:
+                            logger.debug(
+                                "TemporalAdamW SNR weighting skipped: %s", e
+                            )
 
                     # Start optimizer step timing
                     start_optimizer_step_timing()

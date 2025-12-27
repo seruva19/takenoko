@@ -27,6 +27,8 @@ Usage example:
       "noise_adaptation=True",
       "noise_ema_alpha=0.10",
       "warmup_steps=300",
+      "snr_weighting=False",
+      "snr_gamma=5.0",
     ]
 """
 
@@ -66,7 +68,11 @@ class TemporalAdamW(Optimizer):
     noise_ema_alpha : float, default 0.1
         EMA factor for gradient mean/variance (0 < alpha <= 1).
     warmup_steps : int, default 100
-        Steps to warm up noise estimation before applying noise scaling.
+        Steps to warm up noise estimation before applying noise scaling.        
+    snr_weighting : bool, default False
+        Enable SNR-based gradient scaling (requires per-step SNR scale set externally).
+    snr_gamma : float, default 5.0
+        Gamma cap for min-SNR weighting; typical values in [1, 20].
     """
 
     def __init__(
@@ -82,6 +88,8 @@ class TemporalAdamW(Optimizer):
         noise_adaptation: bool = True,
         noise_ema_alpha: float = 0.1,
         warmup_steps: int = 100,
+        snr_weighting: bool = False,
+        snr_gamma: float = 5.0,
     ) -> None:
         if lr < 0.0:
             raise ValueError(f"Invalid learning rate: {lr}")
@@ -97,6 +105,8 @@ class TemporalAdamW(Optimizer):
             raise ValueError("consistency_interval must be >= 1")
         if not (0.0 < noise_ema_alpha <= 1.0):
             raise ValueError("noise_ema_alpha must be in (0, 1]")
+        if snr_gamma <= 0.0:
+            raise ValueError("snr_gamma must be > 0")
 
         defaults = dict(
             lr=lr,
@@ -109,8 +119,19 @@ class TemporalAdamW(Optimizer):
             noise_adaptation=noise_adaptation,
             noise_ema_alpha=noise_ema_alpha,
             warmup_steps=warmup_steps,
+            snr_weighting=snr_weighting,
+            snr_gamma=snr_gamma,
         )
         super().__init__(params, defaults)
+        self.snr_weighting = bool(snr_weighting)
+        self.snr_gamma = float(snr_gamma)
+        self.snr_scale: Optional[float] = None
+
+    def set_snr_scale(self, scale: Optional[float]) -> None:
+        if scale is None:
+            self.snr_scale = None
+            return
+        self.snr_scale = float(scale)
 
     def __setstate__(self, state: dict[str, Any]) -> None:  # pragma: no cover - compat
         super().__setstate__(state)
@@ -138,6 +159,8 @@ class TemporalAdamW(Optimizer):
             noise_adaptation: bool = group["noise_adaptation"]
             noise_ema_alpha: float = group["noise_ema_alpha"]
             warmup_steps: int = group["warmup_steps"]
+            snr_weighting: bool = group.get("snr_weighting", False)
+            snr_scale = self.snr_scale if snr_weighting else None
 
             for p in group["params"]:
                 if p.grad is None:
@@ -188,19 +211,16 @@ class TemporalAdamW(Optimizer):
                     if prev_grad is None:
                         prev_grad = torch.zeros_like(p)
                         state["prev_grad"] = prev_grad
-                    # Compute cosine similarity only when both grads have non-zero norms
+                    # Compute cosine similarity without flatten allocations
                     denom = (grad.norm() * prev_grad.norm()).clamp_min(1e-12)
-                    if denom > 0:
-                        cos_sim = torch.dot(grad.flatten(), prev_grad.flatten()) / denom
-                        # Map from [-1, 1] to [0.5, 1.5]
-                        momentum_scale = 1.0 + 0.5 * cos_sim.item()
-                        # Clamp effective beta1 to a safe range
-                        beta1_eff = float(
-                            min(0.999, max(0.5 * beta1, beta1 * momentum_scale))
-                        )
-                        state["beta1_effective"] = beta1_eff
-                    else:
-                        beta1_eff = float(state["beta1_effective"])  # fallback
+                    cos_sim = torch.sum(grad * prev_grad) / denom
+                    # Map from [-1, 1] to [0.5, 1.5]
+                    momentum_scale = 1.0 + 0.5 * cos_sim.item()
+                    # Clamp effective beta1 to a safe range
+                    beta1_eff = float(
+                        min(0.999, max(0.5 * beta1, beta1 * momentum_scale))
+                    )
+                    state["beta1_effective"] = beta1_eff
                 else:
                     beta1_eff = (
                         float(state["beta1_effective"]) if adaptive_momentum else beta1
@@ -237,13 +257,16 @@ class TemporalAdamW(Optimizer):
                 if noise_adaptation and step > warmup_steps:
                     # var ≈ E[g^2] - (E[g])^2
                     grad_var = (grad_sq_mean_ema - grad_mean_ema.pow(2)).clamp_min(0.0)
-                    # inverse relative noise scale, clipped for stability
+                    # inverse relative noise scale, clipped for stability       
                     noise_scale = torch.sqrt(
                         (grad_mean_ema.abs() + eps) / (grad_var + eps)
                     )
                     noise_scale = noise_scale.clamp(0.1, 10.0)
                 else:
                     noise_scale = None
+
+                if snr_scale is not None and snr_scale != 1.0:
+                    g_used = g_used * snr_scale
 
                 # Compute step size and denominator
                 step_size = (
@@ -257,8 +280,8 @@ class TemporalAdamW(Optimizer):
 
                 # Apply update; incorporate noise scaling elementwise if present
                 if noise_scale is not None:
-                    # Use elementwise scaling on the numerator
-                    p.addcdiv_(exp_avg.mul(noise_scale), denom, value=-step_size)
+                    # Use elementwise scaling on the numerator without mutating state
+                    p.addcdiv_(exp_avg * noise_scale, denom, value=-step_size)
                 else:
                     p.addcdiv_(exp_avg, denom, value=-step_size)
 
@@ -269,5 +292,8 @@ class TemporalAdamW(Optimizer):
                         prev_grad = torch.zeros_like(p)
                         state["prev_grad"] = prev_grad
                     prev_grad.copy_(grad)
+
+        if self.snr_weighting:
+            self.snr_scale = None
 
         return loss

@@ -25,6 +25,8 @@ Usage example:
       "noise_adaptation=False",            # disabled by default
       "noise_ema_alpha=0.10",
       "warmup_steps=50",
+      "snr_weighting=False",
+      "snr_gamma=5.0",
     ]
 """
 
@@ -55,6 +57,8 @@ class TemporalAdamW8bit(Optimizer):
         noise_adaptation: bool = False,
         noise_ema_alpha: float = 0.1,
         warmup_steps: int = 50,
+        snr_weighting: bool = False,
+        snr_gamma: float = 5.0,
         consistency_threshold: float = 0.5,
         consistency_scale: float = 0.1,
         feature_dtype: Optional[torch.dtype] = None,
@@ -81,6 +85,8 @@ class TemporalAdamW8bit(Optimizer):
             raise ValueError("consistency_interval must be >= 1")
         if not (0.0 < noise_ema_alpha <= 1.0):
             raise ValueError("noise_ema_alpha must be in (0, 1]")
+        if snr_gamma <= 0.0:
+            raise ValueError("snr_gamma must be > 0")
         if not (0.0 <= consistency_threshold <= 1.0):
             raise ValueError("consistency_threshold must be in [0, 1]")
         if not (0.0 < consistency_scale <= 0.25):
@@ -95,6 +101,9 @@ class TemporalAdamW8bit(Optimizer):
         self.warmup_steps: int = int(warmup_steps)
         self.consistency_threshold: float = float(consistency_threshold)
         self.consistency_scale: float = float(consistency_scale)
+        self.snr_weighting: bool = bool(snr_weighting)
+        self.snr_gamma: float = float(snr_gamma)
+        self.snr_scale: Optional[float] = None
         # Normalize feature_dtype to a real torch.dtype if provided as string
         if isinstance(feature_dtype, str):
             dtype_map = {
@@ -139,6 +148,12 @@ class TemporalAdamW8bit(Optimizer):
         self.state: Dict[torch.nn.Parameter, Dict[str, Any]] = {}
         self.global_step: int = 0
 
+    def set_snr_scale(self, scale: Optional[float]) -> None:
+        if scale is None:
+            self.snr_scale = None
+            return
+        self.snr_scale = float(scale)
+
     def _ordered_params(self) -> List[torch.nn.Parameter]:
         params: List[torch.nn.Parameter] = []
         for group in self.param_groups:  # type: ignore[operator]
@@ -158,6 +173,7 @@ class TemporalAdamW8bit(Optimizer):
         # Preprocess gradients in-place
         for group in self.param_groups:  # type: ignore[operator]
             eps = group.get("eps", 1e-8)
+            snr_scale = self.snr_scale if self.snr_weighting else None
 
             for p in group["params"]:
                 if p.grad is None:
@@ -186,7 +202,9 @@ class TemporalAdamW8bit(Optimizer):
                     smoothed.mul_(self.temporal_smoothing).add_(
                         grad, alpha=1.0 - self.temporal_smoothing
                     )
-                    g_used = smoothed.to(dtype=grad.dtype)
+                    g_used = smoothed if smoothed.dtype == grad.dtype else smoothed.to(
+                        dtype=grad.dtype
+                    )
 
                 # Adaptive momentum approximation via gradient scaling
                 if self.adaptive_momentum and step_i % self.consistency_interval == 0:
@@ -197,19 +215,16 @@ class TemporalAdamW8bit(Optimizer):
                     # Cast prev to grad dtype for math to avoid dtype mismatch
                     prev_for_math = prev.to(dtype=grad.dtype)
                     denom = (grad.norm() * prev_for_math.norm()).clamp_min(1e-12)
-                    if denom > 0:
-                        cos_sim = (
-                            torch.dot(grad.flatten(), prev_for_math.flatten()) / denom
+                    cos_sim = torch.sum(grad * prev_for_math) / denom
+                    # Apply only when similarity is strongly positive
+                    if float(cos_sim.item()) > self.consistency_threshold:
+                        amp = self.consistency_scale
+                        scale = float(
+                            torch.clamp(
+                                1.0 + amp * cos_sim, 1.0 - amp, 1.0 + amp
+                            ).item()
                         )
-                        # Apply only when similarity is strongly positive
-                        if float(cos_sim.item()) > self.consistency_threshold:
-                            amp = self.consistency_scale
-                            scale = float(
-                                torch.clamp(
-                                    1.0 + amp * cos_sim, 1.0 - amp, 1.0 + amp
-                                ).item()
-                            )
-                            g_used = (g_used * scale).to(dtype=grad.dtype)
+                        g_used = (g_used * scale).to(dtype=grad.dtype)
 
                 # Noise adaptation using EMA mean/var (downscale only in high-noise regions)
                 if self.noise_adaptation:
@@ -222,10 +237,11 @@ class TemporalAdamW8bit(Optimizer):
                         gsqmean = torch.zeros_like(p, dtype=feat_dtype)
                         st["grad_sq_mean_ema"] = gsqmean
                     alpha = self.noise_ema_alpha
-                    gmean.mul_(1.0 - alpha).add_(grad.to(dtype=feat_dtype), alpha=alpha)
+                    grad_feat = grad.to(dtype=feat_dtype)
+                    gmean.mul_(1.0 - alpha).add_(grad_feat, alpha=alpha)
                     gsqmean.mul_(1.0 - alpha).addcmul_(
-                        grad.to(dtype=feat_dtype),
-                        grad.to(dtype=feat_dtype),
+                        grad_feat,
+                        grad_feat,
                         value=alpha,
                     )
 
@@ -238,6 +254,9 @@ class TemporalAdamW8bit(Optimizer):
                         g_used = (g_used * inv_snr_scale.to(dtype=grad.dtype)).to(
                             dtype=grad.dtype
                         )
+
+                if snr_scale is not None and snr_scale != 1.0:
+                    g_used = g_used * snr_scale
 
                 # Write back processed gradient
                 p.grad = g_used
@@ -252,6 +271,8 @@ class TemporalAdamW8bit(Optimizer):
 
         # Delegate to inner optimizer
         self.inner.step()
+        if self.snr_weighting:
+            self.snr_scale = None
         return loss
 
     def zero_grad(self, set_to_none: bool = False) -> None:  # type: ignore[override]
