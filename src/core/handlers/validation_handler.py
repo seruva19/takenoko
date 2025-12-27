@@ -3,7 +3,6 @@
 import argparse
 from typing import Any, Optional, Tuple
 import logging
-from junctions.training_events import trigger_event
 
 logger = logging.getLogger(__name__)
 
@@ -120,17 +119,6 @@ def handle_step_validation(
                     e,
                 )
 
-    # Trigger validation_start junction event
-    trigger_event(
-        "validation_start",
-        args=args,
-        accelerator=accelerator,
-        transformer=transformer,
-        val_dataloader=val_dataloader,
-        vae=val_vae_to_use,
-        global_step=global_step,
-    )
-
     # Determine subset_fraction and random_subset for fast validation
     subset_fraction = None
     random_subset = False
@@ -155,15 +143,6 @@ def handle_step_validation(
         random_subset=random_subset,
     )
     validation_core.log_validation_results(accelerator, val_loss, global_step)
-
-    # Trigger validation_end junction event
-    trigger_event(
-        "validation_end",
-        args=args,
-        accelerator=accelerator,
-        val_loss=val_loss,
-        global_step=global_step,
-    )
 
     # Unload temporary VAE if it was loaded for validation
     if temp_val_vae is not None and sampling_manager is not None:
@@ -236,17 +215,6 @@ def handle_epoch_end_validation(
         global_step,
     )
 
-    # Trigger validation_start junction event
-    trigger_event(
-        "validation_start",
-        args=args,
-        accelerator=accelerator,
-        transformer=transformer,
-        val_dataloader=val_dataloader,
-        vae=vae,
-        global_step=global_step,
-    )
-
     val_loss = validation_core.validate(
         accelerator,
         transformer,
@@ -259,13 +227,4 @@ def handle_epoch_end_validation(
     )
     validation_core.log_validation_results(
         accelerator, val_loss, global_step, epoch + 1
-    )
-
-    # Trigger validation_end junction event
-    trigger_event(
-        "validation_end",
-        args=args,
-        accelerator=accelerator,
-        val_loss=val_loss,
-        global_step=global_step,
     )

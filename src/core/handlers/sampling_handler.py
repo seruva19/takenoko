@@ -2,7 +2,6 @@
 
 import argparse
 from typing import Any, Optional
-from junctions.training_events import trigger_event
 
 
 def handle_training_sampling(
@@ -49,18 +48,6 @@ def handle_training_sampling(
         epoch_for_naming = epoch + 1
     # Otherwise, leave epoch_for_naming as None to use step-based naming
 
-    # Trigger sampling_start junction event
-    trigger_event(
-        "sampling_start",
-        args=args,
-        accelerator=None,  # Will be passed by caller if needed
-        epoch=epoch_for_naming,
-        global_step=global_step,
-        vae=vae,
-        transformer=transformer,
-        sample_parameters=sample_parameters
-    )
-
     sampling_manager.sample_images(
         None,  # accelerator - will be passed by caller
         args,
@@ -70,15 +57,6 @@ def handle_training_sampling(
         transformer,
         sample_parameters,
         dit_dtype,
-    )
-
-    # Trigger sampling_end junction event
-    trigger_event(
-        "sampling_end",
-        args=args,
-        accelerator=None,  # Will be passed by caller if needed
-        epoch=epoch_for_naming,
-        global_step=global_step
     )
 
     # Track that sampling occurred at this step
@@ -115,18 +93,6 @@ def handle_epoch_end_sampling(
     if not (should_sample_at_epoch_end and last_sampled_step != global_step and sampling_manager):
         return
     
-    # Trigger sampling_start junction event
-    trigger_event(
-        "sampling_start",
-        args=args,
-        accelerator=None,  # Will be passed by caller if needed
-        epoch=epoch + 1,
-        global_step=global_step,
-        vae=vae,
-        transformer=transformer,
-        sample_parameters=sample_parameters
-    )
-
     sampling_manager.sample_images(
         None,  # accelerator - will be passed by caller
         args,
@@ -136,15 +102,6 @@ def handle_epoch_end_sampling(
         transformer,
         sample_parameters,
         dit_dtype,
-    )
-
-    # Trigger sampling_end junction event
-    trigger_event(
-        "sampling_end",
-        args=args,
-        accelerator=None,  # Will be passed by caller if needed
-        epoch=epoch + 1,
-        global_step=global_step
     )
 
 
@@ -175,18 +132,6 @@ def handle_training_sampling_with_accelerator(
     ):
         epoch_for_naming = epoch + 1
 
-    # Trigger sampling_start junction event
-    trigger_event(
-        "sampling_start",
-        args=args,
-        accelerator=accelerator,
-        epoch=epoch_for_naming,
-        global_step=global_step,
-        vae=vae,
-        transformer=transformer,
-        sample_parameters=sample_parameters
-    )
-
     sampling_manager.sample_images(
         accelerator,
         args,
@@ -196,15 +141,6 @@ def handle_training_sampling_with_accelerator(
         transformer,
         sample_parameters,
         dit_dtype,
-    )
-
-    # Trigger sampling_end junction event
-    trigger_event(
-        "sampling_end",
-        args=args,
-        accelerator=accelerator,
-        epoch=epoch_for_naming,
-        global_step=global_step
     )
 
     return global_step
@@ -227,18 +163,6 @@ def handle_epoch_end_sampling_with_accelerator(
     if not (should_sample_at_epoch_end and last_sampled_step != global_step and sampling_manager):
         return
     
-    # Trigger sampling_start junction event
-    trigger_event(
-        "sampling_start",
-        args=args,
-        accelerator=accelerator,
-        epoch=epoch + 1,
-        global_step=global_step,
-        vae=vae,
-        transformer=transformer,
-        sample_parameters=sample_parameters
-    )
-
     sampling_manager.sample_images(
         accelerator,
         args,
@@ -248,13 +172,4 @@ def handle_epoch_end_sampling_with_accelerator(
         transformer,
         sample_parameters,
         dit_dtype,
-    )
-
-    # Trigger sampling_end junction event
-    trigger_event(
-        "sampling_end",
-        args=args,
-        accelerator=accelerator,
-        epoch=epoch + 1,
-        global_step=global_step
     )

@@ -839,6 +839,15 @@ def create_args_from_config(
     # Progress postfix alternation settings
     args.alternate_perf_postfix = config.get("alternate_perf_postfix", True)
 
+    # Debug batch content logging
+    args.log_batch_item_info = bool(config.get("log_batch_item_info", False))
+    args.log_batch_item_info_interval = int(
+        config.get("log_batch_item_info_interval", 1)
+    )
+    args.log_batch_item_info_max_items = int(
+        config.get("log_batch_item_info_max_items", 8)
+    )
+
     # VRAM estimation validation logging
     args.log_vram_validation = config.get("log_vram_validation", False)
 

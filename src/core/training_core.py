@@ -73,7 +73,6 @@ from core.validation_core import ValidationCore
 from criteria.training_loss import TrainingLossComputer
 from common.context_memory_manager import ContextMemoryManager
 
-from junctions.training_events import trigger_event
 
 from core import ema_helper
 from core.handlers.logging_config import (
@@ -750,9 +749,9 @@ class TrainingCore:
             )
 
         if rcm_mode:
-                if reg_cls_pred is not None:
-                    return model_pred, target, intermediate_z, rcm_result, reg_cls_pred
-                return model_pred, target, intermediate_z, rcm_result
+            if reg_cls_pred is not None:
+                return model_pred, target, intermediate_z, rcm_result, reg_cls_pred
+            return model_pred, target, intermediate_z, rcm_result
         if reg_cls_pred is not None:
             return model_pred, target, intermediate_z, reg_cls_pred
         return model_pred, target, intermediate_z
@@ -925,18 +924,6 @@ class TrainingCore:
 
             accelerator.unwrap_model(network).on_epoch_start(transformer)
 
-            # Trigger epoch_start junction event
-            trigger_event(
-                "epoch_start",
-                args=args,
-                accelerator=accelerator,
-                epoch=epoch + 1,
-                transformer=transformer,
-                network=network,
-                global_step=global_step,
-                metadata=metadata,
-            )
-
             # Calculate step offset when resuming in the middle of an epoch
             step_offset = 0
             if global_step > 0 and epoch == epoch_to_start:
@@ -975,6 +962,47 @@ class TrainingCore:
                 # Skip batches when resuming in the middle of an epoch
                 if epoch == epoch_to_start and step < step_offset:
                     continue
+
+                if accelerator.is_main_process and bool(
+                    getattr(args, "log_batch_item_info", False)
+                ):
+                    log_interval = int(
+                        getattr(args, "log_batch_item_info_interval", 1) or 1
+                    )
+                    max_items = int(
+                        getattr(args, "log_batch_item_info_max_items", 8) or 8
+                    )
+                    if log_interval < 1:
+                        log_interval = 1
+                    if max_items < 1:
+                        max_items = 1
+
+                    if global_step % log_interval == 0:
+                        item_infos = None
+                        try:
+                            item_infos = batch.get("item_info")
+                        except Exception:
+                            item_infos = None
+
+                        if item_infos:
+                            lines = []
+                            for i, item in enumerate(list(item_infos)[:max_items]):
+                                item_key = getattr(item, "item_key", None)
+                                bucket_size = getattr(item, "bucket_size", None)
+                                frame_count = getattr(item, "frame_count", None)
+                                is_reg = getattr(item, "is_reg", None)
+                                lines.append(
+                                    f"  [{i}] item_key={item_key} bucket_size={bucket_size} frame_count={frame_count} is_reg={is_reg}"
+                                )
+                            logger.info(
+                                f"[batch_item_info] global_step={global_step} epoch={epoch + 1} step_in_epoch={step}:\n"
+                                + "\n".join(lines)
+                            )
+                        else:
+                            logger.info(
+                                f"[batch_item_info] global_step={global_step} epoch={epoch + 1} step_in_epoch={step}: (no item_info in batch)"
+                            )
+
                 latents = batch["latents"]
                 bsz = latents.shape[0]
                 if current_step is not None:
@@ -986,19 +1014,6 @@ class TrainingCore:
 
                 with accelerator.accumulate(training_model):
                     accelerator.unwrap_model(network).on_step_start()
-
-                    # Trigger step_start junction event
-                    trigger_event(
-                        "step_start",
-                        args=args,
-                        accelerator=accelerator,
-                        epoch=epoch + 1,
-                        step=step,
-                        global_step=global_step,
-                        batch=batch,
-                        latents=latents,
-                        network=network,
-                    )
 
                     latents = _scale_shift_latents(latents)
 
@@ -1183,20 +1198,6 @@ class TrainingCore:
                             active_transformer = dual_model_manager.active_model
 
                         if eqm_enabled:
-                            trigger_event(
-                                "before_forward",
-                                args=args,
-                                accelerator=accelerator,
-                                latents=latents,
-                                batch=batch,
-                                noise=noise,
-                                noisy_model_input=noisy_model_input,
-                                timesteps=timesteps,
-                                network_dtype=network_dtype,
-                                transformer=active_transformer,
-                                weighting=weighting,
-                            )
-
                             if self.eqm_training_helper is None:
                                 raise RuntimeError(
                                     "EqM training helper was not initialised."
@@ -1233,37 +1234,7 @@ class TrainingCore:
                                 "transition_training_enabled": False
                             }
 
-                            trigger_event(
-                                "after_forward",
-                                args=args,
-                                accelerator=accelerator,
-                                model_pred=model_pred,
-                                target=target,
-                                intermediate_z=intermediate_z,
-                                latents=latents,
-                                batch=batch,
-                                noise=noise,
-                                noisy_model_input=noisy_model_input,
-                                timesteps=timesteps,
-                                network_dtype=network_dtype,
-                                weighting=weighting,
-                            )
                         else:
-                            # Trigger before_forward junction event
-                            trigger_event(
-                                "before_forward",
-                                args=args,
-                                accelerator=accelerator,
-                                latents=latents,
-                                batch=batch,
-                                noise=noise,
-                                noisy_model_input=noisy_model_input,
-                                timesteps=timesteps,
-                                network_dtype=network_dtype,
-                                transformer=active_transformer,
-                                weighting=weighting,
-                            )
-
                             reg_cls_input = None
                             reg_cls_target = None
                             if (
@@ -1271,9 +1242,7 @@ class TrainingCore:
                                 and reg_helper is not None
                             ):
                                 if "pixels" in batch:
-                                    clean_pixels = torch.stack(
-                                        batch["pixels"], dim=0
-                                    )
+                                    clean_pixels = torch.stack(batch["pixels"], dim=0)
                                     reg_cls_input, reg_cls_target = (
                                         reg_helper.prepare_class_token_inputs(
                                             clean_pixels,
@@ -1412,23 +1381,6 @@ class TrainingCore:
                                 context_stats, accelerator, global_step
                             )
 
-                        # Trigger after_forward junction event
-                        trigger_event(
-                            "after_forward",
-                            args=args,
-                            accelerator=accelerator,
-                            model_pred=model_pred,
-                            target=target,
-                            intermediate_z=intermediate_z,
-                            latents=latents,
-                            batch=batch,
-                            noise=noise,
-                            noisy_model_input=noisy_model_input,
-                            timesteps=timesteps,
-                            network_dtype=network_dtype,
-                            weighting=weighting,
-                        )
-
                         # Loss will be computed later by centralized loss computer
 
                         # Compute per-source losses if enabled (before backprop), separate from loss
@@ -1515,7 +1467,8 @@ class TrainingCore:
                         memflow_loss = consume_memflow_guidance_loss()
                         if (
                             memflow_loss is not None
-                            and self.memflow_guidance_config.memflow_guidance_weight > 0.0
+                            and self.memflow_guidance_config.memflow_guidance_weight
+                            > 0.0
                         ):
                             weighted = (
                                 memflow_loss
@@ -1573,20 +1526,6 @@ class TrainingCore:
                         except Exception as e:
                             logger.debug(f"FVDM integration warning: {e}")
 
-                    # Trigger after_loss_computation junction event
-                    trigger_event(
-                        "after_loss_computation",
-                        args=args,
-                        accelerator=accelerator,
-                        loss_components=loss_components,
-                        model_pred=model_pred,
-                        target=target,
-                        timesteps=timesteps,
-                        batch=batch,
-                        noise=noise,
-                        adaptive_manager=self.adaptive_manager,
-                    )
-
                     # Handle adaptive timestep sampling
                     handle_adaptive_timestep_sampling(
                         self.adaptive_manager,
@@ -1597,18 +1536,6 @@ class TrainingCore:
                         model_pred,
                         target,
                         timesteps,
-                    )
-
-                    # Trigger before_backward junction event
-                    trigger_event(
-                        "before_backward",
-                        args=args,
-                        accelerator=accelerator,
-                        loss_components=loss_components,
-                        model_pred=model_pred,
-                        target=target,
-                        network=network,
-                        global_step=global_step,
                     )
 
                     # Start backward pass timing
@@ -1624,16 +1551,6 @@ class TrainingCore:
 
                     # End backward pass timing
                     end_backward_pass_timing()
-
-                    # Trigger after_backward junction event
-                    trigger_event(
-                        "after_backward",
-                        args=args,
-                        accelerator=accelerator,
-                        loss_components=loss_components,
-                        network=network,
-                        global_step=global_step,
-                    )
 
                     if accelerator.is_main_process:
                         # Check if ANY trainable parameter has a gradient
@@ -1663,15 +1580,6 @@ class TrainingCore:
                             )
 
                 if accelerator.sync_gradients:
-                    # Trigger before_gradient_clipping junction event
-                    trigger_event(
-                        "before_gradient_clipping",
-                        args=args,
-                        accelerator=accelerator,
-                        network=network,
-                        gradient_norm=gradient_norm,
-                        global_step=global_step,
-                    )
                     # sync DDP grad manually
                     state = accelerate.PartialState()
                     if state.distributed_type != accelerate.DistributedType.NO:
@@ -1741,17 +1649,6 @@ class TrainingCore:
                         global_step,
                     )
 
-                    # Trigger after_optimizer_step junction event
-                    trigger_event(
-                        "after_optimizer_step",
-                        args=args,
-                        accelerator=accelerator,
-                        optimizer=optimizer,
-                        lr_scheduler=lr_scheduler,
-                        network=network,
-                        global_step=global_step,
-                    )
-
                     # Update GGPO weight norms after parameter update
                     try:
                         if hasattr(network, "update_norms"):
@@ -1777,17 +1674,6 @@ class TrainingCore:
 
                     lr_scheduler.step()
                     optimizer.zero_grad(set_to_none=True)
-
-                    # Trigger after_sync_gradients junction event
-                    trigger_event(
-                        "after_sync_gradients",
-                        args=args,
-                        accelerator=accelerator,
-                        network=network,
-                        optimizer=optimizer,
-                        lr_scheduler=lr_scheduler,
-                        global_step=global_step,
-                    )
 
                 if args.scale_weight_norms:
                     keys_scaled, mean_norm, maximum_norm = accelerator.unwrap_model(
@@ -2007,20 +1893,6 @@ class TrainingCore:
                     except Exception as e:
                         logger.debug(f"FVDM metrics logging warning: {e}")
 
-                # Trigger step_end junction event
-                trigger_event(
-                    "step_end",
-                    args=args,
-                    accelerator=accelerator,
-                    epoch=epoch + 1,
-                    step=step,
-                    global_step=global_step,
-                    current_loss=current_loss,
-                    avr_loss=avr_loss,
-                    network=network,
-                    batch_size=bsz,
-                )
-
                 # End step timing
                 end_step_timing()
 
@@ -2115,17 +1987,6 @@ class TrainingCore:
                 noise_scheduler,
                 control_signal_processor,
                 vae,
-            )
-
-            # Trigger epoch_end junction event
-            trigger_event(
-                "epoch_end",
-                args=args,
-                accelerator=accelerator,
-                epoch=epoch + 1,
-                global_step=global_step,
-                network=network,
-                loss_recorder=loss_recorder,
             )
 
             # end of epoch

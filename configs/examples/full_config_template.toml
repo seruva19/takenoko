@@ -3151,6 +3151,22 @@ log_extra_train_metrics = true
 # Interval (in steps) to compute and log extra train metrics
 train_metrics_interval = 50
 
+# Log the exact dataset item(s) used for each training step.
+# This prints entries from `batch["item_info"]` (ItemInfo.item_key, bucket size, frame count).
+# Useful to correlate throughput spikes with specific sources/buckets, but can be very verbose.
+# Default: false
+log_batch_item_info = false
+
+# How often to print item info (in global steps).
+# - 1: every step
+# - 10: every 10 steps
+# Default: 1
+log_batch_item_info_interval = 1
+
+# Limit the number of items printed per step (batch can contain multiple items).
+# Default: 8
+log_batch_item_info_max_items = 8
+
 # Enable gradient norm logging (logs total gradient norm before clipping)
 # Creates TensorBoard metric: grad_norm
 log_gradient_norm = false
