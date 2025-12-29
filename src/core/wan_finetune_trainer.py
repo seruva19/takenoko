@@ -40,6 +40,7 @@ from core.sampling_manager import SamplingManager
 from core.control_signal_processor import ControlSignalProcessor
 from core.training_core import TrainingCore
 from memory.safe_memory_manager import SafeMemoryManager
+from distillation.glance_distiller import GlanceDistiller
 
 from core.vae_training_core import VaeTrainingCore
 from reward.reward_training_core import RewardTrainingCore
@@ -129,6 +130,9 @@ class WanFinetuneTrainer:
 
         # Weight dynamics analysis for research and monitoring
         self.weight_analyzer = WeightDynamicsAnalyzer()
+
+        # Glance-style distillation helper (optional)
+        self.glance_distiller: Optional[GlanceDistiller] = None
 
     def handle_model_specific_args(self, args: argparse.Namespace) -> None:
         """Handle model-specific arguments for full fine-tuning."""
@@ -670,16 +674,31 @@ class WanFinetuneTrainer:
             solver="euler",
         )
 
-        # Get noisy input using Takenoko's method with timestep distribution
-        noisy_model_input, timesteps, _ = get_noisy_model_input_and_timesteps(
-            args,
-            noise,
-            latents,
-            noise_scheduler,
-            device,
-            transformer.dtype,
-            timestep_distribution=self.timestep_distribution,
-        )
+        if self.glance_distiller is not None and self.glance_distiller.enabled:
+            noisy_model_input, timesteps, _, _ = (
+                self.glance_distiller.prepare_training_inputs(
+                    args=args,
+                    accelerator=accelerator,
+                    latents=latents,
+                    noise=noise,
+                    noise_scheduler=noise_scheduler,
+                    dtype=transformer.dtype,
+                    batch=batch,
+                )
+            )
+        else:
+            # Get noisy input using Takenoko's method with timestep distribution
+            noisy_model_input, timesteps, _ = (
+                get_noisy_model_input_and_timesteps(
+                    args,
+                    noise,
+                    latents,
+                    noise_scheduler,
+                    device,
+                    transformer.dtype,
+                    timestep_distribution=self.timestep_distribution,
+                )
+            )
 
         # Convert tensors to correct device/dtype right before model call
         context = [t.to(device=device, dtype=transformer.dtype) for t in context]
@@ -964,6 +983,16 @@ class WanFinetuneTrainer:
         self.training_core = TrainingCore(self.config, self.fluxflow_config)
         self.vae_training_core = VaeTrainingCore(self.config)
         self.reward_training_core = RewardTrainingCore(self.config)
+
+        if getattr(args, "glance_enabled", False):
+            self.glance_distiller = GlanceDistiller.from_args(args)
+            logger.info(
+                "Glance distillation enabled (mode=%s, timesteps=%s)",
+                self.glance_distiller.config.mode,
+                ",".join(
+                    f"{t:.4f}" for t in self.glance_distiller.config.timesteps
+                ),
+            )
 
         # Configure advanced logging settings
         self.training_core.configure_advanced_logging(args)

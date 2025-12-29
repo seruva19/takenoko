@@ -2681,7 +2681,7 @@ memflow_guidance_top_k = 3
 memflow_guidance_min_frames = 2
 
 # =============================================================================
-# ⚠️ FVDM SETTINGS
+# FVDM SETTINGS
 # =============================================================================
 
 # Enable Frame-Aware Video Diffusion Model (FVDM) training
@@ -2738,6 +2738,26 @@ log_timestep_distribution_compare_interval = 100
 
 # Histogram bins for comparison charts (0 uses log_timestep_distribution_bins)
 log_timestep_distribution_compare_bins = 100
+
+# =============================================================================
+# ⚠️ GLANCE DISTILLATION MODE
+# =============================================================================
+
+# Enable Glance-style fixed-timestep distillation inside the standard WAN loop.
+# This does NOT switch pipelines; it only overrides timestep sampling.
+glance_enabled = false
+
+# Glance mode:
+# - "slow" (default): use the slow 5-step schedule from Glance
+# - "fast": use the fast 5-step schedule from Glance
+# - "custom": use glance_timesteps (comma-separated list)
+glance_mode = "slow"
+
+# Custom fixed timesteps, only used when glance_mode = "custom".
+# Values are in the same 1..1000 scale as other timestep settings and must
+# fall within [min_timestep, max_timestep]. Leave blank to disable.
+# Example: "1000,979.1915,957.5157,934.9171,911.3354"
+glance_timesteps = ""
 
 # =============================================================================
 # ⚠️ RCM DISTILLATION PIPELINE SETTINGS

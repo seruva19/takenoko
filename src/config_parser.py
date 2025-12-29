@@ -13,6 +13,7 @@ from dataset.config_utils import (
     validate_dataset_config,
 )
 from configs.relora_config import apply_relora_config
+from configs.glance_config import apply_glance_config
 
 
 def create_args_from_config(
@@ -1832,6 +1833,9 @@ def create_args_from_config(
         logger.info(
             f"🚀 TorchAO FP8 enabled - Weight dtype: {args.torchao_fp8_weight_dtype}"
         )
+
+    # Glance distillation mode configuration (WAN training)
+    apply_glance_config(args, config, logger)
 
     # RCM distillation pipeline configuration (root-level keys, prefixed with rcm_)
     rcm_extra_args = config.get("rcm_extra_args", {}) or {}

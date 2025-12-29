@@ -137,6 +137,7 @@ from distillation.rcm_core.forward import (
     estimate_trigflow_from_timesteps,
     rcm_compute_forward,
 )
+from distillation.glance_distiller import GlanceDistiller
 
 
 def _compute_snr_weight_scale(
@@ -239,6 +240,10 @@ class TrainingCore:
 
         # Initialize differential guidance enhancement
         self.differential_guidance_integration = None
+
+        # Glance-style distillation helper (optional)
+        self.glance_distiller: Optional[GlanceDistiller] = None
+        self._warned_glance_incompatible: bool = False
 
         # MemFlow guidance configuration (training-only)
         self.memflow_guidance_config = None
@@ -856,6 +861,14 @@ class TrainingCore:
         else:
             self.eqm_training_helper = None
 
+        if self.glance_distiller is None and getattr(args, "glance_enabled", False):
+            self.glance_distiller = GlanceDistiller.from_args(args)
+            logger.info(
+                "Glance distillation enabled (mode=%s, timesteps=%s)",
+                self.glance_distiller.config.mode,
+                ",".join(f"{t:.4f}" for t in self.glance_distiller.config.timesteps),
+            )
+
         # Configure EMA hyperparameters from args (non-fatal)
         try:
             self.configure_ema_from_args(args)
@@ -1142,22 +1155,50 @@ class TrainingCore:
                         except Exception:
                             pass
 
-                        # Calculate model input and timesteps (standard path)
-                        noisy_model_input, timesteps, sigmas, weighting = (
-                            prepare_standard_training_inputs(
-                                args,
-                                accelerator,
-                                latents,
-                                noise,
-                                noise_scheduler,
-                                dit_dtype,
-                                self.timestep_distribution,
-                                dual_model_manager,
-                                batch,
-                                cdc_gamma_b=self.cdc_gamma_b,
-                                item_info=batch.get("item_info"),
-                            )
+                        use_glance = (
+                            self.glance_distiller is not None
+                            and self.glance_distiller.enabled
                         )
+                        if use_glance and (dual_model_manager is not None or eqm_enabled):
+                            if not self._warned_glance_incompatible:
+                                logger.warning(
+                                    "Glance distillation disabled for this run "
+                                    "(dual_model_manager or EqM mode active)."
+                                )
+                                self._warned_glance_incompatible = True
+                            use_glance = False
+
+                        if use_glance:
+                            noisy_model_input, timesteps, sigmas, weighting = (
+                                self.glance_distiller.prepare_training_inputs(
+                                    args=args,
+                                    accelerator=accelerator,
+                                    latents=latents,
+                                    noise=noise,
+                                    noise_scheduler=noise_scheduler,
+                                    dtype=dit_dtype,
+                                    batch=batch,
+                                    cdc_gamma_b=self.cdc_gamma_b,
+                                    item_info=batch.get("item_info"),
+                                )
+                            )
+                        else:
+                            # Calculate model input and timesteps (standard path)
+                            noisy_model_input, timesteps, sigmas, weighting = (
+                                prepare_standard_training_inputs(
+                                    args,
+                                    accelerator,
+                                    latents,
+                                    noise,
+                                    noise_scheduler,
+                                    dit_dtype,
+                                    self.timestep_distribution,
+                                    dual_model_manager,
+                                    batch,
+                                    cdc_gamma_b=self.cdc_gamma_b,
+                                    item_info=batch.get("item_info"),
+                                )
+                            )
 
                     transition_reference_timesteps = None
                     need_intermediate = False
