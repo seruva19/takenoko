@@ -108,4 +108,3 @@ Keep in mind that work on some features is not yet complete due to time and hard
 | [Q-GaLore](https://github.com/VITA-Group/Q-GaLore) | repo | - Q-GaLore optimizer | [VITA-Group](https://github.com/VITA-Group) | Apache 2.0 | <sub>see also [paper](https://arxiv.org/abs/2407.08296)</sub> |
 | [SemanticGen: Video Generation in Semantic Space](https://arxiv.org/abs/2512.20619) | paper | - Semantic token conditioning<br>- Feature‑representation cross‑alignment loss | Jianhong Bai, Xiaoshi Wu, Xintao Wang, Xiao Fu, Yuanxing Zhang, Qinghe Wang, Xiaoyu Shi, Menghan Xia, Zuozhu Liu, Haoji Hu, Pengfei Wan, Kun Gai |  | |
 | [transformers (pr)](https://github.com/huggingface/transformers/pull/31936) | repo | - Implementation of Q-GaLore optimizer | [SunMarc](https://github.com/SunMarc) | Apache 2.0 |  |
-
