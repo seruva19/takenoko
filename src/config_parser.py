@@ -4,6 +4,7 @@ from typing import Any, Dict
 from common.logger import get_logger
 from enhancements.semanticgen.config import parse_semanticgen_config
 from memory.config import parse_memory_optimization_config
+from optimizers.q_galore_config import apply_q_galore_config
 from transition.configuration import parse_transition_config
 
 logger = get_logger(__name__, level=logging.INFO)
@@ -355,6 +356,7 @@ def create_args_from_config(
     # Optimizer settings
     args.optimizer_type = config.get("optimizer_type", "")
     args.optimizer_args = config.get("optimizer_args", [])
+    args = apply_q_galore_config(args, config, logger)
     args.ivon_ess = config.get("ivon_ess")
     args.learning_rate = config.get("learning_rate", 5e-5)
     args.max_grad_norm = config.get("max_grad_norm", 1.0)

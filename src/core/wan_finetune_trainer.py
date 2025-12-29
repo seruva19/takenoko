@@ -10,6 +10,7 @@ import argparse
 import math
 import os
 import random
+import re
 from multiprocessing import Value
 from typing import Any, Dict, List, Optional
 import torch
@@ -149,8 +150,9 @@ class WanFinetuneTrainer:
                 optimizer_type = getattr(args, "optimizer_type", "adafactor").lower()
                 if optimizer_type != "adafactor":
                     logger.warning(
-                        f"⚠️ fused_backward_pass=true only supports Adafactor optimizer. "
-                        f"Current optimizer_type='{optimizer_type}' will be ignored and Adafactor will be used."
+                        "⚠️ fused_backward_pass=true only supports Adafactor optimizer. "
+                        "Current optimizer_type='%s' will run without fused backward pass.",
+                        optimizer_type,
                     )
         if hasattr(args, "full_bf16"):
             self.full_bf16 = args.full_bf16
@@ -625,10 +627,13 @@ class WanFinetuneTrainer:
         batch: Dict[str, torch.Tensor],
         text_encoder: Optional[torch.nn.Module] = None,
         repa_helper: Optional[Any] = None,
+        reg_helper: Optional[Any] = None,
         sara_helper: Optional[Any] = None,
         layer_sync_helper: Optional[Any] = None,
         crepa_helper: Optional[Any] = None,
+        haste_helper: Optional[Any] = None,
         vae: Optional[Any] = None,
+        global_step: Optional[int] = None,
     ) -> Any:
         """
         Forward pass using transformer DIRECTLY.
@@ -715,7 +720,7 @@ class WanFinetuneTrainer:
                 noisy_model_input,
                 timesteps,
                 transformer.dtype,
-                global_step=None,
+                global_step=global_step,
                 reg_cls_token=reg_cls_input,
             )
             reg_cls_pred = None
@@ -794,6 +799,96 @@ class WanFinetuneTrainer:
             logger.info("CREPA: dropped VAE encoder modules to save memory.")
         except Exception as exc:
             logger.warning("CREPA: failed to drop VAE encoder modules: %s", exc)
+
+    @staticmethod
+    def _matches_q_galore_target(
+        module_name: str, targets: Optional[object]
+    ) -> bool:
+        if targets is None:
+            return True
+        if isinstance(targets, str):
+            targets_list = [targets]
+        elif isinstance(targets, list):
+            targets_list = [t for t in targets if isinstance(t, str)]
+        else:
+            return False
+
+        for target in targets_list:
+            if target.replace("_", "-") == "all-linear":
+                return True
+            if any(ch in target for ch in ".^$*+?{}[]|()\\"):
+                try:
+                    if re.search(target, module_name):
+                        return True
+                except re.error:
+                    logger.warning(
+                        "Invalid regex in q_galore_target_modules: %s", target
+                    )
+            elif target in module_name:
+                return True
+        return False
+
+    @staticmethod
+    def _apply_q_galore_weight_quantization(
+        model: torch.nn.Module,
+        args: argparse.Namespace,
+    ) -> int:
+        try:
+            from vendor.q_galore_torch.utils.quantization import QGaLoreLinear
+        except Exception as exc:
+            raise ImportError(
+                "Q-GaLore weight quantization utilities are unavailable. "
+                "Ensure vendor.q_galore_torch.utils.quantization is present."
+            ) from exc
+
+        weight_bits = int(getattr(args, "q_galore_weight_bits", 8))
+        if weight_bits != 8:
+            raise ValueError("q_galore_weight_bits must be 8 for Q-GaLore weights")
+        weight_group_size = int(getattr(args, "q_galore_weight_group_size", 256))
+        if weight_group_size <= 0:
+            raise ValueError("q_galore_weight_group_size must be > 0")
+        stochastic_round = bool(getattr(args, "q_galore_stochastic_round", False))
+        target_modules = getattr(args, "q_galore_target_modules", None)
+
+        replaced = 0
+
+        def replace_modules(module: torch.nn.Module, prefix: str = "") -> None:
+            nonlocal replaced
+            for name, child in module.named_children():
+                full_name = f"{prefix}.{name}" if prefix else name
+                if isinstance(child, torch.nn.Linear) and WanFinetuneTrainer._matches_q_galore_target(
+                    full_name, target_modules
+                ):
+                    bias_data = child.bias.data if child.bias is not None else None
+                    new_layer = QGaLoreLinear(
+                        child.weight,
+                        bias_data,
+                        device=child.weight.device,
+                        dtype=child.weight.dtype,
+                        num_bits=weight_bits,
+                        group_size=weight_group_size,
+                        stochastic_round=stochastic_round,
+                    )
+                    module._modules[name] = new_layer
+                    replaced += 1
+                else:
+                    replace_modules(child, full_name)
+
+        replace_modules(model)
+        return replaced
+
+    @staticmethod
+    def _sync_q_galore_weight_buffers(model: torch.nn.Module) -> None:
+        for module in model.modules():
+            weight = getattr(module, "weight", None)
+            if weight is None:
+                continue
+            scales = getattr(weight, "scales", None)
+            zeros = getattr(weight, "zeros", None)
+            if isinstance(scales, torch.Tensor) and scales.device != weight.device:
+                weight.scales = scales.to(weight.device)
+            if isinstance(zeros, torch.Tensor) and zeros.device != weight.device:
+                weight.zeros = zeros.to(weight.device)
 
     @staticmethod
     def _maybe_add_crepa_params(
@@ -1083,32 +1178,87 @@ class WanFinetuneTrainer:
         if getattr(args, "verbose_network", False):
             NetworkLoggingUtils.log_detailed_network_info(transformer, args)
 
-        # Create optimizer directly
-        logger.info(f"Creating Adafactor optimizer directly")
+        optimizer_type_raw = getattr(args, "optimizer_type", "") or "adafactor"
+        optimizer_type = optimizer_type_raw.lower()
+        if self.fused_backward_pass and optimizer_type != "adafactor":
+            logger.warning(
+                "⚠️ fused_backward_pass=true only supports Adafactor optimizer. "
+                "optimizer_type='%s' will run without fused backward pass.",
+                optimizer_type_raw,
+            )
+            self.fused_backward_pass = False
 
-        # Extract parameters for direct optimizer creation
-        trainable_params = params_to_optimize[0]["params"]
-
-        # Create Adafactor optimizer directly
-        import transformers.optimization
-
-        optimizer_kwargs = {
-            "scale_parameter": False,
-            "relative_step": False,
-            "warmup_init": False,
+        q_galore_replaced_count = None
+        q_galore_types = {
+            "qgaloreadamw8bit",
+            "qgalore_adamw8bit",
+            "q_galore_adamw8bit",
+            "qgaloreadamw8bitlayerwise",
+            "qgalore_adamw8bit_layerwise",
+            "q_galore_adamw8bit_layerwise",
         }
+        if (
+            optimizer_type in q_galore_types
+            and getattr(args, "q_galore_weight_quant", False)
+        ):
+            replaced = self._apply_q_galore_weight_quantization(transformer, args)
+            q_galore_replaced_count = replaced
+            logger.info(
+                "Q-GaLore weight quantization applied to %d Linear modules.",
+                replaced,
+            )
+            if replaced == 0:
+                logger.warning(
+                    "Q-GaLore weight quantization enabled, but no Linear modules matched."
+                )
+        elif getattr(args, "q_galore_weight_quant", False):
+            logger.warning(
+                "q_galore_weight_quant is enabled, but optimizer_type='%s' "
+                "does not use Q-GaLore. Skipping weight quantization.",
+                optimizer_type_raw,
+            )
 
-        optimizer = transformers.optimization.Adafactor(
-            trainable_params, lr=args.learning_rate, **optimizer_kwargs
-        )
+        if optimizer_type == "adafactor":
+            logger.info("Creating Adafactor optimizer directly")
+            trainable_params = params_to_optimize[0]["params"]
+            import transformers.optimization
 
-        # Set optimizer metadata for logging
-        optimizer_name = "transformers.optimization.Adafactor"
-        optimizer_args = ",".join([f"{k}={v}" for k, v in optimizer_kwargs.items()])
+            optimizer_kwargs = {
+                "scale_parameter": False,
+                "relative_step": False,
+                "warmup_init": False,
+            }
 
-        logger.info(
-            f"✅ Created Adafactor optimizer: {optimizer_name} | {optimizer_args}"
-        )
+            optimizer = transformers.optimization.Adafactor(
+                trainable_params, lr=args.learning_rate, **optimizer_kwargs
+            )
+
+            optimizer_name = "transformers.optimization.Adafactor"
+            optimizer_args = ",".join(
+                [f"{k}={v}" for k, v in optimizer_kwargs.items()]
+            )
+
+            logger.info(
+                "✅ Created Adafactor optimizer: %s | %s",
+                optimizer_name,
+                optimizer_args,
+            )
+        else:
+            args.optimizer_type = optimizer_type_raw
+            (
+                optimizer_name,
+                optimizer_args,
+                optimizer,
+                _optimizer_train_fn,
+                _optimizer_eval_fn,
+            ) = self.optimizer_manager.get_optimizer(
+                args, transformer, params_to_optimize
+            )
+            logger.info(
+                "✅ Created optimizer: %s | %s",
+                optimizer_name,
+                optimizer_args,
+            )
         # Fused backward pass will be applied AFTER accelerator.prepare()
 
         # Optionally wrap with self-correction hybrid group (delegated to helper)
@@ -1280,7 +1430,7 @@ class WanFinetuneTrainer:
         # Prepare models with accelerator
         if self.blocks_to_swap > 0:
             transformer = accelerator.prepare(
-                transformer, device_placement=[not self.blocks_to_swap > 0]
+                transformer, device_placement=[not self.blocks_to_swap > 0]     
             )
             accelerator.unwrap_model(transformer).move_to_device_except_swap_blocks(
                 accelerator.device
@@ -1288,6 +1438,7 @@ class WanFinetuneTrainer:
             accelerator.unwrap_model(transformer).prepare_block_swap_before_forward()
         else:
             transformer = accelerator.prepare(transformer)
+        self._sync_q_galore_weight_buffers(transformer)
 
         # Prepare T5 encoder if enabled
         if text_encoder is not None:
@@ -1693,6 +1844,13 @@ class WanFinetuneTrainer:
             desc="Training",
             disable=not accelerator.is_local_main_process,
         )
+        if (
+            q_galore_replaced_count is not None
+            and accelerator.is_local_main_process
+        ):
+            tqdm.write(
+                f"Q-GaLore weight quantization: replaced {q_galore_replaced_count} Linear layers"
+            )
 
         # Calculate epoch range - start from resumed epoch if applicable
         max_epochs = (
@@ -1753,10 +1911,13 @@ class WanFinetuneTrainer:
                         batch,
                         text_encoder,
                         repa_helper=repa_helper,
+                        reg_helper=reg_helper,
                         sara_helper=None,
                         layer_sync_helper=layer_sync_helper,
                         crepa_helper=crepa_helper,
+                        haste_helper=haste_helper,
                         vae=vae,
+                        global_step=global_step,
                     )
                     loss = loss_components.total_loss
 

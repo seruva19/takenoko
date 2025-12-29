@@ -106,4 +106,5 @@ Keep in mind that work on some features is not yet complete due to time and hard
 | [GaLore](https://github.com/jiaweizzhao/GaLore) | repo | - GaLore optimizer | [jiaweizzhao](https://github.com/jiaweizzhao) | Apache 2.0 | <sub>see also [paper](https://arxiv.org/abs/2403.03507)</sub> |
 | [REG](https://github.com/Martinser/REG) | repo | -  Class‑token entanglement<br>- Class‑token denoising loss<br>- Alignment loss to encoder features| [Martinser](https://github.com/Martinser) | MIT | <sub>see also [paper](https://arxiv.org/abs/2507.01467v2)</sub> |
 | [SemanticGen: Video Generation in Semantic Space](https://arxiv.org/abs/2512.20619) | paper | - Semantic token conditioning<br>- Feature‑representation cross‑alignment loss | Jianhong Bai, Xiaoshi Wu, Xintao Wang, Xiao Fu, Yuanxing Zhang, Qinghe Wang, Xiaoyu Shi, Menghan Xia, Zuozhu Liu, Haoji Hu, Pengfei Wan, Kun Gai |  | |
-
+| [Q-GaLore](https://github.com/VITA-Group/Q-GaLore) | repo | - Q-GaLore optimizer | [VITA-Group](https://github.com/VITA-Group) | Apache 2.0 | <sub>see also [paper](https://arxiv.org/abs/2407.08296)</sub> |
+| [transformers (pr)](https://github.com/huggingface/transformers/pull/31936) | repo | - QGaLore optimizer | [SunMarc](https://github.com/SunMarc) | Apache 2.0 |  |

@@ -9,6 +9,7 @@ import ast
 import fnmatch
 import importlib
 import argparse
+import re
 from typing import Any, Dict, List, Optional, Tuple, Union, Callable
 import torch
 import transformers
@@ -308,6 +309,15 @@ class OptimizerManager:
             "galore_adafactor",
         }
         is_galore_optimizer = optimizer_type in galore_types
+        q_galore_types = {
+            "qgaloreadamw8bit",
+            "qgalore_adamw8bit",
+            "q_galore_adamw8bit",
+            "qgaloreadamw8bitlayerwise",
+            "qgalore_adamw8bit_layerwise",
+            "q_galore_adamw8bit_layerwise",
+        }
+        is_q_galore_optimizer = optimizer_type in q_galore_types
 
         # split optimizer_type and optimizer_args
         optimizer_kwargs = {}
@@ -404,6 +414,225 @@ class OptimizerManager:
                 f"{scalar_label}: {len(scalar_params)} bias/gain parameters (<2D)"
             )
 
+        def _looks_like_regex(pattern: str) -> bool:
+            return any(ch in pattern for ch in ".^$*+?{}[]|()\\")
+
+        def _is_all_linear(target_modules: Union[str, List[str], None]) -> bool:
+            if isinstance(target_modules, str):
+                return target_modules.replace("_", "-") == "all-linear"
+            if isinstance(target_modules, list):
+                return any(
+                    isinstance(item, str) and item.replace("_", "-") == "all-linear"
+                    for item in target_modules
+                )
+            return False
+
+        def _matches_target_module(
+            target_modules: Union[str, List[str], None],
+            module_name: str,
+        ) -> Tuple[bool, bool]:
+            if target_modules is None:
+                return False, False
+            if isinstance(target_modules, list):
+                for target in target_modules:
+                    if not isinstance(target, str):
+                        continue
+                    if target.replace("_", "-") == "all-linear":
+                        continue
+                    if _looks_like_regex(target):
+                        try:
+                            if re.search(target, module_name):
+                                return True, True
+                        except re.error:
+                            logger.warning(
+                                "Invalid regex in q_galore_target_modules: %s", target
+                            )
+                    elif target in module_name:
+                        return True, False
+                return False, False
+            if isinstance(target_modules, str):
+                if target_modules.replace("_", "-") == "all-linear":
+                    return False, False
+                if _looks_like_regex(target_modules):
+                    try:
+                        return re.search(target_modules, module_name) is not None, True
+                    except re.error:
+                        logger.warning(
+                            "Invalid regex in q_galore_target_modules: %s", target_modules
+                        )
+                        return False, False
+                return target_modules in module_name, False
+            return False, False
+
+        def _get_linear_weight(module: torch.nn.Module) -> Optional[torch.nn.Parameter]:
+            if isinstance(module, torch.nn.Linear):
+                return module.weight
+            weight = getattr(module, "weight", None)
+            if isinstance(weight, torch.nn.Parameter) and weight.ndim == 2:
+                return weight
+            return None
+
+        if is_q_galore_optimizer:
+            if optimizer_type.endswith("layerwise"):
+                raise NotImplementedError(
+                    "Layer-wise Q-GaLore is not supported in Takenoko yet. "
+                    "Use optimizer_type='q_galore_adamw8bit' instead."
+                )
+
+            q_galore_target_modules = getattr(args, "q_galore_target_modules", None)
+            if q_galore_target_modules is None:
+                q_galore_target_modules = optimizer_kwargs.pop(
+                    "q_galore_target_modules", None
+                )
+            if q_galore_target_modules is None:
+                raise ValueError(
+                    "q_galore_target_modules must be set when using Q-GaLore optimizers."
+                )
+            if not isinstance(q_galore_target_modules, (list, str)):
+                raise ValueError(
+                    "q_galore_target_modules must be a string or list of strings."
+                )
+
+            if transformer is None:
+                raise ValueError(
+                    "You need to pass a model in order to initialize Q-GaLore optimizers."
+                )
+
+            trainable_param_list = extract_params(trainable_params)
+            if not trainable_param_list:
+                raise ValueError("No trainable parameters available for Q-GaLore.")
+            trainable_param_ids = {id(p) for p in trainable_param_list}
+            allow_non_trainable = bool(getattr(args, "q_galore_weight_quant", False))
+
+            all_linear = _is_all_linear(q_galore_target_modules)
+            q_galore_params: List[torch.nn.Parameter] = []
+
+            for module_name, module in transformer.named_modules():
+                matched, used_regex = _matches_target_module(
+                    q_galore_target_modules, module_name
+                )
+
+                weight = _get_linear_weight(module)
+                if weight is None:
+                    if matched and not used_regex:
+                        logger.warning(
+                            "%s matched q_galore_target_modules but is not a Linear layer.",
+                            module_name,
+                        )
+                    continue
+
+                if not matched and not all_linear:
+                    continue
+
+                if id(weight) not in trainable_param_ids and not allow_non_trainable:
+                    continue
+
+                q_galore_params.append(weight)
+
+            if not q_galore_params:
+                raise ValueError(
+                    "None of the q_galore_target_modules were found in trainable "
+                    f"parameters ({q_galore_target_modules})."
+                )
+
+            def _pop_q_galore_setting(
+                primary_key: str, fallback_key: str, default: Any
+            ) -> Any:
+                if primary_key in optimizer_kwargs:
+                    return optimizer_kwargs.pop(primary_key)
+                if fallback_key in optimizer_kwargs:
+                    return optimizer_kwargs.pop(fallback_key)
+                return default
+
+            rank = int(_pop_q_galore_setting("q_galore_rank", "rank", 256))
+            if rank <= 0:
+                raise ValueError("q_galore_rank must be > 0")
+
+            update_proj_gap = int(
+                _pop_q_galore_setting("q_galore_update_proj_gap", "update_proj_gap", 200)
+            )
+            if update_proj_gap < 1:
+                raise ValueError("q_galore_update_proj_gap must be >= 1")
+
+            scale = float(_pop_q_galore_setting("q_galore_scale", "scale", 0.25))
+            if scale <= 0:
+                raise ValueError("q_galore_scale must be > 0")
+
+            proj_type = str(
+                _pop_q_galore_setting("q_galore_proj_type", "proj_type", "std")
+            )
+
+            quant_value = _pop_q_galore_setting("q_galore_quant", "quant", True)
+            if isinstance(quant_value, str):
+                quant_value = quant_value.strip().lower() in {"1", "true", "yes", "y"}
+            quant = bool(quant_value)
+
+            quant_n_bit = int(
+                _pop_q_galore_setting("q_galore_quant_n_bit", "quant_n_bit", 4)
+            )
+            if quant_n_bit <= 0:
+                raise ValueError("q_galore_quant_n_bit must be > 0")
+
+            quant_group_size = int(
+                _pop_q_galore_setting(
+                    "q_galore_quant_group_size", "quant_group_size", 256
+                )
+            )
+            if quant_group_size <= 0:
+                raise ValueError("q_galore_quant_group_size must be > 0")
+
+            cos_threshold = float(
+                _pop_q_galore_setting("q_galore_cos_threshold", "cos_threshold", 0.4)
+            )
+            if not 0.0 <= cos_threshold <= 1.0:
+                raise ValueError("q_galore_cos_threshold must be between 0 and 1")
+
+            gamma_proj = float(
+                _pop_q_galore_setting("q_galore_gamma_proj", "gamma_proj", 2)
+            )
+            if gamma_proj <= 0:
+                raise ValueError("q_galore_gamma_proj must be > 0")
+
+            queue_size = int(
+                _pop_q_galore_setting("q_galore_queue_size", "queue_size", 5)
+            )
+            if queue_size <= 0:
+                raise ValueError("q_galore_queue_size must be > 0")
+
+            q_galore_optim_kwargs = {
+                "rank": rank,
+                "update_proj_gap": update_proj_gap,
+                "scale": scale,
+                "proj_type": proj_type,
+                "quant": quant,
+                "quant_n_bit": quant_n_bit,
+                "quant_group_size": quant_group_size,
+                "cos_threshold": cos_threshold,
+                "gamma_proj": gamma_proj,
+                "queue_size": queue_size,
+            }
+
+            q_galore_param_ids = {id(p) for p in q_galore_params}
+            non_q_galore_params = [
+                p for p in trainable_param_list if id(p) not in q_galore_param_ids
+            ]
+            param_groups: List[Dict[str, Any]] = []
+            if non_q_galore_params:
+                param_groups.append({"params": non_q_galore_params})
+            param_groups.append({"params": q_galore_params, **q_galore_optim_kwargs})
+            trainable_params = param_groups
+
+            logger.info(
+                "Q-GaLore enabled: target_modules=%s rank=%d update_proj_gap=%d "
+                "scale=%.3f proj_type=%s quant=%s",
+                q_galore_target_modules,
+                rank,
+                update_proj_gap,
+                scale,
+                proj_type,
+                quant,
+            )
+
         if is_galore_optimizer:
             param_name_map = {id(p): name for name, p in transformer.named_parameters()}
             trainable_params = OptimizerManager._apply_galore_param_groups(
@@ -470,6 +699,23 @@ class OptimizerManager:
         elif optimizer_type == "AdamW".lower():
             logger.info(f"using AdamW optimizer | {optimizer_kwargs}")
             optimizer_class = torch.optim.AdamW
+            optimizer = optimizer_class(trainable_params, lr=lr, **optimizer_kwargs)
+
+        elif optimizer_type in q_galore_types:
+            logger.info(f"using QGaLoreAdamW8bit optimizer | {optimizer_kwargs}")
+            try:
+                from vendor.q_galore_torch.q_galore_adamw8bit import (
+                    AdamW8bit as QGaLoreAdamW8bit,
+                )
+            except Exception as err:
+                try:
+                    from q_galore_torch import QGaLoreAdamW8bit
+                except Exception as err2:
+                    raise ImportError(
+                        "QGaLoreAdamW8bit requires q-galore-torch and bitsandbytes. "
+                        "Install with `pip install q-galore`."
+                    ) from err2
+            optimizer_class = QGaLoreAdamW8bit
             optimizer = optimizer_class(trainable_params, lr=lr, **optimizer_kwargs)
 
         elif optimizer_type in {"galoreadamw", "galore_adamw"}:

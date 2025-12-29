@@ -56,6 +56,81 @@ class CheckpointUtils:
         CheckpointUtils._checkpoint_info_cache.clear()
 
     @staticmethod
+    def _resolve_model_device(model: torch.nn.Module) -> torch.device:
+        for param in model.parameters():
+            return param.device
+        for buffer in model.buffers():
+            return buffer.device
+        return torch.device("cpu")
+
+    @staticmethod
+    def _has_q_galore_modules(model: torch.nn.Module) -> bool:
+        try:
+            from vendor.q_galore_torch.utils.quantization import QGaLoreLinear
+        except Exception:
+            return False
+
+        return any(isinstance(module, QGaLoreLinear) for module in model.modules())
+
+    @staticmethod
+    def _sync_q_galore_buffers(model: torch.nn.Module, device: torch.device) -> None:
+        try:
+            from vendor.q_galore_torch.utils.quantization import QGaLoreLinear
+        except Exception:
+            return
+
+        for module in model.modules():
+            if not isinstance(module, QGaLoreLinear):
+                continue
+            module.weight.data = module.weight.data.to(device)
+            if module.bias is not None:
+                module.bias.data = module.bias.data.to(device)
+            if hasattr(module.weight, "scales"):
+                module.weight.scales = module.weight.scales.to(device)
+            if hasattr(module.weight, "zeros"):
+                module.weight.zeros = module.weight.zeros.to(device)
+
+    @staticmethod
+    def _save_q_galore_weights(
+        models: list[torch.nn.Module], output_dir: str
+    ) -> None:
+        try:
+            from vendor.q_galore_torch.utils.setup import saving_model_weight
+        except Exception as exc:
+            logger.warning(f"⚠️ Q-GaLore save helper unavailable: {exc}")
+            return
+
+        for index, model in enumerate(models):
+            if not CheckpointUtils._has_q_galore_modules(model):
+                continue
+            q_galore_path = os.path.join(
+                output_dir, f"q_galore_weights_model_{index}.pt"
+            )
+            saving_model_weight(model, q_galore_path)
+            logger.info(f"💾 Saved Q-GaLore weights to: {q_galore_path}")
+
+    @staticmethod
+    def _load_q_galore_weights(
+        models: list[torch.nn.Module], input_dir: str
+    ) -> None:
+        try:
+            from vendor.q_galore_torch.utils.setup import load_model_weight
+        except Exception as exc:
+            logger.warning(f"⚠️ Q-GaLore load helper unavailable: {exc}")
+            return
+
+        for index, model in enumerate(models):
+            q_galore_path = os.path.join(
+                input_dir, f"q_galore_weights_model_{index}.pt"
+            )
+            if not os.path.exists(q_galore_path):
+                continue
+            load_model_weight(model, q_galore_path)
+            device = CheckpointUtils._resolve_model_device(model)
+            CheckpointUtils._sync_q_galore_buffers(model, device)
+            logger.info(f"✅ Loaded Q-GaLore weights from: {q_galore_path}")
+
+    @staticmethod
     def _extract_step_from_checkpoint(checkpoint_path: str) -> Optional[int]:
         """Extract step number from checkpoint path for direct loading."""
         try:
@@ -871,6 +946,8 @@ class CheckpointUtils:
             TrainStateManager.save_train_state(output_dir, current_epoch, current_step)
 
             # No model filtering - keep all models for full fine-tuning
+            if getattr(args, "q_galore_weight_quant", False):
+                CheckpointUtils._save_q_galore_weights(models, output_dir)
 
         return save_model_hook
 
@@ -932,6 +1009,9 @@ class CheckpointUtils:
             for i, model in enumerate(models):
                 model_type = type(model).__name__
                 logger.info(f"   Model {i}: {model_type}")
+
+            if getattr(args, "q_galore_weight_quant", False):
+                CheckpointUtils._load_q_galore_weights(models, input_dir)
 
         return load_model_hook
 
@@ -1106,6 +1186,9 @@ class CheckpointUtils:
             CheckpointUtils._load_optimizer_scheduler_state(
                 accelerator, checkpoint_path
             )
+
+            if getattr(args, "q_galore_weight_quant", False):
+                CheckpointUtils._load_q_galore_weights([transformer], checkpoint_path)
 
             # Extract step information
             step = CheckpointUtils._extract_step_from_checkpoint_path(checkpoint_path)
