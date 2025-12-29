@@ -7,7 +7,7 @@ import torch.nn as nn
 from common.logger import get_logger
 
 try:
-    from vendor.ramtorch_linear import Linear as VendoredRamLinear  # type: ignore
+    from vendor.ramtorch.ramtorch_linear import Linear as VendoredRamLinear  # type: ignore
 except Exception:  # pragma: no cover - optional dependency
     VendoredRamLinear = None
 

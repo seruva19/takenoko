@@ -254,6 +254,7 @@ rope_use_float32 = false
 # - "Prodigy": Adaptive learning rate optimizer
 # - "AdaMuon": Muon-style orthogonal optimizer with element-wise adaptivity for ≥2D params
 # - "GaLoreAdamW", "GaLoreAdamW8bit", "GaLoreAdafactor": GaLore optimizers
+# - "QGaLoreAdamW8bit": Q-GaLore optimizer (requires q-galore-torch)
 # - "IVON": Bayesian optimizer that samples parameters each step (requires ivon_ess)
 # - "SOAP", "SophiaG", "Scion", etc. (see optimizer_manager.py)
 optimizer_type = "adamw8bit"
@@ -271,6 +272,25 @@ optimizer_type = "adamw8bit"
 # optimizer_args = ["galore_group_by='layer'"]
 # Optional: override GaLore settings for specific parameter name patterns (fnmatch)
 # optimizer_args = ["galore_group_by='layer'", "galore_group_overrides=[{'pattern':'transformer.blocks.*','rank':64},{'pattern':'transformer.final_layer.*','rank':32}]"]
+
+# Q-GaLore target modules (required when optimizer_type = "q_galore_adamw8bit")
+# Accepts a list of module name patterns or a single regex string.
+# Special token "all-linear" targets every nn.Linear layer.
+# q_galore_target_modules = ["attn", "mlp", "proj"]
+
+# Q-GaLore int8 weight quantization for full fine-tuning (default: false)
+# Replaces matching Linear modules with QGaLoreLinear to save memory.
+# Requires optimizer_type = "q_galore_adamw8bit".
+q_galore_weight_quant = false
+
+# Q-GaLore int8 weight bits (must be 8)
+q_galore_weight_bits = 8
+
+# Q-GaLore int8 weight group size (must be > 0, typical: 256)
+q_galore_weight_group_size = 256
+
+# Q-GaLore stochastic rounding for int8 weights
+q_galore_stochastic_round = false
 
 # Learning rate
 learning_rate = 2.0e-5

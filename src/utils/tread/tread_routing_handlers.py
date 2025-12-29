@@ -240,7 +240,7 @@ def handle_routing_start(
             from .tread_frame import build_batched_rotary_from_freqs
         except ImportError:
             # Fallback import path
-            from utils.tread_token import build_batched_rotary_from_freqs
+            from utils.tread.tread_token import build_batched_rotary_from_freqs
 
         B = x.size(0)
         S_keep = x.size(1)
@@ -255,7 +255,7 @@ def handle_routing_start(
             from .tread_frame import slice_e0_for_token_route
         except ImportError:
             # Fallback import path
-            from utils.tread_token import slice_e0_for_token_route
+            from utils.tread.tread_token import slice_e0_for_token_route
 
         e_arg = kwargs.get("e")
         saved_e, e_proc = slice_e0_for_token_route(
