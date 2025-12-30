@@ -27,6 +27,9 @@ from enhancements.temporal_consistency.training_integration import (
 from enhancements.equivdm_noise.training_integration import (
     EquiVDMConsistentNoiseHelper,
 )
+from enhancements.catlvdm.training_integration import (
+    create_catlvdm_corruption_helper,
+)
 from enhancements.memflow_guidance.training_integration import (
     begin_memflow_guidance_step,
     consume_memflow_guidance_loss,
@@ -246,6 +249,9 @@ class TrainingCore:
         # EquiVDM consistent noise helper (optional, training-only)
         self.equivdm_noise_helper: Optional[EquiVDMConsistentNoiseHelper] = None
 
+        # CAT-LVDM corruption helper (optional, training-only)
+        self.catlvdm_corruption_helper = None
+
         # Initialize differential guidance enhancement
         self.differential_guidance_integration = None
 
@@ -374,6 +380,14 @@ class TrainingCore:
                 exc,
             )
             self.equivdm_noise_helper = None
+
+    def initialize_catlvdm_corruption(self, args: argparse.Namespace) -> None:
+        """Initialize CAT-LVDM corruption helper if enabled."""
+        try:
+            self.catlvdm_corruption_helper = create_catlvdm_corruption_helper(args)
+        except Exception as exc:
+            logger.warning("Failed to initialize CAT-LVDM corruption: %s", exc)
+            self.catlvdm_corruption_helper = None
 
     def initialize_memflow_guidance(self, args: argparse.Namespace) -> None:
         """Initialize MemFlow guidance configuration if enabled."""
@@ -517,6 +531,13 @@ class TrainingCore:
             global_step=global_step,
             conditioning_helper=self.semantic_conditioning_helper,
         )
+
+        if self.catlvdm_corruption_helper is not None:
+            attention_masks = batch.get("t5_attention_mask") or batch.get("t5_mask")
+            context = self.catlvdm_corruption_helper.apply_to_context(
+                context,
+                attention_masks=attention_masks,
+            )
 
         # ensure the hidden state will require grad
         if args.gradient_checkpointing:
@@ -1295,7 +1316,7 @@ class TrainingCore:
                             )
                         else:
                             self.error_recycling_helper.maybe_build_svi_y(
-                                batch=batch, latents=latents
+                                batch=batch, latents=latents, vae=vae
                             )
                             self.error_recycling_helper.update_svi_motion_cache(
                                 batch=batch, latents=latents

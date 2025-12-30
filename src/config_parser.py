@@ -4,6 +4,7 @@ from typing import Any, Dict
 from common.logger import get_logger
 from enhancements.semanticgen.config import parse_semanticgen_config
 from enhancements.equivdm_noise.config import parse_equivdm_noise_config
+from enhancements.catlvdm.config import parse_catlvdm_config
 from memory.config import parse_memory_optimization_config
 from optimizers.q_galore_config import apply_q_galore_config
 from transition.configuration import parse_transition_config
@@ -1067,6 +1068,9 @@ def create_args_from_config(
 
     # EquiVDM consistent noise settings (training-only)
     parse_equivdm_noise_config(config, args)
+
+    # CAT-LVDM corruption-aware conditioning (training-only)
+    parse_catlvdm_config(config, args)
 
     # FVDM settings
     args.enable_fvdm = config.get("enable_fvdm", False)

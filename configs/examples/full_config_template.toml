@@ -2862,6 +2862,31 @@ equivdm_flow_stride_check = false
 equivdm_flow_expected_stride = -1
 
 # =============================================================================
+# ⚠️ CAT-LVDM CORRUPTION-AWARE TRAINING SETTINGS
+# =============================================================================
+# Enable CAT-LVDM structured corruption on conditioning embeddings (training-only).
+# This applies BCNI/SACN noise injection and is designed to improve
+# LoRA robustness without changing inference behavior. Default is off.
+enable_catlvdm_corruption = false
+
+# Noise type to apply when CAT-LVDM is enabled:
+# - "bcni": Batch-Centered Noise Injection (perturbs along batch semantic axes)
+# - "sacn": Spectrum-Aware Contextual Noise (perturbs along spectral modes)
+# Defaults to "bcni"; recommended: use "bcni" for caption-rich datasets and
+# "sacn" for class-labeled datasets
+catlvdm_noise_type = "bcni"
+
+# Noise strength rho in [0.0, 0.2].
+# Paper ranges use 2.5% to 20% (0.025 to 0.2); 0.075 is a common mid-point.
+# 0 disables noise even if enable_catlvdm_corruption = true.
+catlvdm_noise_ratio = 0.075
+
+# Which embeddings to corrupt. Currently supports:
+# - "t5": apply to T5 conditioning embeddings (default)
+# Keep as "t5" unless extending the helper.
+catlvdm_apply_to = "t5"
+
+# =============================================================================
 # FVDM SETTINGS
 # =============================================================================
 

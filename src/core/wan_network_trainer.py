@@ -176,6 +176,12 @@ class WanNetworkTrainer:
         except Exception as e:
             logger.warning(f"Failed to initialize EquiVDM noise helper: {e}")
 
+        # Initialize CAT-LVDM corruption if available
+        try:
+            self.training_core.initialize_catlvdm_corruption(args)
+        except Exception as e:
+            logger.warning(f"Failed to initialize CAT-LVDM corruption: {e}")
+
         # Initialize MemFlow guidance if available
         try:
             self.training_core.initialize_memflow_guidance(args)
