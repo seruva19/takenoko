@@ -2503,8 +2503,69 @@ srpo_vae_scale_factor = 8
 srpo_latent_channels = 16
 
 # =============================================================================
-# ⚠️ OUTPUT PRESERVATION SETTINGS (DOP & BPP)
+# ⚠️ DENSEDPO SETTINGS
 # =============================================================================
+
+# DenseDPO training (default off).
+enable_densedpo_training = false
+
+# Partial-noise mix ratio in [0,1].
+densedpo_partial_noise_eta = 0.5
+
+# Denoising steps for pair generation.
+densedpo_num_inference_steps = 50
+
+# Segment length in frames.
+densedpo_segment_frames = 16
+
+# DPO beta scaling.
+densedpo_beta = 0.1
+
+# Label source: "reward", "provided", or "vlm".
+densedpo_label_source = "reward"
+
+# Batch key for provided labels.
+densedpo_segment_preference_key = "densedpo_segment_preferences"
+
+# Reward model name.
+densedpo_reward_model_name = "hps"
+
+# Reward model data type.
+densedpo_reward_model_dtype = "float32"
+
+# Frame selection for reward.
+densedpo_reward_frame_strategy = "first"
+
+# Number of frames to evaluate (1 = fastest, more = better temporal coverage)
+densedpo_reward_num_frames = 1
+
+# How to combine multi-frame rewards: "mean", "min" (conservative), "max" (optimistic), "weighted" (prioritize later frames)
+densedpo_reward_aggregation = "mean"
+
+# VLM labeling (local-only).
+densedpo_vlm_model_path = ""
+
+# VLM data type.
+densedpo_vlm_dtype = "bfloat16"
+
+# VLM prompt.
+densedpo_vlm_prompt = "Rate the visual quality and motion consistency of this short video clip on a scale of 1 to 10. Respond with a single number."
+
+# VLM max new tokens.
+densedpo_vlm_max_new_tokens = 8
+
+# VLM temperature.
+densedpo_vlm_temperature = 0.0
+
+# VLM cache directory.
+densedpo_vlm_cache_dir = ""
+
+# VLM max frames.
+densedpo_vlm_max_frames = 8
+
+# ============================================================================= 
+# ⚠️ OUTPUT PRESERVATION SETTINGS (DOP & BPP)
+# ============================================================================= 
 
 # Enable DOP (Differential Output Preservation) regularization. Preserves the base class knowledge
 # by disabling the LoRA and replacing trigger words with the class prompt for a secondary loss term.

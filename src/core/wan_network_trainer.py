@@ -1378,6 +1378,32 @@ class WanNetworkTrainer:
                 is_main_process=is_main_process,
                 global_step=global_step,
             )
+        elif getattr(args, "enable_densedpo_training", False):
+            from densedpo.densedpo_setup import setup_densedpo_training
+
+            densedpo_trainer = setup_densedpo_training(
+                args=args,
+                accelerator=accelerator,
+                transformer=transformer,
+                network=network,
+                optimizer=optimizer,
+                lr_scheduler=lr_scheduler,
+                vae=vae,
+                model_config=self.config,
+            )
+
+            global_step = densedpo_trainer.run_training_loop(
+                train_dataloader=train_dataloader,
+                num_train_epochs=num_train_epochs,
+                global_step=global_step,
+                progress_bar=progress_bar,
+                save_model=save_model,
+                remove_model=remove_model,
+                current_epoch=current_epoch,
+                current_step=current_step,
+                is_main_process=is_main_process,
+            )
+            logger.info("✅ DenseDPO training completed successfully")
         elif getattr(args, "enable_srpo_training", False):
             # SRPO (Semantic Relative Preference Optimization) training mode
             from srpo.srpo_setup import setup_srpo_training

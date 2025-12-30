@@ -6,6 +6,7 @@ from enhancements.semanticgen.config import parse_semanticgen_config
 from enhancements.equivdm_noise.config import parse_equivdm_noise_config
 from enhancements.catlvdm.config import parse_catlvdm_config
 from enhancements.temporal_pyramid.config import parse_temporal_pyramid_config
+from densedpo.config import parse_densedpo_config
 from memory.config import parse_memory_optimization_config
 from optimizers.q_galore_config import apply_q_galore_config
 from transition.configuration import parse_transition_config
@@ -1895,6 +1896,8 @@ def create_args_from_config(
 
     if args.rcm.enabled and getattr(args, "finetune_mode", False):
         raise ValueError("RCM pipeline cannot run with finetune_mode enabled.")
+
+    parse_densedpo_config(config, args, logger)
 
     # SRPO (Semantic Relative Preference Optimization) training configuration
     args.enable_srpo_training = bool(config.get("enable_srpo_training", False))
