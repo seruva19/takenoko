@@ -176,6 +176,20 @@ class WanNetworkTrainer:
         except Exception as e:
             logger.warning(f"Failed to initialize EquiVDM noise helper: {e}")
 
+        # Initialize temporal pyramid helper if available
+        try:
+            self.training_core.initialize_temporal_pyramid(args)
+        except Exception as e:
+            logger.warning(f"Failed to initialize temporal pyramid helper: {e}")
+
+        # Initialize temporal pyramid stagewise targets if available
+        try:
+            self.training_core.initialize_temporal_pyramid_stagewise_targets(args)
+        except Exception as e:
+            logger.warning(
+                f"Failed to initialize temporal pyramid stagewise targets: {e}"
+            )
+
         # Initialize CAT-LVDM corruption if available
         try:
             self.training_core.initialize_catlvdm_corruption(args)

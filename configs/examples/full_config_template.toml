@@ -642,7 +642,8 @@ use_stochastic_rounding_cuda = false
 
 # Method to sample timesteps
 # Available methods: sigma, uniform, sigmoid, shift, flux_shift, logsnr, qwen_shift, qinglong_flux, qinglong_qwen, logit_normal,
-# bell_shaped, half_bell, lognorm_blend, lognorm_continuous_blend, enhanced_sigmoid, fopp, content, style, content_style_blend, mode_shift
+# bell_shaped, half_bell, lognorm_blend, lognorm_continuous_blend, enhanced_sigmoid, fopp, content, style, content_style_blend, mode_shift,
+# temporal_pyramid
 timestep_sampling = "shift"
 
 # Shift amount for discrete timestep sampling (used with 'shift' timestep_sampling)
@@ -763,6 +764,34 @@ fast_rejection_sampling = false
 # show timesteps: image, console
 # Visualizes the actual distribution produced by the current sampling+constraints path. 
 # show_timesteps = 'console' 
+
+# Temporal pyramid sampling.
+temporal_pyramid_num_stages = 3
+
+# Stage weights (length = num_stages).
+temporal_pyramid_stage_weights = [1.0, 1.0, 1.0]
+
+# Optional custom stage boundaries in [0,1].
+# Example: temporal_pyramid_stage_boundaries = [0.0, 0.4, 0.75, 1.0]
+# temporal_pyramid_stage_boundaries = [0.0, 0.4, 0.75, 1.0]
+
+# Temporal pyramid training (training-only).
+enable_temporal_pyramid_training = false
+
+# Temporal stride base and optional max stride.
+temporal_pyramid_stride_base = 2
+
+# Optional max stride.
+temporal_pyramid_max_stride = 8
+
+# Optional data-noise alignment (training-only).
+enable_temporal_pyramid_data_noise_alignment = false
+
+# Stage-wise targets (training-only).
+enable_temporal_pyramid_stagewise_target = false
+
+# Stage-wise target parameterization (training-only).
+temporal_pyramid_gamma_sigma_mode = "flow"
 
 # =============================================================================
 # LOSS SETTINGS

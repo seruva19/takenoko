@@ -5,6 +5,7 @@ from common.logger import get_logger
 from enhancements.semanticgen.config import parse_semanticgen_config
 from enhancements.equivdm_noise.config import parse_equivdm_noise_config
 from enhancements.catlvdm.config import parse_catlvdm_config
+from enhancements.temporal_pyramid.config import parse_temporal_pyramid_config
 from memory.config import parse_memory_optimization_config
 from optimizers.q_galore_config import apply_q_galore_config
 from transition.configuration import parse_transition_config
@@ -906,6 +907,7 @@ def create_args_from_config(
 
     # Timestep and flow matching settings
     args.timestep_sampling = config.get("timestep_sampling", "shift")
+    parse_temporal_pyramid_config(config, args, logger)
 
     # Parse new timestep optimization flags
     args.use_precomputed_timesteps = config.get("use_precomputed_timesteps", False)

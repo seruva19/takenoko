@@ -46,6 +46,12 @@ from enhancements.differential_guidance.training_integration import (
     create_differential_guidance_integration,
     transform_target_with_differential_guidance,
 )
+from enhancements.temporal_pyramid.training_integration import (
+    create_temporal_pyramid_helper,
+)
+from enhancements.temporal_pyramid.stagewise_targets import (
+    create_temporal_pyramid_stagewise_target_helper,
+)
 
 from enhancements.slider.slider_integration import compute_slider_loss_if_enabled
 import utils.fluxflow_augmentation as fluxflow_augmentation
@@ -248,6 +254,11 @@ class TrainingCore:
 
         # EquiVDM consistent noise helper (optional, training-only)
         self.equivdm_noise_helper: Optional[EquiVDMConsistentNoiseHelper] = None
+        # Temporal pyramid helper (optional, training-only)
+        self.temporal_pyramid_helper = None
+        # Temporal pyramid stagewise target helper (optional, training-only)
+        self.temporal_pyramid_target_helper = None
+        self._warned_temporal_pyramid_custom_target = False
 
         # CAT-LVDM corruption helper (optional, training-only)
         self.catlvdm_corruption_helper = None
@@ -380,6 +391,32 @@ class TrainingCore:
                 exc,
             )
             self.equivdm_noise_helper = None
+
+    def initialize_temporal_pyramid(self, args: argparse.Namespace) -> None:
+        """Initialize temporal pyramid helper if enabled."""
+        try:
+            self.temporal_pyramid_helper = create_temporal_pyramid_helper(args)
+        except Exception as exc:
+            logger.warning(
+                "Failed to initialize temporal pyramid helper: %s",
+                exc,
+            )
+            self.temporal_pyramid_helper = None
+
+    def initialize_temporal_pyramid_stagewise_targets(
+        self, args: argparse.Namespace
+    ) -> None:
+        """Initialize temporal pyramid stagewise target helper if enabled."""
+        try:
+            self.temporal_pyramid_target_helper = (
+                create_temporal_pyramid_stagewise_target_helper(args)
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to initialize temporal pyramid stagewise targets: %s",
+                exc,
+            )
+            self.temporal_pyramid_target_helper = None
 
     def initialize_catlvdm_corruption(self, args: argparse.Namespace) -> None:
         """Initialize CAT-LVDM corruption helper if enabled."""
@@ -802,7 +839,22 @@ class TrainingCore:
         # flow matching loss - compute target using perturbed latents if fluxflow is enabled
         # Support custom loss target computation
         enable_custom_target = getattr(args, "enable_custom_loss_target", False)
-        if (
+        if self.temporal_pyramid_target_helper is not None:
+            if enable_custom_target:
+                if not self._warned_temporal_pyramid_custom_target:
+                    logger.warning(
+                        "Temporal pyramid stagewise targets override custom loss target."
+                    )
+                    self._warned_temporal_pyramid_custom_target = True
+            target = self.temporal_pyramid_target_helper.compute_target(
+                noise=noise,
+                latents=perturbed_latents_for_target,
+                timesteps=timesteps,
+                noise_scheduler=self.noise_scheduler,
+                device=accelerator.device,
+                dtype=network_dtype,
+            )
+        elif (
             enable_custom_target
             and self.noise_scheduler is not None
             and hasattr(self.noise_scheduler, "get_loss_target")
@@ -1131,6 +1183,10 @@ class TrainingCore:
                         )
                     else:
                         noise = torch.randn_like(latents)
+                    if self.temporal_pyramid_helper is not None:
+                        noise = self.temporal_pyramid_helper.align_noise(
+                            latents, noise
+                        )
 
                     fvdm_sampling_metadata = None
                     if self.fvdm_manager.enabled:

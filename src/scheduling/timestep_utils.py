@@ -13,6 +13,7 @@ from typing import Callable, Optional, Tuple, Any
 
 import torch
 import numpy as np
+import torch.nn.functional as F
 
 from modules.scheduling_flow_match_discrete import FlowMatchDiscreteScheduler
 from scheduling.timestep_distribution import (
@@ -32,6 +33,7 @@ logger = get_logger(__name__)
 # Guard flags to avoid spamming logs
 _warned_double_constraint: bool = False
 _warned_cdc_missing: bool = False
+_warned_temporal_pyramid: bool = False
 
 
 def time_shift(mu: float, sigma: float, t: torch.Tensor) -> torch.Tensor:
@@ -202,6 +204,97 @@ def _normal_ppf(u: torch.Tensor) -> torch.Tensor:
     return math.sqrt(2.0) * torch.erfinv(2.0 * u - 1.0)
 
 
+def _normalize_temporal_pyramid_weights(
+    weights: Optional[Any], num_stages: int, device: torch.device
+) -> torch.Tensor:
+    """Normalize temporal pyramid stage weights into a probability vector."""
+    if weights is None:
+        return torch.full((num_stages,), 1.0 / num_stages, device=device)
+    if not isinstance(weights, (list, tuple)):
+        weights = [weights]
+    weights_tensor = torch.tensor(weights, device=device, dtype=torch.float32)
+    if weights_tensor.numel() != num_stages:
+        return torch.full((num_stages,), 1.0 / num_stages, device=device)
+    total = float(weights_tensor.sum().item())
+    if total <= 0.0:
+        return torch.full((num_stages,), 1.0 / num_stages, device=device)
+    return weights_tensor / total
+
+
+def _get_temporal_pyramid_boundaries(
+    args: argparse.Namespace, device: torch.device
+) -> Optional[torch.Tensor]:
+    boundaries = getattr(args, "temporal_pyramid_stage_boundaries", None)
+    if boundaries is None:
+        return None
+    try:
+        return torch.tensor(boundaries, device=device, dtype=torch.float32)
+    except Exception:
+        return None
+
+
+def _temporal_pyramid_resample_latents(
+    latents: torch.Tensor, stride: int
+) -> torch.Tensor:
+    """Downsample then upsample along the temporal axis to preserve shape."""
+    if latents.ndim != 5 or stride <= 1:
+        return latents
+    frame_count = latents.shape[2]
+    if frame_count <= stride:
+        return latents
+    indices = torch.arange(0, frame_count, stride, device=latents.device)
+    down = latents.index_select(2, indices)
+    if down.shape[2] == frame_count:
+        return latents
+    return F.interpolate(
+        down,
+        size=(frame_count, latents.shape[3], latents.shape[4]),
+        mode="trilinear",
+        align_corners=False,
+    )
+
+
+def apply_temporal_pyramid_to_latents(
+    latents: torch.Tensor, t: torch.Tensor, args: argparse.Namespace
+) -> torch.Tensor:
+    """Apply temporal pyramid resampling based on per-sample timestep."""
+    if latents.ndim != 5:
+        return latents
+    num_stages = int(getattr(args, "temporal_pyramid_num_stages", 3))
+    num_stages = max(num_stages, 1)
+    stride_base = int(getattr(args, "temporal_pyramid_stride_base", 2))
+    stride_base = max(stride_base, 1)
+    max_stride = getattr(args, "temporal_pyramid_max_stride", None)
+    if max_stride is not None:
+        max_stride = max(int(max_stride), 1)
+
+    t = t.detach().clamp(0.0, 1.0 - 1e-6)
+    stage = torch.clamp((t * num_stages).long(), 0, num_stages - 1)
+    stride = stride_base ** stage
+    if max_stride is not None:
+        stride = torch.clamp(stride, max=max_stride)
+
+    unique_strides = torch.unique(stride)
+    if unique_strides.numel() == 1 and int(unique_strides.item()) <= 1:
+        return latents
+
+    output = latents
+    if unique_strides.numel() > 0:
+        output = latents.clone()
+    for stride_value in unique_strides.tolist():
+        stride_value = int(stride_value)
+        if stride_value <= 1:
+            continue
+        idx = (stride == stride_value).nonzero(as_tuple=True)[0]
+        if idx.numel() == 0:
+            continue
+        resampled = _temporal_pyramid_resample_latents(
+            output.index_select(0, idx), stride_value
+        )
+        output.index_copy_(0, idx, resampled)
+    return output
+
+
 def map_uniform_to_sampling(
     args: argparse.Namespace, t_uniform: torch.Tensor, latents: torch.Tensor
 ) -> torch.Tensor:
@@ -354,6 +447,30 @@ def map_uniform_to_sampling(
         shift_mu = float(getattr(args, "time_shift_mu", 1.0))
         shift_sigma = float(getattr(args, "time_shift_sigma", 1.0))
         return time_shift(shift_mu, shift_sigma, u_mode)
+
+    if method == "temporal_pyramid":
+        num_stages = int(getattr(args, "temporal_pyramid_num_stages", 3))
+        num_stages = max(num_stages, 1)
+        weights = _normalize_temporal_pyramid_weights(
+            getattr(args, "temporal_pyramid_stage_weights", None),
+            num_stages,
+            device=device,
+        )
+        boundaries = _get_temporal_pyramid_boundaries(args, device=device)
+        cdf = torch.cumsum(weights, dim=0)
+        stage = torch.searchsorted(cdf, t_uniform.clamp(0.0, 1.0), right=False)
+        stage = torch.clamp(stage, 0, num_stages - 1)
+        prev_cdf = torch.where(
+            stage == 0, torch.zeros_like(stage, dtype=cdf.dtype), cdf[stage - 1]
+        )
+        stage_weight = weights[stage]
+        denom = torch.clamp(stage_weight, min=1e-8)
+        u_stage = (t_uniform - prev_cdf) / denom
+        if boundaries is None or boundaries.numel() != num_stages + 1:
+            return (stage.to(dtype=t_uniform.dtype) + u_stage) / float(num_stages)
+        stage_start = boundaries[stage]
+        stage_end = boundaries[stage + 1]
+        return stage_start + u_stage * (stage_end - stage_start)
 
     # Default fallback: return uniform
     return t_uniform
@@ -612,6 +729,24 @@ def _generate_timesteps_from_distribution(
         shift_sigma = getattr(args, "time_shift_sigma", 1.0)
         t = time_shift(shift_mu, shift_sigma, u_mode)
 
+    elif args.timestep_sampling == "temporal_pyramid":
+        num_stages = int(getattr(args, "temporal_pyramid_num_stages", 3))
+        num_stages = max(num_stages, 1)
+        weights = _normalize_temporal_pyramid_weights(
+            getattr(args, "temporal_pyramid_stage_weights", None),
+            num_stages,
+            device=device,
+        )
+        boundaries = _get_temporal_pyramid_boundaries(args, device=device)
+        stage = torch.multinomial(weights, batch_size, replacement=True)
+        u = torch.rand(batch_size, device=device)
+        if boundaries is None or boundaries.numel() != num_stages + 1:
+            t = (stage.to(dtype=u.dtype) + u) / float(num_stages)
+        else:
+            stage_start = boundaries[stage]
+            stage_end = boundaries[stage + 1]
+            t = stage_start + u * (stage_end - stage_start)
+
     else:
         raise ValueError(f"Unknown timestep sampling method: {args.timestep_sampling}")
 
@@ -662,6 +797,7 @@ def _sample_standard_timesteps(
             "style",
             "content_style_blend",
             "mode_shift",
+            "temporal_pyramid",
         ]:
             t = timestep_distribution.sample(batch_size, device)
         else:
@@ -934,6 +1070,7 @@ def get_noisy_model_input_and_timesteps(
             or args.timestep_sampling == "style"
             or args.timestep_sampling == "content_style_blend"
             or args.timestep_sampling == "mode_shift"
+            or args.timestep_sampling == "temporal_pyramid"
         ):
             # Sample timesteps using standard methods
             if presampled_uniform is not None and not should_use_precomputed_timesteps(
@@ -985,6 +1122,15 @@ def get_noisy_model_input_and_timesteps(
                     # Keep original timesteps if shift computation fails
                     pass
 
+            if getattr(args, "enable_temporal_pyramid_training", False):
+                global _warned_temporal_pyramid
+                if not _warned_temporal_pyramid:
+                    logger.info(
+                        "Temporal pyramid training enabled: resampling video latents by stage."
+                    )
+                    _warned_temporal_pyramid = True
+                latents = apply_temporal_pyramid_to_latents(latents, t, args)
+
             # Convert to timestep indices and create noisy input
             timesteps = t * 1000.0
             t = t.view(-1, 1, 1, 1, 1) if latents.ndim == 5 else t.view(-1, 1, 1, 1)
@@ -1026,6 +1172,20 @@ def get_noisy_model_input_and_timesteps(
             timesteps = _sample_sigma_timesteps(
                 args, batch_size, device, noise_scheduler
             )
+
+            if getattr(args, "enable_temporal_pyramid_training", False):
+                try:
+                    max_ts = float(
+                        getattr(
+                            getattr(noise_scheduler, "config", object()),
+                            "num_train_timesteps",
+                            1000,
+                        )
+                    )
+                except Exception:
+                    max_ts = 1000.0
+                t_norm = (timesteps.float() - 1.0) / max(max_ts, 1.0)
+                latents = apply_temporal_pyramid_to_latents(latents, t_norm, args)
 
             # Add noise according to flow matching.
             sigmas = get_sigmas(
