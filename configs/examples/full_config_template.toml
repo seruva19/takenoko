@@ -1370,6 +1370,119 @@ crepa_drop_vae_encoder = false
 crepa_normalize_by_frames = true
 
 # =============================================================================
+# ⚠️ ERROR RECYCLING SETTINGS
+# =============================================================================
+# Enable Error-Recycling Fine-Tuning. Default: false.
+# This injects buffered training errors into noisy inputs to improve stability
+# and long-range consistency, while leaving inference unchanged.
+enable_error_recycling = false
+
+# Maximum number of error samples stored per timestep grid (>= 0).
+# Larger buffers improve diversity but increase CPU RAM use. Default: 500.
+error_buffer_k = 500
+
+# Timestep grid size for buffer partitioning (> 0).
+# Example: 25 => each grid spans 25 timesteps. Default: 25.
+timestep_grid_size = 25
+
+# Total number of timestep grids (> 0). Default: 50.
+# If (num_grids * timestep_grid_size) < num_train_timesteps, the last grids
+# will be reused by clamping.
+num_grids = 50
+
+# Buffer replacement strategy when full:
+# - "random": replace a random sample (fastest)
+# - "l2_similarity": replace the most similar (slowest)
+# - "l2_batch": batch L2 replacement (balanced)
+# - "fifo": first-in-first-out
+buffer_replacement_strategy = "random"
+
+# Warmup iterations for distributed buffer sync (>= 0). Default: 50.
+# During warmup, buffers gather errors from all GPUs for faster bootstrapping.
+buffer_warmup_iter = 50
+
+# Modulate injected error intensity by +/- this factor (0.0-1.0).
+# Example: 0.1 => scale in [0.9, 1.1]. Default: 0.0.
+error_modulate_factor = 0.0
+
+# Error mode selector:
+# - 0: noise-only
+# - 1: noise + latent + y (default)
+# - 2: noise + latent (no y)
+# - 3: y-only
+# - 4: latent-only
+error_setting = 1
+
+# Probability to inject noise error (0.0-1.0).
+noise_prob = 0.9
+
+# Probability to inject latent error (0.0-1.0).
+latent_prob = 0.9
+
+# Probability to inject y-error (0.0-1.0).
+y_prob = 0.9
+
+# Probability to use clean inputs (no error injection). Default: 0.1.
+clean_prob = 0.1
+
+# For clean inputs, probability to still update buffers (0.0-1.0).
+clean_buffer_update_prob = 0.1
+
+# Number of frames for y-error injection (> 0).
+y_error_num = 1
+
+# Sample y-error from all grids (default: false).
+y_error_sample_from_all_grids = false
+
+# Optional timestep grid range for y-error sampling ("start,end").
+# Example: y_error_sample_range = "0,10"
+# y_error_sample_range = ""
+
+# Use last y-error frame instead of random (default: false).
+use_last_y_error = false
+
+# Require scheduler-based error computation (self_corr steps) for buffer updates.
+# - false: fall back to model_pred - target if scheduler doesn't support it.
+# - true: skip buffer updates unless scheduler exposes required self_corr path.
+error_recycling_require_scheduler_errors = false
+
+# Build SVI Pro-style image_emb["y"] from cached anchors (train-only, default off).
+# Requires cache_svi_y_anchor_latent=true during caching.
+enable_svi_y_builder = false
+
+# Motion source for SVI y construction:
+# - "latent_last": use the last latent frame from the current batch
+# - "zeros": use zero motion latents
+# - "replay_buffer": use prior motion latents cached per item_key/base_key
+svi_y_motion_source = "latent_last"
+
+# Number of motion latents to splice in (>= 0). Default: 1.
+svi_y_num_motion_latent = 1
+
+# First-clip behavior when replay buffer has no prior motion:
+# - "zeros": use zero motion (SVI Pro first clip behavior)
+# - "current": use current batch motion as a fallback
+svi_y_first_clip_mode = "zeros"
+
+# Replay buffer size for previous motion latents (>= 0). Only used when
+# svi_y_motion_source = "replay_buffer".
+svi_y_replay_buffer_size = 256
+
+# Replay buffer keying mode:
+# - "item_key": use the full item_key string
+# - "base_key": strip sliding window suffixes (e.g., _001-032)
+svi_y_replay_key_mode = "item_key"
+
+# Use sequence index lookup for replay even if batch order is shuffled.
+# When true, the replay buffer stores motion by sequence index and fetches index-1,
+# parsing the original item_key regardless of svi_y_replay_key_mode.
+svi_y_replay_use_sequence_index = false
+
+# Regex used to parse sequence key + index for replay (default matches _000-031).
+# Example: svi_y_replay_sequence_pattern = "_(\\d+)-(\\d+)$"
+svi_y_replay_sequence_pattern = "_(\\d+)-(\\d+)$"
+
+# =============================================================================
 # ⚠️ SEMANTICGEN LORA SETTINGS
 # =============================================================================
 # Enable SemanticGen-inspired semantic conditioning for LoRA training (train-only, default off).
@@ -3675,7 +3788,11 @@ skip_existing = false
 # keep cache files not in dataset
 keep_cache = true
 
-# delete all existing latent cache files in cache_directory before caching
+# Cache SVI Pro anchor latents alongside latent caches (train-only feature).
+# Enables image_emb["y"] construction during training; requires cache_latents.
+cache_svi_y_anchor_latent = false
+
+# delete all existing latent cache files in cache_directory before caching      
 # purge_before_run = true
 
 # debug mode, choices: image, console, video
@@ -3735,6 +3852,21 @@ enable_bucket = true
 
 # Prevent upscaling of images to larger bucket sizes
 bucket_no_upscale = true
+
+# Preserve sequential clip ordering within batches (default: false).
+# Recommended when using svi_y_motion_source = "replay_buffer".
+sequence_batches = false
+
+# Validate that cache item keys match sequence_batches_pattern when enabled.
+# If any item key fails to match, training will abort early with a clear error.
+sequence_batches_validate_names = false
+
+# Log mismatched item keys without aborting (useful for diagnostics).
+sequence_batches_report_names = false
+
+# Regex used to group and order sequence batches (default matches _000-031 suffix).
+# Example: sequence_batches_pattern = "_(\\d+)-(\\d+)$"
+# sequence_batches_pattern = "_(\\d+)-(\\d+)$"
 
 # Directory containing mask images for masked training
 # When using masked training, ensure your dataset includes mask files alongside images/videos

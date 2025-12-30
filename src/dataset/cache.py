@@ -10,6 +10,8 @@ from utils.model_utils import dtype_to_str
 
 from common.logger import get_logger
 
+SVI_Y_ANCHOR_CACHE_SUFFIX = "_svi_y.safetensors"
+
 logger = get_logger(__name__, level=logging.INFO)
 
 # the keys of the dict are `<content_type>_FxHxW_<dtype>` for latents
@@ -37,6 +39,18 @@ def save_latent_cache_wan(
     if image_latent is not None:
         sd[f"latents_image_{F}x{H}x{W}_{dtype_str}"] = image_latent.detach().cpu()
 
+    save_latent_cache_common(item_info, sd)
+
+
+def save_svi_y_anchor_cache(item_info: ItemInfo, anchor_latent: torch.Tensor) -> None:
+    """Save SVI anchor latent (per-item) in a dedicated cache file."""
+    assert (
+        anchor_latent.dim() == 4
+    ), "anchor_latent should be 4D tensor (channel, frame, height, width)"
+
+    _, F, H, W = anchor_latent.shape
+    dtype_str = dtype_to_str(anchor_latent.dtype)
+    sd = {f"svi_y_anchor_{F}x{H}x{W}_{dtype_str}": anchor_latent.detach().cpu()}
     save_latent_cache_common(item_info, sd)
 
 

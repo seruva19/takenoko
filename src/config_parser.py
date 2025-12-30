@@ -514,6 +514,7 @@ def create_args_from_config(
     )
 
     from polylora.config import apply_polylora_to_args
+    from enhancements.error_recycling.config import apply_error_recycling_config
 
     args = apply_polylora_to_args(args, config)
 
@@ -645,6 +646,9 @@ def create_args_from_config(
     args.convergence_window_sizes = config.get(
         "convergence_window_sizes", [10, 25, 50, 100]
     )
+
+    # Error recycling (train-only, LoRA gated)
+    apply_error_recycling_config(args, config, logger)
 
     # Control LoRA settings
     args.enable_control_lora = config.get("enable_control_lora", False)
@@ -1590,6 +1594,9 @@ def create_args_from_config(
         args.latent_cache_console_num_images = latent_cache_config.get(
             "console_num_images", 1
         )
+        args.cache_svi_y_anchor_latent = latent_cache_config.get(
+            "cache_svi_y_anchor_latent", False
+        )
     else:
         # Set defaults for latent cache if section not found
         args.latent_cache_device = args.device
@@ -1602,6 +1609,7 @@ def create_args_from_config(
         args.latent_cache_console_width = 80
         args.latent_cache_console_back = "black"
         args.latent_cache_console_num_images = 1
+        args.cache_svi_y_anchor_latent = False
 
     # Read text encoder cache settings from config
     if "datasets" in config and "text_encoder_cache" in config["datasets"]:

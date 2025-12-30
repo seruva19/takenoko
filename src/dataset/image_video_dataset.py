@@ -80,6 +80,10 @@ class BaseDataset(torch.utils.data.Dataset):
         is_val: bool = False,
         target_model: Optional[str] = None,
         is_reg: bool = False,
+        sequence_batches: bool = False,
+        sequence_batches_pattern: Optional[str] = None,
+        sequence_batches_validate_names: bool = False,
+        sequence_batches_report_names: bool = False,
     ):
         # TODO: REFACTOR - Hardcoded default resolution should be configurable
         self.resolution = resolution
@@ -98,6 +102,10 @@ class BaseDataset(torch.utils.data.Dataset):
         self.is_val = is_val
         self.target_model = target_model
         self.is_reg = is_reg
+        self.sequence_batches = bool(sequence_batches)
+        self.sequence_batches_pattern = sequence_batches_pattern
+        self.sequence_batches_validate_names = bool(sequence_batches_validate_names)
+        self.sequence_batches_report_names = bool(sequence_batches_report_names)
         self.seed = None
         self.current_epoch = 0
         self.shared_epoch: Optional["Synchronized[int]"] = (
@@ -157,7 +165,41 @@ class BaseDataset(torch.utils.data.Dataset):
 
         if details:
             return f" ({', '.join(details)})"
-        return ""
+        return ""  
+
+    def _validate_sequence_batch_names(self, item_keys: list[str]) -> None:
+        if not self.sequence_batches:
+            return
+        should_validate = self.sequence_batches_validate_names
+        should_report = self.sequence_batches_report_names
+        if not should_validate and not should_report:
+            return
+        pattern_text = self.sequence_batches_pattern or r"_(\d+)-(\d+)$"
+        try:
+            pattern = re.compile(pattern_text)
+        except re.error as exc:
+            raise ValueError(
+                f"Invalid sequence_batches_pattern '{pattern_text}': {exc}"
+            ) from exc
+
+        mismatched: list[str] = []
+        for item_key in item_keys:
+            stem = os.path.splitext(os.path.basename(item_key))[0]
+            if not pattern.search(stem):
+                mismatched.append(item_key)
+
+        if mismatched:
+            sample = ", ".join(mismatched[:5])
+            message = (
+                f"{len(mismatched)} items do not match pattern '{pattern_text}'. "
+                f"Examples: {sample}"
+            )
+            if should_report:
+                logger.warning("sequence_batches_report_names: %s", message)
+            if should_validate:
+                raise ValueError(
+                    "sequence_batches_validate_names failed: " + message
+                )
 
     def set_dataset_index(self, index: int):
         """Set the dataset index (used by DatasetGroup)."""
@@ -496,6 +538,10 @@ class ImageDataset(BaseDataset):
         mask_path: Optional[str] = None,
         is_reg: bool = False,
         caption_dropout_rate: float = 0.0,
+        sequence_batches: bool = False,
+        sequence_batches_pattern: Optional[str] = None,
+        sequence_batches_validate_names: bool = False,
+        sequence_batches_report_names: bool = False,
     ):
         super().__init__(
             resolution=resolution,
@@ -512,6 +558,10 @@ class ImageDataset(BaseDataset):
             is_val=is_val,
             target_model=target_model,
             is_reg=is_reg,
+            sequence_batches=sequence_batches,
+            sequence_batches_pattern=sequence_batches_pattern,
+            sequence_batches_validate_names=sequence_batches_validate_names,
+            sequence_batches_report_names=sequence_batches_report_names,
         )
 
         self.image_directory = image_directory
@@ -761,6 +811,22 @@ class ImageDataset(BaseDataset):
             f"[{dataset_id}] Found {len(latent_cache_files)} latent cache files"
         )
 
+        if self.sequence_batches and self.sequence_batches_validate_names:
+            sequence_keys: list[str] = []
+            for cache_file in latent_cache_files:
+                tokens = os.path.basename(cache_file).split("_")
+                item_key = "_".join(tokens[:-2])
+                sequence_keys.append(item_key)
+            self._validate_sequence_batch_names(sequence_keys)
+
+        if self.sequence_batches and self.sequence_batches_validate_names:
+            sequence_keys: list[str] = []
+            for cache_file in latent_cache_files:
+                tokens = os.path.basename(cache_file).split("_")
+                item_key = "_".join(tokens[:-2])
+                sequence_keys.append(item_key)
+            self._validate_sequence_batch_names(sequence_keys)
+
         # Enhanced error handling for missing cache files
         if len(latent_cache_files) == 0:
             logger.error(
@@ -925,7 +991,11 @@ class ImageDataset(BaseDataset):
         else:
             # prepare batch manager
             self.batch_manager = BucketBatchManager(
-                bucketed_item_info, self.batch_size, prior_loss_weight
+                bucketed_item_info,
+                self.batch_size,
+                prior_loss_weight,
+                sequence_batches=self.sequence_batches,
+                sequence_batches_pattern=self.sequence_batches_pattern,
             )
             # Store per-epoch timestep bucketing preference on the batch manager if supported
             try:
@@ -1008,7 +1078,11 @@ class ImageDataset(BaseDataset):
             total_items += len(bucket_items)
 
         self.batch_manager = BucketBatchManager(
-            bucketed_item_info, self.batch_size, self._epoch_slide_prior_loss_weight or 1.0
+            bucketed_item_info,
+            self.batch_size,
+            self._epoch_slide_prior_loss_weight or 1.0,
+            sequence_batches=self.sequence_batches,
+            sequence_batches_pattern=self.sequence_batches_pattern,
         )
         if self._epoch_slide_num_timestep_buckets is not None:
             try:
@@ -1165,6 +1239,10 @@ class VideoDataset(BaseDataset):
         mask_path: Optional[str] = None,
         is_reg: bool = False,
         caption_dropout_rate: float = 0.0,
+        sequence_batches: bool = False,
+        sequence_batches_pattern: Optional[str] = None,
+        sequence_batches_validate_names: bool = False,
+        sequence_batches_report_names: bool = False,
     ):
         super().__init__(
             resolution=resolution,
@@ -1181,6 +1259,10 @@ class VideoDataset(BaseDataset):
             is_val=is_val,
             target_model=target_model,
             is_reg=is_reg,
+            sequence_batches=sequence_batches,
+            sequence_batches_pattern=sequence_batches_pattern,
+            sequence_batches_validate_names=sequence_batches_validate_names,
+            sequence_batches_report_names=sequence_batches_report_names,
         )
 
         self.video_directory = video_directory
@@ -1690,7 +1772,13 @@ class VideoDataset(BaseDataset):
             )
         else:
             # prepare batch manager
-            self.batch_manager = BucketBatchManager(bucketed_item_info, self.batch_size, prior_loss_weight)  # type: ignore
+            self.batch_manager = BucketBatchManager(
+                bucketed_item_info,
+                self.batch_size,
+                prior_loss_weight,
+                sequence_batches=self.sequence_batches,
+                sequence_batches_pattern=self.sequence_batches_pattern,
+            )  # type: ignore
 
             self.batch_manager.show_bucket_info()
 
@@ -1758,6 +1846,8 @@ class VideoDataset(BaseDataset):
             bucketed_item_info,
             self.batch_size,
             self._epoch_slide_prior_loss_weight or 1.0,
+            sequence_batches=self.sequence_batches,
+            sequence_batches_pattern=self.sequence_batches_pattern,
         )
 
         if log_bucket_info or not self._epoch_slide_logged_info:

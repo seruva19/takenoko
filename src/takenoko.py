@@ -424,6 +424,9 @@ class UnifiedTrainer:
             cache_args.skip_existing = self.args.latent_cache_skip_existing
             cache_args.keep_cache = self.args.latent_cache_keep_cache
             cache_args.purge_before_run = self.args.latent_cache_purge
+            cache_args.cache_svi_y_anchor_latent = getattr(
+                self.args, "cache_svi_y_anchor_latent", False
+            )
 
             # Add control LoRA caching arguments
             cache_args.control_lora_type = self.args.control_lora_type

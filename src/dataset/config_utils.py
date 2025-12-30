@@ -55,6 +55,10 @@ class BaseDatasetParams:
     target_model: Optional[str] = None  # Model type for cache postfix determination
     is_reg: bool = False  # for regularization datasets
     mask_path: Optional[str] = None  # Path to mask images/videos for masked training
+    sequence_batches: bool = False  # Preserve clip order within batches
+    sequence_batches_pattern: Optional[str] = None  # Regex for sequence grouping
+    sequence_batches_validate_names: bool = False  # Fail fast on naming mismatch
+    sequence_batches_report_names: bool = False  # Log mismatches without abort
 
 
 @dataclass
@@ -158,6 +162,10 @@ class ConfigSanitizer:
         "bucket_no_upscale": bool,
         "bucket_constraint_type": str,
         "mask_path": str,
+        "sequence_batches": bool,
+        "sequence_batches_pattern": str,
+        "sequence_batches_validate_names": bool,
+        "sequence_batches_report_names": bool,
     }
     IMAGE_DATASET_DISTINCT_SCHEMA = {
         "image_directory": str,

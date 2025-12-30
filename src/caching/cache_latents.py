@@ -7,7 +7,11 @@ from PIL import Image
 
 import torch
 
-from dataset.cache import save_latent_cache_wan
+from dataset.cache import (
+    SVI_Y_ANCHOR_CACHE_SUFFIX,
+    save_latent_cache_wan,
+    save_svi_y_anchor_cache,
+)
 from dataset.image_video_dataset import BaseDataset
 from dataset.item_info import ItemInfo
 from wan.modules.vae import WanVAE
@@ -297,6 +301,35 @@ def encode_and_save_batch(
         cctx = None
         y_i = None
         save_latent_cache_wan(item, l, cctx, y_i)
+
+    # Save SVI anchor latents if enabled (first-frame VAE encode)
+    if args is not None and bool(getattr(args, "cache_svi_y_anchor_latent", False)):
+        try:
+            anchor_contents = contents[:, :, 0:1]  # B, C, 1, H, W
+            with (
+                torch.amp.autocast(device_type=vae.device.type, dtype=vae.dtype),  # type: ignore
+                torch.no_grad(),
+            ):
+                anchor_latent = vae.encode(anchor_contents)
+            anchor_latent = torch.stack(anchor_latent, dim=0).to(vae.dtype)
+
+            for item, anchor in zip(batch, anchor_latent):
+                anchor_cache_path = item.latent_cache_path.replace(
+                    ".safetensors", SVI_Y_ANCHOR_CACHE_SUFFIX
+                )
+                anchor_item = ItemInfo(
+                    item_key=item.item_key,
+                    caption=item.caption,
+                    original_size=item.original_size,
+                    bucket_size=item.bucket_size,
+                    frame_count=item.frame_count,
+                    content=item.content,
+                    latent_cache_path=anchor_cache_path,
+                    weight=item.weight,
+                )
+                save_svi_y_anchor_cache(anchor_item, anchor)
+        except Exception as exc:
+            logger.warning("Failed to save SVI anchor cache: %s", exc)
 
     # Save control latents if available
     if control_latent is not None:

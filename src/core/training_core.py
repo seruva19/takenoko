@@ -33,6 +33,8 @@ from enhancements.memflow_guidance.training_integration import (
 )
 from enhancements.semanticgen.training_integration import SemanticGenTrainingState
 
+from enhancements.error_recycling.error_recycling_helper import ErrorRecyclingHelper
+
 
 from enhancements.differential_guidance.training_integration import (
     create_differential_guidance_integration,
@@ -252,6 +254,9 @@ class TrainingCore:
         self.semantic_conditioning_helper = None
         self.semantic_alignment_helper = None
         self.semanticgen_state = SemanticGenTrainingState()
+
+        # Error recycling helper (optional, training-only)
+        self.error_recycling_helper: Optional[ErrorRecyclingHelper] = None
 
         # Weight EMA tracking (initialized when enabled)
         self.weight_ema: Optional[ExponentialMovingAverage] = None
@@ -883,6 +888,26 @@ class TrainingCore:
         except Exception:
             pass
 
+        # Initialize error recycling helper (train-only, LoRA-gated)
+        self.error_recycling_helper = None
+        if bool(getattr(args, "enable_error_recycling", False)):
+            network_module = str(getattr(args, "network_module", "")).lower()
+            train_arch = str(getattr(args, "train_architecture", "lora")).lower()
+            if "lora" not in network_module and train_arch != "lora":
+                logger.warning(
+                    "Error recycling requires LoRA training; disabling for network_module=%s.",
+                    network_module or "<unset>",
+                )
+            else:
+                try:
+                    self.error_recycling_helper = ErrorRecyclingHelper(
+                        args, noise_scheduler
+                    )
+                    logger.info("Error recycling enabled for this run.")
+                except Exception as exc:
+                    logger.warning("Error recycling setup failed: %s", exc)
+                    self.error_recycling_helper = None
+
         # Calculate starting epoch when resuming from checkpoint
         if global_step > 0:
             # We're resuming from a checkpoint - calculate which epoch we should be in
@@ -1231,6 +1256,47 @@ class TrainingCore:
                             )
                             sigmas = None
                             need_intermediate = prepared_transition.need_directional
+
+                    error_recycling_state = None
+                    latents_for_dit = latents
+                    if (
+                        self.error_recycling_helper is not None
+                        and self.error_recycling_helper.enabled
+                    ):
+                        if eqm_enabled:
+                            logger.warning(
+                                "Error recycling skipped: EqM mode active."
+                            )
+                        else:
+                            self.error_recycling_helper.maybe_build_svi_y(
+                                batch=batch, latents=latents
+                            )
+                            self.error_recycling_helper.update_svi_motion_cache(
+                                batch=batch, latents=latents
+                            )
+                            (
+                                noise,
+                                latents_for_noisy,
+                                rebuilt_noisy,
+                                error_recycling_state,
+                            ) = (
+                                self.error_recycling_helper.apply_to_inputs(
+                                    noise=noise,
+                                    latents=latents,
+                                    timesteps=timesteps,
+                                    sigmas=sigmas,
+                                    batch=batch,
+                                    noise_scheduler=noise_scheduler,
+                                )
+                            )
+                            if rebuilt_noisy is not None:
+                                noisy_model_input = rebuilt_noisy
+                                latents_for_dit = latents_for_noisy
+                            else:
+                                logger.warning(
+                                    "Error recycling skipped: could not rebuild noisy inputs for timesteps shape %s.",
+                                    tuple(timesteps.shape),
+                                )
                     # Optional: If the network supports TLora-style masking, update mask from timesteps
                     try:
                         unwrapped_net = accelerator.unwrap_model(network)
@@ -1329,7 +1395,7 @@ class TrainingCore:
                                 args,
                                 accelerator,
                                 active_transformer,
-                                latents,
+                                latents_for_dit,
                                 batch,
                                 noise,
                                 noisy_model_input,
@@ -1381,7 +1447,7 @@ class TrainingCore:
                                             args,
                                             accelerator,
                                             active_transformer,
-                                            latents,
+                                            latents_for_dit,
                                             batch,
                                             noise,
                                             model_input,
@@ -1526,6 +1592,51 @@ class TrainingCore:
                                 loss_components=loss_components,
                                 alignment_helper=self.semantic_alignment_helper,
                             )
+
+                            if (
+                                self.error_recycling_helper is not None
+                                and self.error_recycling_helper.enabled
+                                and error_recycling_state is not None
+                            ):
+                                with torch.no_grad():
+                                    noise_error, y_error = (
+                                        self.error_recycling_helper.compute_buffer_errors(
+                                            model_pred=model_pred,
+                                            target=target,
+                                            noisy_model_input=noisy_model_input,
+                                            timesteps=timesteps,
+                                            noise_scheduler=noise_scheduler,
+                                        )
+                                    )
+                                    if noise_error is not None:
+                                        self.error_recycling_helper.update_buffers(
+                                            error_tensor=noise_error,
+                                            timesteps=timesteps,
+                                            accelerator=accelerator,
+                                            used_clean_input=error_recycling_state.used_clean_input,
+                                            y_error_tensor=y_error,
+                                        )
+
+                                if (
+                                    accelerator.is_main_process
+                                    and accelerator.trackers
+                                    and accelerator.sync_gradients
+                                ):
+                                    log_interval = int(
+                                        getattr(args, "train_metrics_interval", 50)
+                                        or 50
+                                    )
+                                    if global_step % max(log_interval, 1) == 0:
+                                        stats = self.error_recycling_helper.get_stats(
+                                            error_recycling_state.grid_index
+                                        )
+                                        accelerator.log(
+                                            {
+                                                f"error_recycling/{k}": float(v)
+                                                for k, v in stats.items()
+                                            },
+                                            step=global_step,
+                                        )
 
                     memflow_loss = None
                     if (

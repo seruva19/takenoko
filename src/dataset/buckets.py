@@ -7,6 +7,7 @@ import numpy as np
 import torch
 
 
+from dataset.cache import SVI_Y_ANCHOR_CACHE_SUFFIX
 from dataset.item_info import ItemInfo
 from common.logger import get_logger
 from common.constants import RESOLUTION_STEPS_WAN_2
@@ -171,10 +172,18 @@ class BucketBatchManager:
         bucketed_item_info: dict[Any, list[ItemInfo]],
         batch_size: int,
         prior_loss_weight: float = 1.0,
+        sequence_batches: bool = False,
+        sequence_batches_pattern: Optional[str] = None,
     ):
         self.batch_size = batch_size
         self.buckets = bucketed_item_info
         self.prior_loss_weight = prior_loss_weight
+        self.sequence_batches_enabled = bool(sequence_batches)
+        self._sequence_batches: dict[Any, list[list[ItemInfo]]] = {}
+        self.sequence_batches_pattern = sequence_batches_pattern
+        self._sequence_key_pattern = self._compile_sequence_pattern(
+            sequence_batches_pattern
+        )
         self.bucket_resos = list(self.buckets.keys())
         self.bucket_resos.sort()
         # Optional per-epoch timestep bucketing
@@ -183,11 +192,14 @@ class BucketBatchManager:
 
         # indices for enumerating batches. each batch is reso + batch_idx. reso is (width, height) or (width, height, frames)
         self.bucket_batch_indices: list[tuple[tuple[Any], int]] = []
-        for bucket_reso in self.bucket_resos:
-            bucket = self.buckets[bucket_reso]
-            num_batches = math.ceil(len(bucket) / self.batch_size)
-            for i in range(num_batches):
-                self.bucket_batch_indices.append((bucket_reso, i))
+        if getattr(self, "sequence_batches_enabled", False):
+            self._rebuild_sequence_batches(shuffle_groups=False)
+        else:
+            for bucket_reso in self.bucket_resos:
+                bucket = self.buckets[bucket_reso]
+                num_batches = math.ceil(len(bucket) / self.batch_size)
+                for i in range(num_batches):
+                    self.bucket_batch_indices.append((bucket_reso, i))
 
         # do no shuffle here to avoid multiple datasets have different order
         # self.shuffle()
@@ -233,11 +245,14 @@ class BucketBatchManager:
 
     def shuffle(self):
         # shuffle each bucket
-        for bucket in self.buckets.values():
-            random.shuffle(bucket)
+        if getattr(self, "sequence_batches_enabled", False):
+            self._rebuild_sequence_batches(shuffle_groups=True)
+        else:
+            for bucket in self.buckets.values():
+                random.shuffle(bucket)
 
-        # shuffle the order of batches
-        random.shuffle(self.bucket_batch_indices)
+            # shuffle the order of batches
+            random.shuffle(self.bucket_batch_indices)
 
         # Prepare per-epoch timestep pool if enabled
         self._prepare_timestep_pool_internal()
@@ -286,9 +301,16 @@ class BucketBatchManager:
         # TODO: REFACTOR - This method is too complex and handles multiple responsibilities
         # Consider extracting tensor processing logic into separate methods
         bucket_reso, batch_idx = self.bucket_batch_indices[idx]
-        bucket = self.buckets[bucket_reso]
-        start = batch_idx * self.batch_size
-        end = min(start + self.batch_size, len(bucket))
+        if getattr(self, "sequence_batches_enabled", False):
+            bucket_batches = self._sequence_batches.get(bucket_reso, [])
+            batch = bucket_batches[batch_idx] if batch_idx < len(bucket_batches) else []
+            start = 0
+            end = len(batch)
+            bucket = batch
+        else:
+            bucket = self.buckets[bucket_reso]
+            start = batch_idx * self.batch_size
+            end = min(start + self.batch_size, len(bucket))
 
         batch_tensor_data = {}
         varlen_keys = set()
@@ -296,6 +318,7 @@ class BucketBatchManager:
         control_signals = []  # Collect control signals for the batch
         mask_signals = []  # Collect mask signals for the batch
         pixels_list = []  # Collect original (or resized) pixel tensors
+        svi_y_anchor_latents = []  # Collect optional SVI y anchor latents
 
         for item_info in bucket[start:end]:
             if item_info.latent_cache_path is not None:
@@ -319,6 +342,28 @@ class BucketBatchManager:
             # This is the key change: determine the weight for this specific item
             loss_weight = self.prior_loss_weight if item_info.is_reg else 1.0
             weights.append(loss_weight)
+
+            # Load optional SVI y anchor cache if available
+            svi_anchor_latent = None
+            if item_info.latent_cache_path is not None:
+                svi_anchor_cache_path = item_info.latent_cache_path.replace(
+                    ".safetensors", SVI_Y_ANCHOR_CACHE_SUFFIX
+                )
+                if os.path.exists(svi_anchor_cache_path):
+                    try:
+                        svi_sd = load_file(svi_anchor_cache_path)
+                        svi_key = None
+                        for key in svi_sd.keys():
+                            if key.startswith("svi_y_anchor_"):
+                                svi_key = key
+                                break
+                        if svi_key:
+                            svi_anchor_latent = svi_sd[svi_key]
+                    except Exception as e:
+                        logger.warning(
+                            f"Failed to load SVI y anchor cache {svi_anchor_cache_path}: {e}"
+                        )
+            svi_y_anchor_latents.append(svi_anchor_latent)
 
             # Load control signal if available
             if (
@@ -478,6 +523,18 @@ class BucketBatchManager:
                         stacked_mask_signals.append(ms)
                 batch_tensor_data["mask_signal"] = torch.stack(stacked_mask_signals)
 
+        # Add SVI y anchor latents if available
+        if any(sa is not None for sa in svi_y_anchor_latents):
+            ref_sa = next((sa for sa in svi_y_anchor_latents if sa is not None), None)
+            if ref_sa is not None:
+                stacked_svi_anchors: list[torch.Tensor] = []
+                for sa in svi_y_anchor_latents:
+                    if sa is None:
+                        stacked_svi_anchors.append(torch.zeros_like(ref_sa))
+                    else:
+                        stacked_svi_anchors.append(sa)
+                batch_tensor_data["svi_y_anchor"] = torch.stack(stacked_svi_anchors)
+
         # Add pixels tensor if collected - format to match reference implementation
         if pixels_list:
             # Reference expects individual CFHW tensors, not stacked tensor
@@ -500,3 +557,65 @@ class BucketBatchManager:
             batch_tensor_data["timesteps"] = None
 
         return batch_tensor_data
+
+    def _rebuild_sequence_batches(self, shuffle_groups: bool) -> None:
+        self._sequence_batches = {}
+        self.bucket_batch_indices = []
+        for bucket_reso in self.bucket_resos:
+            bucket = self.buckets[bucket_reso]
+            groups: dict[str, list[ItemInfo]] = {}
+            for item in bucket:
+                key = self._get_sequence_group_key(item)
+                groups.setdefault(key, []).append(item)
+
+            group_keys = list(groups.keys())
+            if shuffle_groups:
+                random.shuffle(group_keys)
+            bucket_batches: list[list[ItemInfo]] = []
+            for key in group_keys:
+                items = sorted(
+                    groups[key],
+                    key=lambda info: self._get_sequence_sort_value(info),
+                )
+                for i in range(0, len(items), self.batch_size):
+                    bucket_batches.append(items[i : i + self.batch_size])
+            self._sequence_batches[bucket_reso] = bucket_batches
+            for i in range(len(bucket_batches)):
+                self.bucket_batch_indices.append((bucket_reso, i))
+
+    def _get_sequence_group_key(self, item: ItemInfo) -> str:
+        item_key = getattr(item, "item_key", "") or ""
+        stem = os.path.splitext(os.path.basename(item_key))[0]
+        match = self._sequence_key_pattern.search(stem)
+        if not match:
+            if self.sequence_batches_enabled:
+                raise ValueError(
+                    f"sequence_batches enabled but item key '{item_key}' does not match sequence_batches_pattern."
+                )
+            return stem
+        return stem[: match.start()]
+
+    def _get_sequence_sort_value(self, item: ItemInfo) -> int:
+        item_key = getattr(item, "item_key", "") or ""
+        stem = os.path.splitext(os.path.basename(item_key))[0]
+        match = self._sequence_key_pattern.search(stem)
+        if match:
+            try:
+                return int(match.group(1))
+            except ValueError:
+                return 0
+        return 0
+
+    def _compile_sequence_pattern(
+        self, pattern: Optional[str]
+    ) -> "re.Pattern[str]":
+        import re
+
+        default_pattern = r"_(\d+)-(\d+)$"
+        pattern_text = pattern or default_pattern
+        try:
+            return re.compile(pattern_text)
+        except re.error as exc:
+            raise ValueError(
+                f"Invalid sequence_batches_pattern '{pattern_text}': {exc}"
+            ) from exc
