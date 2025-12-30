@@ -1464,6 +1464,11 @@ svi_y_num_motion_latent = 1
 # - "current": use current batch motion as a fallback
 svi_y_first_clip_mode = "zeros"
 
+# Decode previous-clip motion latents to frames and re-encode the last frame
+# (SVI 2.0 behavior). Requires svi_y_motion_source="replay_buffer" and a VAE
+# available during training. Adds VRAM/time overhead (default: false).
+svi_y_decode_last_frame = false
+
 # Replay buffer size for previous motion latents (>= 0). Only used when
 # svi_y_motion_source = "replay_buffer".
 svi_y_replay_buffer_size = 256

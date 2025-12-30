@@ -33,6 +33,9 @@ def apply_error_recycling_config(args: Any, config: Dict[str, Any], logger: Any)
     args.svi_y_motion_source = str(config.get("svi_y_motion_source", "latent_last"))
     args.svi_y_num_motion_latent = int(config.get("svi_y_num_motion_latent", 1))
     args.svi_y_first_clip_mode = str(config.get("svi_y_first_clip_mode", "zeros"))
+    args.svi_y_decode_last_frame = bool(
+        config.get("svi_y_decode_last_frame", False)
+    )
     args.svi_y_replay_buffer_size = int(
         config.get("svi_y_replay_buffer_size", 256)
     )
@@ -132,6 +135,8 @@ def apply_error_recycling_config(args: Any, config: Dict[str, Any], logger: Any)
                 args.svi_y_motion_source,
                 args.svi_y_num_motion_latent,
             )
+            if args.svi_y_decode_last_frame:
+                logger.info("SVI y builder decode_last_frame enabled.")
             if args.svi_y_motion_source == "replay_buffer":
                 logger.info(
                     "SVI y replay buffer: size=%d key_mode=%s first_clip_mode=%s",

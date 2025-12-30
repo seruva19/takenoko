@@ -67,6 +67,9 @@ class ErrorRecyclingHelper:
         self.svi_y_first_clip_mode = str(
             getattr(args, "svi_y_first_clip_mode", "zeros")
         )
+        self.svi_y_decode_last_frame = bool(
+            getattr(args, "svi_y_decode_last_frame", False)
+        )
         self.svi_y_replay_buffer_size = int(
             getattr(args, "svi_y_replay_buffer_size", 256)
         )
@@ -80,6 +83,11 @@ class ErrorRecyclingHelper:
             getattr(args, "svi_y_replay_sequence_pattern", r"_(\d+)-(\d+)$")
         )
 
+        if self.svi_y_decode_last_frame and self.svi_y_motion_source != "replay_buffer":
+            logger.warning(
+                "SVI y decode_last_frame requires svi_y_motion_source='replay_buffer'; ignoring."
+            )
+
         self.iteration_count = 0
         self._warned_missing_y = False
         self._warned_empty_buffer = False
@@ -87,6 +95,8 @@ class ErrorRecyclingHelper:
         self._warned_svi_shape = False
         self._warned_missing_item_info = False
         self._warned_motion_shape = False
+        self._warned_missing_vae = False
+        self._warned_decode_failure = False
 
         num_train_timesteps = getattr(
             getattr(noise_scheduler, "config", object()),
@@ -236,7 +246,7 @@ class ErrorRecyclingHelper:
         return torch.stack(motion_list, dim=0)
 
     def maybe_build_svi_y(
-        self, batch: Dict[str, Any], latents: torch.Tensor
+        self, batch: Dict[str, Any], latents: torch.Tensor, vae: Optional[Any] = None
     ) -> None:
         if not self.enabled or not self.enable_svi_y_builder:
             return
@@ -324,6 +334,13 @@ class ErrorRecyclingHelper:
                     ),
                     device=latents.device,
                     dtype=latents.dtype,
+                )
+            if self.svi_y_decode_last_frame:
+                motion_latent = self._decode_replay_last_frame(
+                    motion_latent=motion_latent,
+                    vae=vae,
+                    target_device=latents.device,
+                    target_dtype=latents.dtype,
                 )
         elif self.svi_y_motion_source == "zeros" or num_motion == 0:
             motion_latent = torch.zeros(
@@ -443,6 +460,52 @@ class ErrorRecyclingHelper:
             raise ValueError(
                 f"Invalid svi_y_replay_sequence_pattern '{pattern}': {exc}"
             ) from exc
+
+    def _decode_replay_last_frame(
+        self,
+        motion_latent: torch.Tensor,
+        vae: Optional[Any],
+        target_device: torch.device,
+        target_dtype: torch.dtype,
+    ) -> torch.Tensor:
+        if vae is None or not hasattr(vae, "decode") or not hasattr(vae, "encode"):
+            if not self._warned_missing_vae:
+                logger.warning(
+                    "SVI y decode_last_frame requested but no VAE available; using motion latents as-is."
+                )
+                self._warned_missing_vae = True
+            return motion_latent
+        if motion_latent.dim() != 5:
+            return motion_latent
+        if not torch.any(motion_latent):
+            return motion_latent
+        try:
+            vae_device = getattr(vae, "device", target_device)
+            try:
+                vae_device = torch.device(vae_device)
+            except Exception:
+                vae_device = target_device
+            vae_dtype = getattr(vae, "dtype", target_dtype)
+            motion_for_vae = motion_latent[:, :, -1:, ...].to(
+                device=vae_device, dtype=vae_dtype
+            )
+            latents_list = [motion_for_vae[i] for i in range(motion_for_vae.shape[0])]
+            with (
+                torch.amp.autocast(device_type=vae_device.type, dtype=vae_dtype),
+                torch.no_grad(),
+            ):
+                decoded = vae.decode(latents_list)
+                last_frames = [frame[:, -1:, ...] for frame in decoded]
+                reencoded = vae.encode(last_frames)
+            reencoded_tensor = torch.stack(reencoded, dim=0).to(
+                device=target_device, dtype=target_dtype
+            )
+            return reencoded_tensor
+        except Exception as exc:
+            if not self._warned_decode_failure:
+                logger.warning("SVI y decode_last_frame failed: %s", exc)
+                self._warned_decode_failure = True
+            return motion_latent
 
     def _parse_y_error_sample_range(
         self, value: Optional[str]
