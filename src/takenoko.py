@@ -542,6 +542,22 @@ class UnifiedTrainer:
             if trace_memory:
                 force_cuda_cleanup("cache_latents")
 
+            if bool(getattr(self.args, "cache_optical_flow", False)):
+                from caching.cache_optical_flow import cache_optical_flow as _cache_flow
+
+                flow_args = argparse.Namespace(
+                    dataset_config=cache_args.dataset_config,
+                    device=device,
+                    batch_size=cache_args.batch_size,
+                    num_workers=cache_args.num_workers,
+                    skip_existing=cache_args.skip_existing,
+                    keep_cache=cache_args.keep_cache,
+                    purge_before_run=cache_args.purge_before_run,
+                    model=getattr(self.args, "optical_flow_cache_model", "raft_small"),
+                )
+                logger.info("Starting optical flow caching after latents...")
+                _cache_flow(datasets, flow_args)  # type: ignore
+
             logger.info("Latent caching completed successfully!")
             return True
 
@@ -1137,7 +1153,9 @@ def main():
         action="store_true",
         help="Run text encoder output caching and exit",
     )
-    parser.add_argument("--train", action="store_true", help="Run training and exit")
+    parser.add_argument(
+        "--train", action="store_true", help="Run training and exit"
+    )
     parser.add_argument(
         "--all",
         action="store_true",
@@ -1177,7 +1195,11 @@ def main():
             # Build ordered action list
             actions: List[str] = []
             if args.all:
-                actions = ["cache_latents", "cache_text_encoder", "train"]
+                actions = [
+                    "cache_latents",
+                    "cache_text_encoder",
+                    "train",
+                ]
             else:
                 if args.cache_latents:
                     actions.append("cache_latents")

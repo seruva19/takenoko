@@ -3,6 +3,7 @@ import logging
 from typing import Any, Dict
 from common.logger import get_logger
 from enhancements.semanticgen.config import parse_semanticgen_config
+from enhancements.equivdm_noise.config import parse_equivdm_noise_config
 from memory.config import parse_memory_optimization_config
 from optimizers.q_galore_config import apply_q_galore_config
 from transition.configuration import parse_transition_config
@@ -1064,6 +1065,9 @@ def create_args_from_config(
     args.fluxflow_block_perturb_prob = config.get("fluxflow_block_perturb_prob", 0.5)
     args.fluxflow_frame_dim_in_batch = config.get("fluxflow_frame_dim_in_batch", 2)
 
+    # EquiVDM consistent noise settings (training-only)
+    parse_equivdm_noise_config(config, args)
+
     # FVDM settings
     args.enable_fvdm = config.get("enable_fvdm", False)
     args.fvdm_ptss_p = config.get("fvdm_ptss_p", 0.2)
@@ -1597,6 +1601,17 @@ def create_args_from_config(
         args.cache_svi_y_anchor_latent = latent_cache_config.get(
             "cache_svi_y_anchor_latent", False
         )
+        args.cache_optical_flow = latent_cache_config.get(
+            "cache_optical_flow", False
+        )
+        args.optical_flow_cache_model = latent_cache_config.get(
+            "optical_flow_model", "raft_small"
+        )
+        if args.optical_flow_cache_model not in {"raft_small", "raft_large"}:
+            raise ValueError(
+                "latent_cache.optical_flow_model must be 'raft_small' or 'raft_large', "
+                f"got {args.optical_flow_cache_model}"
+            )
     else:
         # Set defaults for latent cache if section not found
         args.latent_cache_device = args.device
@@ -1610,6 +1625,8 @@ def create_args_from_config(
         args.latent_cache_console_back = "black"
         args.latent_cache_console_num_images = 1
         args.cache_svi_y_anchor_latent = False
+        args.cache_optical_flow = False
+        args.optical_flow_cache_model = "raft_small"
 
     # Read text encoder cache settings from config
     if "datasets" in config and "text_encoder_cache" in config["datasets"]:

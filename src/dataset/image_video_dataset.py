@@ -117,6 +117,7 @@ class BaseDataset(torch.utils.data.Dataset):
         self.latent_cache_postfix, self.text_encoder_cache_postfix = get_cache_postfix(
             target_model
         )
+        self.optical_flow_cache_postfix = f"{self.latent_cache_postfix}_flow"
         self.semantic_cache_postfix = _derive_semantic_cache_postfix(
             self.text_encoder_cache_postfix,
             self.latent_cache_postfix,
@@ -223,6 +224,13 @@ class BaseDataset(torch.utils.data.Dataset):
             )  # type: ignore
         )
 
+    def get_all_optical_flow_cache_files(self):
+        return glob.glob(
+            os.path.join(
+                self.cache_directory, f"*_{self.optical_flow_cache_postfix}.safetensors"  # type: ignore
+            )  # type: ignore
+        )
+
     def get_all_text_encoder_output_cache_files(self):
         return glob.glob(
             os.path.join(
@@ -255,6 +263,15 @@ class BaseDataset(torch.utils.data.Dataset):
         return os.path.join(
             self.cache_directory,
             f"{basename}_{w:04d}x{h:04d}_{self.latent_cache_postfix}.safetensors",
+        )
+
+    def get_optical_flow_cache_path(self, item_info: ItemInfo) -> str:
+        w, h = item_info.original_size
+        basename = os.path.splitext(os.path.basename(item_info.item_key))[0]
+        assert self.cache_directory is not None, "cache_directory is required"
+        return os.path.join(
+            self.cache_directory,
+            f"{basename}_{w:04d}x{h:04d}_{self.optical_flow_cache_postfix}.safetensors",
         )
 
     def get_text_encoder_output_cache_path(self, item_info: ItemInfo) -> str:

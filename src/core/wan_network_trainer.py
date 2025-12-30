@@ -170,6 +170,12 @@ class WanNetworkTrainer:
                 f"Failed to initialize temporal consistency enhancement: {e}"
             )
 
+        # Initialize EquiVDM consistent noise if available
+        try:
+            self.training_core.initialize_equivdm_consistent_noise(args)
+        except Exception as e:
+            logger.warning(f"Failed to initialize EquiVDM noise helper: {e}")
+
         # Initialize MemFlow guidance if available
         try:
             self.training_core.initialize_memflow_guidance(args)

@@ -54,6 +54,23 @@ def save_svi_y_anchor_cache(item_info: ItemInfo, anchor_latent: torch.Tensor) ->
     save_latent_cache_common(item_info, sd)
 
 
+def save_optical_flow_cache_wan(
+    item_info: ItemInfo,
+    flow: torch.Tensor,
+    frame_stride: Optional[int] = None,
+) -> None:
+    """Save per-frame optical flow cache."""
+    assert (
+        flow.dim() == 4
+    ), "flow should be 4D tensor (frames, flow_xy, height, width)"
+    dtype_str = dtype_to_str(flow.dtype)
+    sd = {f"optical_flow_{dtype_str}": flow.detach().cpu()}
+    if frame_stride is not None:
+        stride_tensor = torch.tensor([int(frame_stride)], dtype=torch.int64)
+        sd["optical_flow_stride_int64"] = stride_tensor
+    save_optical_flow_cache_common(item_info, sd, frame_stride)
+
+
 def save_latent_cache_common(item_info: ItemInfo, sd: dict[str, torch.Tensor]):
     metadata = {
         "architecture": "wan21",
@@ -76,6 +93,38 @@ def save_latent_cache_common(item_info: ItemInfo, sd: dict[str, torch.Tensor]):
     os.makedirs(latent_dir, exist_ok=True)
 
     save_file(sd, item_info.latent_cache_path, metadata=metadata)  # type: ignore
+
+
+def save_optical_flow_cache_common(
+    item_info: ItemInfo, sd: dict[str, torch.Tensor], frame_stride: Optional[int]
+):
+    for key, value in sd.items():
+        if torch.isnan(value).any():
+            logger.warning(
+                f"{key} tensor has NaN: {item_info.item_key}, replace NaN with 0"
+            )
+            value[torch.isnan(value)] = 0
+
+    metadata = {
+        "architecture": "wan21",
+        "format_version": "1.0.1",
+        "content": "optical_flow",
+    }
+    if item_info.frame_count is not None:
+        metadata["frame_count"] = f"{item_info.frame_count}"
+    if frame_stride is not None:
+        metadata["frame_stride"] = f"{int(frame_stride)}"
+
+    flow_path = getattr(item_info, "optical_flow_cache_path", None)
+    if flow_path is None:
+        if item_info.latent_cache_path is None:
+            raise ValueError("optical_flow_cache_path or latent_cache_path is required")
+        flow_path = item_info.latent_cache_path.replace(".safetensors", "_flow.safetensors")
+        item_info.optical_flow_cache_path = flow_path
+
+    flow_dir = os.path.dirname(flow_path)
+    os.makedirs(flow_dir, exist_ok=True)
+    save_file(sd, flow_path, metadata=metadata)
 
 
 def save_text_encoder_output_cache_wan(

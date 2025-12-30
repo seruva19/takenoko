@@ -2794,6 +2794,69 @@ memflow_guidance_top_k = 3
 memflow_guidance_min_frames = 2
 
 # =============================================================================
+# ⚠️ EQUIVDM CONSISTENT NOISE
+# =============================================================================
+# Enable EquiVDM-style temporally consistent noise for LoRA video training.
+# This swaps the noise sampling to warped noise while keeping the denoising loss unchanged 
+# Requires optical flow in the batch (default key "optical_flow") at latent
+# resolution. Expected shape is [B, F-1, 2, H, W] with flow from t -> t+1.
+# If flow is missing or mismatched, training falls back to iid noise.
+enable_equivdm_consistent_noise = false
+
+# Mix temporally consistent noise with independent noise (Eq. 4).
+# beta in [0, 1]: 1.0 = only warped noise, 0.0 = iid noise.
+# Paper default is 0.9.
+equivdm_noise_beta = 0.9
+
+# Flow source. "batch" uses precomputed flow from the dataloader.
+equivdm_flow_source = "batch"
+
+# Batch key that provides the flow tensor.
+equivdm_flow_key = "optical_flow"
+
+# Frame dimension index in latents (WAN video default is B,C,F,H,W -> 2).
+equivdm_flow_frame_dim_in_batch = 2
+
+# Flow resize mode when flow resolution doesn't match latent resolution.
+# - "none": require exact match (default; falls back to iid noise if mismatch)
+# - "bilinear": resize flow to latent H/W and scale vectors accordingly
+# - "nearest": resize flow to latent H/W and scale vectors accordingly
+# When using cache_optical_flow (pixel-space flow), "bilinear" is recommended.
+equivdm_flow_resize_mode = "none"
+
+# Align corners flag used only when equivdm_flow_resize_mode = "bilinear".
+equivdm_flow_resize_align_corners = true
+
+# Optional pixel-to-latent spatial stride. Use this when flow is already at
+# latent resolution but still expressed in pixel units (e.g., pre-resized flow).
+# Set to your VAE downsample stride (e.g., 8). <= 0 disables scaling.
+equivdm_flow_spatial_stride = -1
+
+# Warp mode used for consistent noise:
+# - "grid": deterministic grid_sample warping (fast, default)
+# - "stochastic": adds pixel jitter to approximate stochastic upsampling
+# - "nte": multi-sample stochastic upsampling (approximate Noise Transport Equation)
+equivdm_warp_mode = "grid"
+
+# Jitter in pixels for stochastic warp mode (0.5 matches pixel-center jitter).
+equivdm_warp_jitter = 0.5
+
+# Number of stochastic samples for equivdm_warp_mode = "nte".
+equivdm_nte_samples = 4
+
+# Optional flow quality diagnostics.
+equivdm_flow_quality_check = false
+
+# Maximum allowed flow magnitude before warning; 0 uses auto threshold (0.5 * max(H, W)).
+equivdm_flow_max_magnitude = 0.0
+
+# Optional stride check for flow vs latent stride.
+equivdm_flow_stride_check = false
+
+# Expected stride for cached flow; <= 0 disables explicit check.
+equivdm_flow_expected_stride = -1
+
+# =============================================================================
 # FVDM SETTINGS
 # =============================================================================
 
@@ -3791,6 +3854,13 @@ keep_cache = true
 # Cache SVI Pro anchor latents alongside latent caches (train-only feature).
 # Enables image_emb["y"] construction during training; requires cache_latents.
 cache_svi_y_anchor_latent = false
+
+# Cache optical flow alongside latent caches for EquiVDM consistent noise.
+# Generates *_flow.safetensors using RAFT during latent caching.
+cache_optical_flow = false
+
+# RAFT model to use when cache_optical_flow is enabled.
+optical_flow_model = "raft_small"
 
 # delete all existing latent cache files in cache_directory before caching      
 # purge_before_run = true

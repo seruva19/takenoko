@@ -24,6 +24,9 @@ logger = get_logger(__name__, level=logging.INFO)
 from enhancements.temporal_consistency.training_integration import (
     enhance_loss_with_temporal_consistency,
 )
+from enhancements.equivdm_noise.training_integration import (
+    EquiVDMConsistentNoiseHelper,
+)
 from enhancements.memflow_guidance.training_integration import (
     begin_memflow_guidance_step,
     consume_memflow_guidance_loss,
@@ -240,6 +243,9 @@ class TrainingCore:
         # Initialize temporal consistency enhancement
         self.temporal_consistency_integration = None
 
+        # EquiVDM consistent noise helper (optional, training-only)
+        self.equivdm_noise_helper: Optional[EquiVDMConsistentNoiseHelper] = None
+
         # Initialize differential guidance enhancement
         self.differential_guidance_integration = None
 
@@ -353,6 +359,21 @@ class TrainingCore:
         self.temporal_consistency_integration = create_temporal_consistency_integration(
             args
         )
+
+    def initialize_equivdm_consistent_noise(
+        self, args: argparse.Namespace
+    ) -> None:
+        """Initialize EquiVDM consistent noise helper if enabled."""
+        try:
+            self.equivdm_noise_helper = EquiVDMConsistentNoiseHelper.create_from_args(
+                args
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to initialize EquiVDM consistent noise helper: %s",
+                exc,
+            )
+            self.equivdm_noise_helper = None
 
     def initialize_memflow_guidance(self, args: argparse.Namespace) -> None:
         """Initialize MemFlow guidance configuration if enabled."""
@@ -1083,7 +1104,12 @@ class TrainingCore:
                     latents = _scale_shift_latents(latents)
 
                     # Sample noise that we'll add to the latents
-                    noise = torch.randn_like(latents)
+                    if self.equivdm_noise_helper is not None:
+                        noise = self.equivdm_noise_helper.sample_noise(
+                            latents, batch
+                        )
+                    else:
+                        noise = torch.randn_like(latents)
 
                     fvdm_sampling_metadata = None
                     if self.fvdm_manager.enabled:

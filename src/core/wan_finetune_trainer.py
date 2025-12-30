@@ -663,7 +663,12 @@ class WanFinetuneTrainer:
             )
 
         # Generate noise (device/dtype conversion later)
-        noise = torch.randn_like(latents)
+        if self.training_core.equivdm_noise_helper is not None:
+            noise = self.training_core.equivdm_noise_helper.sample_noise(
+                latents, batch
+            )
+        else:
+            noise = torch.randn_like(latents)
 
         # Use Takenoko's timestep generation
         from scheduling.timestep_utils import get_noisy_model_input_and_timesteps
@@ -1023,6 +1028,12 @@ class WanFinetuneTrainer:
             logger.warning(
                 f"Failed to initialize temporal consistency enhancement: {e}"
             )
+
+        # Initialize EquiVDM consistent noise if available
+        try:
+            self.training_core.initialize_equivdm_consistent_noise(args)
+        except Exception as e:
+            logger.warning(f"Failed to initialize EquiVDM noise helper: {e}")
 
         # Initialize differential guidance enhancement if available
         try:

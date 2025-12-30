@@ -338,6 +338,27 @@ class BucketBatchManager:
 
             sd = {**sd_latent, **sd_te, **sd_sem}
 
+            # Load optical flow cache if available
+            flow_cache_path = getattr(item_info, "optical_flow_cache_path", None)
+            if flow_cache_path is None and item_info.latent_cache_path is not None:
+                flow_cache_path = item_info.latent_cache_path.replace(
+                    ".safetensors", "_flow.safetensors"
+                )
+            if flow_cache_path and os.path.exists(flow_cache_path):
+                try:
+                    flow_sd = load_file(flow_cache_path)
+                    for key, value in flow_sd.items():
+                        if key in sd:
+                            logger.warning(
+                                f"Optical flow key collision in cache ({key}) for {flow_cache_path}"
+                            )
+                            continue
+                        sd[key] = value
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to load optical flow cache {flow_cache_path}: {e}"
+                    )
+
             # Add weight to the batch
             # This is the key change: determine the weight for this specific item
             loss_weight = self.prior_loss_weight if item_info.is_reg else 1.0
