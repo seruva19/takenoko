@@ -2,6 +2,7 @@
 
 import argparse
 from typing import Dict, Any, Optional, List
+import math
 import torch
 import logging
 from common.performance_logger import (
@@ -189,6 +190,32 @@ def collect_and_log_training_metrics(
         logs["crepa_similarity"] = float(loss_components.crepa_similarity.item())
     if getattr(loss_components, "wanvideo_cfm_loss", None) is not None:
         logs["loss/wanvideo_cfm"] = float(loss_components.wanvideo_cfm_loss.item())
+    if getattr(loss_components, "mhc_identity_reg", None) is not None:
+        logs["loss/mhc_identity_reg"] = float(
+            loss_components.mhc_identity_reg.item()
+        )
+    if getattr(loss_components, "mhc_entropy_reg", None) is not None:
+        logs["loss/mhc_entropy_reg"] = float(
+            loss_components.mhc_entropy_reg.item()
+        )
+    mhc_stats = None
+    mhc_log_interval = int(getattr(args, "mhc_mix_log_interval", 100))
+    mhc_hist_interval = int(getattr(args, "mhc_mix_histogram_interval", 500))
+    mhc_should_log = (
+        getattr(args, "network_module", "") == "networks.mhc_lora"
+        and global_step % mhc_log_interval == 0
+    )
+    mhc_should_hist = (
+        getattr(args, "network_module", "") == "networks.mhc_lora"
+        and global_step % mhc_hist_interval == 0
+    )
+    if (mhc_should_log or mhc_should_hist) and hasattr(network, "get_mhc_mixing_stats"):
+        try:
+            mhc_stats = network.get_mhc_mixing_stats()
+            if isinstance(mhc_stats, dict) and mhc_should_log:
+                logs.update(mhc_stats)
+        except Exception:
+            mhc_stats = None
     if getattr(loss_components, "memflow_guidance_loss", None) is not None:
         logs["loss/memflow_guidance"] = float(
             loss_components.memflow_guidance_loss.item()
@@ -308,6 +335,42 @@ def collect_and_log_training_metrics(
             logger.debug(f"Error logging adaptive timestep metrics: {e}")
 
     accelerator.log(logs, step=global_step)
+
+    # mHC mixing histograms and health warnings
+    if mhc_stats is not None and mhc_should_log:
+        try:
+            warn_entropy_min = float(getattr(args, "mhc_mix_warn_entropy_min", 0.05))
+            warn_offdiag_max = float(getattr(args, "mhc_mix_warn_offdiag_max", 0.5))
+            entropy_val = float(mhc_stats.get("mhc/mixing_entropy", math.nan))
+            offdiag_val = float(mhc_stats.get("mhc/mixing_offdiag_mean", math.nan))
+            if not math.isnan(entropy_val) and entropy_val < warn_entropy_min:
+                logger.warning(
+                    "mHC mixing entropy low: %.4f < %.4f",
+                    entropy_val,
+                    warn_entropy_min,
+                )
+            if not math.isnan(offdiag_val) and offdiag_val > warn_offdiag_max:
+                logger.warning(
+                    "mHC off-diagonal mixing high: %.4f > %.4f",
+                    offdiag_val,
+                    warn_offdiag_max,
+                )
+        except Exception:
+            pass
+        if mhc_should_hist and hasattr(network, "get_mhc_mixing_histogram"):
+            try:
+                hist_data = network.get_mhc_mixing_histogram()
+                if isinstance(hist_data, torch.Tensor) and hist_data.numel() > 0:
+                    for tracker in accelerator.trackers:
+                        if tracker.name == "tensorboard":
+                            tracker.writer.add_histogram(
+                                "mhc/mixing_weights",
+                                hist_data.detach().cpu(),
+                                global_step,
+                            )
+                            break
+            except Exception:
+                pass
 
     # Enhanced optimizer-specific histogram logging
     if optimizer is not None and is_supported(optimizer):

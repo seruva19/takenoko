@@ -1223,7 +1223,17 @@ class TrainingCore:
                 gradient_norm = None
 
                 with accelerator.accumulate(training_model):
-                    accelerator.unwrap_model(network).on_step_start()
+                    args.current_step = global_step
+                    unwrapped_net = None
+                    try:
+                        unwrapped_net = accelerator.unwrap_model(network)
+                        if hasattr(unwrapped_net, "set_current_step"):
+                            unwrapped_net.set_current_step(global_step)
+                    except Exception:
+                        unwrapped_net = None
+                    if unwrapped_net is None:
+                        unwrapped_net = accelerator.unwrap_model(network)
+                    unwrapped_net.on_step_start()
 
                     latents = _scale_shift_latents(latents)
 
@@ -1447,13 +1457,22 @@ class TrainingCore:
                                 )
                     # Optional: If the network supports TLora-style masking, update mask from timesteps
                     try:
-                        unwrapped_net = accelerator.unwrap_model(network)
+                        if unwrapped_net is None:
+                            unwrapped_net = accelerator.unwrap_model(network)
                         if hasattr(unwrapped_net, "update_rank_mask_from_timesteps"):
-                            unwrapped_net.update_rank_mask_from_timesteps(
+                            unwrapped_net.update_rank_mask_from_timesteps(      
                                 timesteps, max_timestep=1000, device=accelerator.device
                             )
                     except Exception:
                         pass
+                    if getattr(args, "network_module", "") == "networks.mhc_lora":
+                        try:
+                            if unwrapped_net is None:
+                                unwrapped_net = accelerator.unwrap_model(network)
+                            if hasattr(unwrapped_net, "set_mhc_timestep"):
+                                unwrapped_net.set_mhc_timestep(timesteps)
+                        except Exception:
+                            pass
 
                     if weighting is None:
                         weighting = compute_loss_weighting_for_sd3(

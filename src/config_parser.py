@@ -433,7 +433,7 @@ def create_args_from_config(
     else:
         args.network_args = []
 
-    # Extract LoRA-GGPO parameters from network_args (e.g., "ggpo_sigma=0.03")
+    # Extract LoRA-GGPO parameters from network_args (e.g., "ggpo_sigma=0.03")  
     args.ggpo_sigma = None
     args.ggpo_beta = None
     for net_arg in args.network_args:
@@ -451,6 +451,11 @@ def create_args_from_config(
                     args.ggpo_beta = float(v)
                 except Exception:
                     args.ggpo_beta = None
+
+    # mHC-LoRA configuration (applies when network_module == "networks.mhc_lora")
+    from configs.mhc_config import parse_mhc_config
+
+    parse_mhc_config(config, args, logger)
 
     apply_relora_config(args, config, logger)
     args.training_comment = config.get("training_comment", "trained with Takenoko")

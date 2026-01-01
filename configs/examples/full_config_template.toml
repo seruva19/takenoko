@@ -350,7 +350,7 @@ lr_scheduler_args = ''
 # =============================================================================
 
 # Network module to train: "networks.lora_wan", "networks.control_lora_wan", "networks.reward_lora", "networks.vae_wan",
-# "lycoris.kohya", "networks.t_lora", "networks.moc_lora", "networks.singlora_wan", "networks.wan_finetune",
+# "lycoris.kohya", "networks.t_lora", "networks.moc_lora", "networks.mhc_lora", "networks.singlora_wan", "networks.wan_finetune",
 # "networks.slider_lora_wan", "networks.relora_wan"
 # The module defines trainable adapters and is imported dynamically by the trainer.
 network_module = "networks.lora_wan"
@@ -446,6 +446,105 @@ network_alpha = 32
 #   "moc_implementation=optimized",
 #   "moc_max_layers=2",
 #   "moc_max_modules=4"
+# ]
+
+# mHC-LoRA (Manifold-Constrained Hyper-Connections style LoRA)
+# Activated when network_module = "networks.mhc_lora".
+# This approximates mHC by using multiple LoRA paths and a doubly-stochastic
+# mixing matrix (Sinkhorn-Knopp) initialized near identity.
+# Parameters (defaults shown):
+# - mhc_num_paths: number of LoRA paths (int >= 1, typical 2 or 4)
+# - mhc_sinkhorn_iters: Sinkhorn normalization iterations (int >= 1)
+# - mhc_mixing_init: "identity" (default), "uniform", or "random"
+# - mhc_mixing_strength: mix strength in [0,1] (0 = pure identity)
+# - mhc_mixing_strength_end: end strength for linear schedule (float in [0,1], optional)
+# - mhc_mixing_temperature: softmax temperature (>0, lower = sharper mixing)
+# - mhc_mixing_temperature_end: end temperature for linear schedule (>0, optional)
+# - mhc_mixing_schedule_steps: steps for linear schedule (int >= 0, 0 disables)
+# - mhc_output_stream: which mixed stream to emit when output_mode="stream" (int in [0, mhc_num_paths-1])
+# - mhc_output_mode: "stream" (default), "sum", or "mean" to aggregate all streams
+# - mhc_nonneg_mixing: enforce non-negativity before Sinkhorn (bool)
+# - mhc_dynamic_mixing: enable input-conditioned mixing logits (bool)
+# - mhc_dynamic_hidden_dim: hidden dim for dynamic mixing MLP (int >= 0, 0 = linear)
+# - mhc_dynamic_scale: scale for dynamic mixing logits (float >= 0)
+# - mhc_dynamic_share: "none" (default) or "layer" to share dynamic MLP per block
+# - mhc_timestep_mixing: scale mixing strength by timestep (bool)
+# - mhc_timestep_max: max timestep for normalization (int > 0, default 1000)
+# - mhc_timestep_gamma: exponent for timestep scaling (float >= 0)
+# - mhc_timestep_strength_min: minimum mixing strength at high noise (float in [0,1])
+# - mhc_path_scale_init: per-path scale init (float > 0)
+# - mhc_path_scale_trainable: train per-path scales (bool)
+# - mhc_path_dropout: drop whole paths during training (float in [0,1], optional)
+# - mhc_freeze_mixing_steps: freeze mixing logits/MLP for first N steps (int >= 0)
+# - mhc_identity_clamp_steps: clamp off-diagonal mixing for first N steps (int >= 0)
+# - mhc_identity_clamp_max_offdiag: max off-diagonal weight during clamp (float in [0,1])
+# - mhc_identity_reg_lambda: weight for identity regularization (float >= 0)
+# - mhc_identity_reg_warmup_steps: decay regularization over this many steps (int >= 0)
+# - mhc_identity_reg_power: decay power for identity regularization (float >= 0)
+# - mhc_entropy_reg_lambda: weight for mixing entropy regularization (float >= 0)
+# - mhc_entropy_reg_target: target entropy (float, default log(mhc_num_paths))
+# mhc_num_paths = 2
+# mhc_sinkhorn_iters = 20
+# mhc_mixing_init = "identity"
+# mhc_mixing_strength = 1.0
+# mhc_mixing_strength_end = null
+# mhc_mixing_temperature = 1.0
+# mhc_mixing_temperature_end = null
+# mhc_mixing_schedule_steps = 0
+# mhc_output_stream = 0
+# mhc_output_mode = "stream"
+# mhc_nonneg_mixing = true
+# mhc_dynamic_mixing = false
+# mhc_dynamic_hidden_dim = 0
+# mhc_dynamic_scale = 1.0
+# mhc_dynamic_share = "none"
+# mhc_timestep_mixing = false
+# mhc_timestep_max = 1000
+# mhc_timestep_gamma = 1.0
+# mhc_timestep_strength_min = 0.0
+# mhc_path_scale_init = 1.0
+# mhc_path_scale_trainable = true
+# mhc_path_dropout = null
+# mhc_freeze_mixing_steps = 0
+# mhc_identity_clamp_steps = 0
+# mhc_identity_clamp_max_offdiag = 0.0
+# mhc_identity_reg_lambda = 0.0
+# mhc_identity_reg_warmup_steps = 0
+# mhc_identity_reg_power = 1.0
+# mhc_entropy_reg_lambda = 0.0
+# mhc_entropy_reg_target = null
+# Example mHC-LoRA configuration:
+# network_args = [
+#   "mhc_num_paths=2",
+#   "mhc_sinkhorn_iters=20",
+#   "mhc_mixing_init=identity",
+#   "mhc_mixing_strength=1.0",
+#   "mhc_mixing_strength_end=null",
+#   "mhc_mixing_temperature=1.0",
+#   "mhc_mixing_temperature_end=null",
+#   "mhc_mixing_schedule_steps=0",
+#   "mhc_output_stream=0",
+#   "mhc_output_mode=stream",
+#   "mhc_nonneg_mixing=true",
+#   "mhc_dynamic_mixing=false",
+#   "mhc_dynamic_hidden_dim=0",
+#   "mhc_dynamic_scale=1.0",
+#   "mhc_dynamic_share=none",
+#   "mhc_timestep_mixing=false",
+#   "mhc_timestep_max=1000",
+#   "mhc_timestep_gamma=1.0",
+#   "mhc_timestep_strength_min=0.0",
+#   "mhc_path_scale_init=1.0",
+#   "mhc_path_scale_trainable=true",
+#   "mhc_path_dropout=null",
+#   "mhc_freeze_mixing_steps=0",
+#   "mhc_identity_clamp_steps=0",
+#   "mhc_identity_clamp_max_offdiag=0.0",
+#   "mhc_identity_reg_lambda=0.0",
+#   "mhc_identity_reg_warmup_steps=0",
+#   "mhc_identity_reg_power=1.0",
+#   "mhc_entropy_reg_lambda=0.0",
+#   "mhc_entropy_reg_target=null"
 # ]
 
 # SingLoRA-specific parameters
@@ -3646,6 +3745,16 @@ lora_weight_histogram_interval = 100
 # Useful for debugging initialization or understanding which projection is changing more.
 # Default: false
 lora_weight_log_separate_matrices = false
+
+# mHC mixing diagnostics
+# Log scalar mixing stats every N steps (only when network_module = "networks.mhc_lora")
+mhc_mix_log_interval = 100
+# Log mixing weight histograms to TensorBoard every N steps (costly)
+mhc_mix_histogram_interval = 500
+# Warn if average mixing entropy drops below this threshold
+mhc_mix_warn_entropy_min = 0.05
+# Warn if average off-diagonal mixing exceeds this threshold
+mhc_mix_warn_offdiag_max = 0.5
 
 # Monitor activation values in DiT/transformer blocks during training.
 # Helps detect activation explosion before it causes NaN/Inf errors.

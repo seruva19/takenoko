@@ -8,6 +8,7 @@ the previous inlined implementation in `core/training_core.py`.
 from __future__ import annotations
 
 from contextlib import nullcontext
+import math
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple, Callable, List, ContextManager, cast
 
@@ -123,9 +124,13 @@ class LossComponents:
     bfm_frn_loss: Optional[torch.Tensor]
         BFM FRN residual approximation loss (if enabled).
     ortho_reg_p: Optional[torch.Tensor]
-        The orthogonal regularization loss component for p, if enabled.    
+        The orthogonal regularization loss component for p, if enabled.
     ortho_reg_q: Optional[torch.Tensor]
         The orthogonal regularization loss component for q, if enabled.
+    mhc_identity_reg: Optional[torch.Tensor]
+        The mHC-LoRA identity regularization loss component, if enabled.        
+    mhc_entropy_reg: Optional[torch.Tensor]
+        The mHC-LoRA mixing entropy regularization loss component, if enabled.
     """
 
     total_loss: torch.Tensor
@@ -156,6 +161,8 @@ class LossComponents:
     bfm_frn_loss: Optional[torch.Tensor] = None
     ortho_reg_p: Optional[torch.Tensor] = None
     ortho_reg_q: Optional[torch.Tensor] = None
+    mhc_identity_reg: Optional[torch.Tensor] = None
+    mhc_entropy_reg: Optional[torch.Tensor] = None
 
 
 class TrainingLossComputer:
@@ -1398,6 +1405,71 @@ class TrainingLossComputer:
         except Exception as e:
             logger.warning(f"Orthogonal LoRA regularization failed: {e}")
 
+        # ---- Optional mHC-LoRA identity regularization ----
+        mhc_identity_val: Optional[torch.Tensor] = None
+        try:
+            if network is not None:
+                lam = float(getattr(network, "mhc_identity_reg_lambda", 0.0))
+                warmup_steps = int(
+                    getattr(network, "mhc_identity_reg_warmup_steps", 0)
+                )
+                power = float(getattr(network, "mhc_identity_reg_power", 1.0))
+                if lam > 0.0 and hasattr(network, "unet_loras"):
+                    reg_sum: Optional[torch.Tensor] = None
+                    for lora in getattr(network, "unet_loras", []):
+                        if hasattr(lora, "identity_regularization"):
+                            try:
+                                reg = lora.identity_regularization()  # type: ignore
+                            except Exception:
+                                reg = None
+                            if reg is not None:
+                                reg_sum = reg if reg_sum is None else reg_sum + reg
+                    if reg_sum is not None:
+                        weight = lam
+                        if warmup_steps > 0:
+                            current_step = getattr(args, "current_step", None)
+                            if current_step is not None:
+                                progress = min(
+                                    float(max(current_step, 0)) / warmup_steps, 1.0
+                                )
+                                decay = (1.0 - progress) ** max(power, 0.0)
+                                weight = lam * decay
+                        if weight > 0.0:
+                            loss = loss + weight * reg_sum
+                            mhc_identity_val = reg_sum.detach()
+        except Exception as e:
+            logger.warning(f"mHC-LoRA identity regularization failed: {e}")
+
+        # ---- Optional mHC-LoRA mixing entropy regularization ----
+        mhc_entropy_val: Optional[torch.Tensor] = None
+        try:
+            if network is not None:
+                lam = float(getattr(network, "mhc_entropy_reg_lambda", 0.0))
+                target = getattr(network, "mhc_entropy_reg_target", None)
+                if lam > 0.0 and hasattr(network, "unet_loras"):
+                    entropy_sum: Optional[torch.Tensor] = None
+                    count = 0
+                    for lora in getattr(network, "unet_loras", []):
+                        if hasattr(lora, "mixing_entropy"):
+                            try:
+                                ent = lora.mixing_entropy()  # type: ignore
+                            except Exception:
+                                ent = None
+                            if ent is not None:
+                                entropy_sum = ent if entropy_sum is None else entropy_sum + ent
+                                count += 1
+                    if entropy_sum is not None and count > 0:
+                        avg_entropy = entropy_sum / float(count)
+                        if target is None:
+                            n_paths = int(getattr(network, "mhc_num_paths", 1))
+                            target = math.log(max(n_paths, 1))
+                        target_tensor = avg_entropy.new_tensor(float(target))
+                        entropy_loss = (avg_entropy - target_tensor) ** 2
+                        loss = loss + lam * entropy_loss
+                        mhc_entropy_val = entropy_loss.detach()
+        except Exception as e:
+            logger.warning(f"mHC-LoRA entropy regularization failed: {e}")
+
         return LossComponents(
             total_loss=loss,
             base_loss=base_loss.detach(),
@@ -1423,6 +1495,8 @@ class TrainingLossComputer:
             bfm_frn_loss=bfm_frn_loss_value,
             ortho_reg_p=ortho_p_val,
             ortho_reg_q=ortho_q_val,
+            mhc_identity_reg=mhc_identity_val,
+            mhc_entropy_reg=mhc_entropy_val,
         )
 
     @torch.no_grad()

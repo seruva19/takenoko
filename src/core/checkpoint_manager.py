@@ -841,11 +841,21 @@ class CheckpointManager:
             ckpt_file = os.path.join(args.output_dir, ckpt_name)
 
             logger.info(f"saving checkpoint: {ckpt_file}")
-            metadata["takenoko_training_finished_at"] = str(time.time())
+            metadata["takenoko_training_finished_at"] = str(time.time())        
             metadata["takenoko_steps"] = str(steps)
             metadata["takenoko_epoch"] = str(epoch_no)
 
             metadata_to_save = minimum_metadata if args.no_metadata else metadata
+            if getattr(args, "network_module", "") == "networks.mhc_lora":
+                try:
+                    if hasattr(unwrapped_nw, "get_mhc_mixing_stats"):
+                        mhc_stats = unwrapped_nw.get_mhc_mixing_stats()
+                        if isinstance(mhc_stats, dict):
+                            for key, value in mhc_stats.items():
+                                meta_key = f"takenoko_{str(key).replace('/', '_')}"
+                                metadata_to_save[meta_key] = str(value)
+                except Exception as e:
+                    logger.warning(f"Failed to add mHC mixing stats to metadata: {e}")
 
             title = (
                 args.metadata_title
