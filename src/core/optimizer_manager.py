@@ -1509,6 +1509,134 @@ class OptimizerManager:
             logger.info(f"  - Tolerance: {tolerance}")
             logger.info(f"  - Aux Adam betas: {betas}")
 
+        elif optimizer_type == "Riemannion".lower():
+            logger.info(f"using Riemannion optimizer | {optimizer_kwargs}")
+
+            from optimizers.riemannion import (
+                SingleDeviceRiemannionWithAuxAdam,
+                apply_riemannion_config_overrides,
+            )
+
+            apply_riemannion_config_overrides(args, optimizer_kwargs)
+
+            riemannion_lr = optimizer_kwargs.get(
+                "riemannion_lr", optimizer_kwargs.get("muon_lr", 0.001)
+            )
+            riemannion_adam_lr = optimizer_kwargs.get(
+                "riemannion_adam_lr", optimizer_kwargs.get("adam_lr", lr)
+            )
+            weight_decay = optimizer_kwargs.get(
+                "riemannion_weight_decay", optimizer_kwargs.get("weight_decay", 0.001)
+            )
+            betas_value = optimizer_kwargs.get(
+                "riemannion_betas", optimizer_kwargs.get("betas", (0.9, 0.95))
+            )
+            if isinstance(betas_value, list):
+                betas = tuple(betas_value)
+            else:
+                betas = betas_value
+            if not isinstance(betas, (tuple, list)) or len(betas) != 2:
+                raise ValueError(
+                    "Riemannion auxiliary Adam betas must be a length-2 sequence. "
+                    f"Received: {betas_value}"
+                )
+            betas = tuple(betas)
+            momentum = optimizer_kwargs.get("riemannion_momentum", 0.9)
+            ns_steps = optimizer_kwargs.get("riemannion_ns_steps", 3)
+            nesterov = optimizer_kwargs.get("riemannion_nesterov", True)
+            max_elements = optimizer_kwargs.get("riemannion_max_elements", 2000000)
+            weight_decay_type = optimizer_kwargs.get("weight_decay_type", "default")
+
+            param_groups = []
+            if (
+                isinstance(trainable_params, list)
+                and len(trainable_params) > 0
+                and isinstance(trainable_params[0], dict)
+            ):
+                for group in trainable_params:
+                    if not isinstance(group, dict):
+                        continue
+                    if "lora_down" in group and "lora_up" in group:
+                        param_groups.append(
+                            dict(
+                                params=group.get("params", []),
+                                lora_down=group.get("lora_down"),
+                                lora_up=group.get("lora_up"),
+                                pair_name=group.get("pair_name"),
+                                rank=group.get("rank"),
+                                use_riemannion=True,
+                                lr=group.get("lr", riemannion_lr),
+                                momentum=momentum,
+                                ns_steps=ns_steps,
+                                nesterov=nesterov,
+                                weight_decay=weight_decay,
+                                max_elements=max_elements,
+                                initial_lr=group.get("lr", riemannion_lr),
+                                weight_decay_type=weight_decay_type,
+                            )
+                        )
+                    else:
+                        param_groups.append(
+                            dict(
+                                params=group.get("params", []),
+                                use_riemannion=False,
+                                lr=group.get("lr", riemannion_adam_lr),
+                                betas=betas,
+                                eps=optimizer_kwargs.get("eps", 1e-10),
+                                weight_decay=weight_decay,
+                                initial_lr=group.get("lr", riemannion_adam_lr),
+                                weight_decay_type=weight_decay_type,
+                            )
+                        )
+            else:
+                all_params = extract_params(trainable_params)
+                matrix_params = [p for p in all_params if p.ndim >= 2]
+                scalar_params = [p for p in all_params if p.ndim < 2]
+                if matrix_params:
+                    param_groups.append(
+                        dict(
+                            params=matrix_params,
+                            use_riemannion=True,
+                            lr=riemannion_lr,
+                            momentum=momentum,
+                            ns_steps=ns_steps,
+                            nesterov=nesterov,
+                            weight_decay=weight_decay,
+                            max_elements=max_elements,
+                            initial_lr=riemannion_lr,
+                            weight_decay_type=weight_decay_type,
+                        )
+                    )
+                if scalar_params:
+                    param_groups.append(
+                        dict(
+                            params=scalar_params,
+                            use_riemannion=False,
+                            lr=riemannion_adam_lr,
+                            betas=betas,
+                            eps=optimizer_kwargs.get("eps", 1e-10),
+                            weight_decay=weight_decay,
+                            initial_lr=riemannion_adam_lr,
+                            weight_decay_type=weight_decay_type,
+                        )
+                    )
+
+            if len(param_groups) == 0:
+                raise ValueError("No parameter groups created for Riemannion optimizer!")
+
+            optimizer_class = SingleDeviceRiemannionWithAuxAdam
+            optimizer = optimizer_class(param_groups)
+
+            logger.info("Riemannion configuration:")
+            logger.info(f"  - Riemannion LR: {riemannion_lr}")
+            logger.info(f"  - Aux Adam LR: {riemannion_adam_lr}")
+            logger.info(f"  - Weight decay: {weight_decay}")
+            logger.info(f"  - Momentum: {momentum}")
+            logger.info(f"  - Newton-Schulz steps: {ns_steps}")
+            logger.info(f"  - Max delta elements: {max_elements}")
+            logger.info(f"  - Nesterov: {nesterov}")
+            logger.info(f"  - Aux Adam betas: {betas}")
+
         elif optimizer_type == "Prodigy".lower():
             # Prodigy optimizer from prodigyopt
             try:

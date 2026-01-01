@@ -91,6 +91,7 @@ from scheduling.timestep_utils import (
 )
 from core.validation_core import ValidationCore
 from criteria.training_loss import TrainingLossComputer
+from core.loi_utils import run_loi_extra_backward
 from common.context_memory_manager import ContextMemoryManager
 
 
@@ -1990,19 +1991,129 @@ class TrainingCore:
                             logger.debug("TemporalAdamW SNR weighting skipped: %s", e)
 
                     # Start optimizer step timing
-                    start_optimizer_step_timing()
+                    loi_applied = False
+                    loi_attempted = False
+                    loi_used_extra_backward = False
                     try:
-                        optimizer.step()
-                        update_teacher_if_needed(
-                            self.transition_manager, accelerator, transformer
+                        if hasattr(network, "maybe_apply_loi_init"):
+                            unwrapped_net = accelerator.unwrap_model(network)
+                            extra_backward_fn = None
+                            if getattr(unwrapped_net, "loi_requires_backprop", False):
+                                loi_used_extra_backward = True
+
+                                def _extra_backward(adapter_setup_fn):
+                                    transition_forward_fn = None
+                                    if transition_loss_context:
+                                        transition_forward_fn = transition_loss_context.get(
+                                            "transition_forward_fn"
+                                        )
+                                    return run_loi_extra_backward(
+                                        adapter_setup_fn=adapter_setup_fn,
+                                        optimizer=optimizer,
+                                        training_core=self,
+                                        args=args,
+                                        accelerator=accelerator,
+                                        active_transformer=active_transformer,
+                                        network=network,
+                                        latents_for_dit=latents_for_dit,
+                                        batch=batch,
+                                        noise=noise,
+                                        noisy_model_input=noisy_model_input,
+                                        timesteps=timesteps,
+                                        network_dtype=network_dtype,
+                                        control_signal_processor=control_signal_processor,
+                                        controlnet=controlnet,
+                                        global_step=global_step,
+                                        reg_cls_input=reg_cls_input,
+                                        latents=latents,
+                                        noise_scheduler=noise_scheduler,
+                                        vae=vae,
+                                        target_loi_context=None,
+                                        repa_helper=repa_helper,
+                                        semfeat_helper=semfeat_helper,
+                                        reg_helper=reg_helper,
+                                        reg_cls_target=reg_cls_target,
+                                        sara_helper=sara_helper,
+                                        layer_sync_helper=layer_sync_helper,
+                                        crepa_helper=crepa_helper,
+                                        haste_helper=haste_helper,
+                                        transition_loss_context=transition_loss_context,
+                                        transition_forward_fn=transition_forward_fn,
+                                    )
+
+                                extra_backward_fn = _extra_backward
+                            loi_attempted = True
+                            loi_applied = bool(
+                                unwrapped_net.maybe_apply_loi_init(
+                                    global_step,
+                                    grads_ready=True,
+                                    extra_backward_fn=extra_backward_fn,
+                                )
+                            )
+                    except Exception:
+                        loi_applied = False
+
+                    if loi_attempted and loi_used_extra_backward and not loi_applied:
+                        logger.info(
+                            "RiemannLoRA LOI failed; recomputing gradients before step."
                         )
-                    except RuntimeError as e:
-                        logger.error(
-                            "Р РѓР Р‡Р Р„Р С‘ Make sure you're not adding empty parameter groups to the optimizer"
+                        run_loi_extra_backward(
+                            adapter_setup_fn=lambda: None,
+                            optimizer=optimizer,
+                            training_core=self,
+                            args=args,
+                            accelerator=accelerator,
+                            active_transformer=active_transformer,
+                            network=network,
+                            latents_for_dit=latents_for_dit,
+                            batch=batch,
+                            noise=noise,
+                            noisy_model_input=noisy_model_input,
+                            timesteps=timesteps,
+                            network_dtype=network_dtype,
+                            control_signal_processor=control_signal_processor,
+                            controlnet=controlnet,
+                            global_step=global_step,
+                            reg_cls_input=reg_cls_input,
+                            latents=latents,
+                            noise_scheduler=noise_scheduler,
+                            vae=vae,
+                            target_loi_context=None,
+                            repa_helper=repa_helper,
+                            semfeat_helper=semfeat_helper,
+                            reg_helper=reg_helper,
+                            reg_cls_target=reg_cls_target,
+                            sara_helper=sara_helper,
+                            layer_sync_helper=layer_sync_helper,
+                            crepa_helper=crepa_helper,
+                            haste_helper=haste_helper,
+                            transition_loss_context=transition_loss_context,
+                            transition_forward_fn=(
+                                transition_loss_context.get("transition_forward_fn")
+                                if transition_loss_context
+                                else None
+                            ),
                         )
-                        raise e
-                    # End optimizer step timing
-                    end_optimizer_step_timing()
+
+                    if not loi_applied:
+                        # Start optimizer step timing
+                        start_optimizer_step_timing()
+                        try:
+                            optimizer.step()
+                            update_teacher_if_needed(
+                                self.transition_manager, accelerator, transformer
+                            )
+                        except RuntimeError as e:
+                            logger.error(
+                                "Р РѓР Р‡Р Р„Р С‘ Make sure you're not adding empty "
+                                "parameter groups to the optimizer"
+                            )
+                            raise e
+                        # End optimizer step timing
+                        end_optimizer_step_timing()
+                    else:
+                        optimizer.zero_grad(set_to_none=True)
+
 
                     handle_relora_reset(
                         args,

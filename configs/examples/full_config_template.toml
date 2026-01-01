@@ -249,7 +249,7 @@ rope_use_float32 = false
 # - "RavenAdamW": CPU-offloaded AdamW with BF16/FP32 states
 # - "RavenAdamW8bit": CPU-offloaded 8-bit quantized AdamW
 # - "AdaFactor": Memory-efficient adaptive optimizer with relative_step scheduling
-# - "Muon", "NorMuon": Second-order optimizers for matrix parameters
+# - "Muon", "NorMuon", "Riemannion": Second-order optimizers for matrix parameters (Riemannion supports paired LoRA updates)
 # - "TemporalAdamW": AdamW with temporal gradient smoothing for video training
 # - "Prodigy": Adaptive learning rate optimizer
 # - "AdaMuon": Muon-style orthogonal optimizer with element-wise adaptivity for ≥2D params
@@ -349,9 +349,10 @@ lr_scheduler_args = ''
 # NETWORK SETTINGS
 # =============================================================================
 
-# Network module to train: "networks.lora_wan", "networks.control_lora_wan", "networks.reward_lora", "networks.vae_wan",
-# "lycoris.kohya", "networks.t_lora", "networks.moc_lora", "networks.mhc_lora", "networks.singlora_wan", "networks.wan_finetune",
-# "networks.slider_lora_wan", "networks.relora_wan"
+# Network module to train: "networks.lora_wan", "networks.riemann_lora_wan", "networks.control_lora_wan",
+# "networks.reward_lora", "networks.vae_wan", "lycoris.kohya", "networks.t_lora", "networks.moc_lora",
+# "networks.mhc_lora", "networks.singlora_wan", "networks.wan_finetune", "networks.slider_lora_wan",
+# "networks.relora_wan"
 # The module defines trainable adapters and is imported dynamically by the trainer.
 network_module = "networks.lora_wan"
 
@@ -384,6 +385,13 @@ network_alpha = 32
 # LoRA-GGPO regularization (perturbs Linear LoRA weights during training):
 # Parsed by `takenoko.create_args_from_config` into args.ggpo_sigma/ggpo_beta for the loss hooks.
 # network_args = ["ggpo_sigma=0.03", "ggpo_beta=0.01"]
+# RiemannLoRA (requires network_module = "networks.riemann_lora_wan"):
+# - loi_enabled: enable gradient-informed initialization (default false)
+# - loi_alpha: scale for LOI update (default 0.1)
+# - loi_oversample: randomized SVD oversampling parameter p (default 2)
+# - loi_power_iters: randomized SVD power iterations q (default 1)
+# - loi_max_elements: skip LOI when out_dim * in_dim exceeds this (default 2000000)
+# network_args = ["loi_enabled=true", "loi_alpha=0.1", "loi_oversample=2", "loi_power_iters=1", "loi_max_elements=2000000"]
 
 # T-LoRA (timestep-gated LoRA)
 # Activated when network_module = "networks.t_lora".

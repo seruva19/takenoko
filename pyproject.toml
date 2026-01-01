@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.10, <3.13"
 dependencies = [
   "accelerate==1.6.0",
-  "adv-optm==1.4.0",
+  "adv-optm==1.4.1",
   "av==14.0.1",
   "bitsandbytes>=0.45.5",
   "decord>=0.6.0",
@@ -47,6 +47,7 @@ dependencies = [
   "timm>=1.0.22",
   "toml==0.10.2",
   "torch-optimi>=0.3.0",
+  "torch-optimizer==0.3.0",
   "torch>=2.6.0,<2.7.0",
   "torchao==0.13.0",
   "torchmetrics>=1.7.4",

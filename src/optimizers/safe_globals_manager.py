@@ -32,6 +32,7 @@ class SafeGlobalsManager:
                 CompressedRelationships,
                 AsyncComputeManager,
             )
+            from optimizers.riemannion import SingleDeviceRiemannionWithAuxAdam
 
             # Add to PyTorch's safe globals
             torch.serialization.add_safe_globals(
@@ -46,6 +47,8 @@ class SafeGlobalsManager:
                     CompactStateDict,
                     CompressedRelationships,
                     AsyncComputeManager,
+                    # Riemannion optimizer classes
+                    SingleDeviceRiemannionWithAuxAdam,
                 ]
             )
             logger.info("✅ Added custom optimizer classes to PyTorch safe globals")
