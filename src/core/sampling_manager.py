@@ -868,6 +868,10 @@ class SamplingManager:
                                 unwrapped_net.update_rank_mask_from_timesteps(
                                     timestep, max_timestep=1000, device=device
                                 )
+                            if hasattr(unwrapped_net, "set_current_step"):
+                                unwrapped_net.set_current_step(steps)
+                            if hasattr(unwrapped_net, "set_mhc_timestep"):
+                                unwrapped_net.set_mhc_timestep(timestep)
                         except Exception:
                             pass
                         arg_c_step = arg_c
