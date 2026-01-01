@@ -1258,6 +1258,145 @@ class OptimizerManager:
             logger.info(f"  - Sign stabilization: {sign_stabilization}")
             logger.info(f"  - Aux Adam betas: {betas}")
 
+        elif optimizer_type == "MuonClip".lower():
+            logger.info(f"using MuonClip optimizer | {optimizer_kwargs}")
+
+            from optimizers.muonclip import (
+                SingleDeviceMuonClipWithAuxAdam,
+                auto_detect_attention_params,
+            )
+
+            all_params = extract_params(trainable_params)
+
+            hidden_weights = [p for p in all_params if p.ndim >= 2]
+            hidden_gains_biases = [p for p in all_params if p.ndim < 2]
+
+            log_param_structure(
+                "MuonClip",
+                "Aux Adam",
+                trainable_params,
+                all_params,
+                hidden_weights,
+                hidden_gains_biases,
+            )
+
+            if len(hidden_weights) == 0 and len(hidden_gains_biases) == 0:
+                raise ValueError("No trainable parameters found for MuonClip optimizer!")
+
+            if len(hidden_weights) == 0:
+                logger.warning(
+                    "No hidden weight parameters (≥2D) found for MuonClip. Consider using a different optimizer."
+                )
+
+            if len(hidden_gains_biases) == 0:
+                logger.info(
+                    "No bias/gain parameters (<2D) found for MuonClip. Optimizer will only update matrix weights."
+                )
+
+            # MuonClip-specific parameters
+            muonclip_lr = optimizer_kwargs.get(
+                "muonclip_lr", optimizer_kwargs.get("muon_lr", 0.001)
+            )
+            muonclip_adam_lr = optimizer_kwargs.get(
+                "muonclip_adam_lr", optimizer_kwargs.get("adam_lr", lr)
+            )
+            weight_decay = optimizer_kwargs.get(
+                "muonclip_weight_decay", optimizer_kwargs.get("weight_decay", 0.001)
+            )
+            betas_value = optimizer_kwargs.get(
+                "muonclip_betas", optimizer_kwargs.get("betas", (0.9, 0.95))
+            )
+            if isinstance(betas_value, list):
+                betas = tuple(betas_value)
+            else:
+                betas = betas_value
+            if not isinstance(betas, (tuple, list)) or len(betas) != 2:
+                raise ValueError(
+                    f"MuonClip auxiliary Adam betas must be a length-2 sequence. Received: {betas_value}"
+                )
+            betas = tuple(betas)
+
+            momentum = optimizer_kwargs.get(
+                "muonclip_momentum", optimizer_kwargs.get("momentum", 0.95)
+            )
+            tau = optimizer_kwargs.get("muonclip_tau", optimizer_kwargs.get("tau", 100.0))
+            ns_steps = optimizer_kwargs.get(
+                "muonclip_ns_steps", optimizer_kwargs.get("ns_steps", 5)
+            )
+            nesterov = optimizer_kwargs.get(
+                "muonclip_nesterov", optimizer_kwargs.get("nesterov", True)
+            )
+            weight_decay_type = optimizer_kwargs.get("weight_decay_type", "default")
+
+            # Auto-detect attention parameters if requested
+            auto_detect = optimizer_kwargs.get("muonclip_auto_detect_attention", True)
+
+            param_groups = []
+
+            if len(hidden_weights) > 0:
+                param_groups.append(
+                    dict(
+                        params=hidden_weights,
+                        use_muon=True,
+                        lr=muonclip_lr,
+                        weight_decay=weight_decay,
+                        momentum=momentum,
+                        tau=tau,
+                        ns_steps=ns_steps,
+                        nesterov=nesterov,
+                        initial_lr=muonclip_lr,
+                        weight_decay_type=weight_decay_type,
+                    )
+                )
+
+            if len(hidden_gains_biases) > 0:
+                param_groups.append(
+                    dict(
+                        params=hidden_gains_biases,
+                        use_muon=False,
+                        lr=muonclip_adam_lr,
+                        betas=tuple(betas),
+                        weight_decay=weight_decay,
+                        initial_lr=muonclip_adam_lr,
+                        weight_decay_type=weight_decay_type,
+                    )
+                )
+
+            if len(param_groups) == 0:
+                raise ValueError("No parameter groups created for MuonClip optimizer!")
+
+            optimizer_class = SingleDeviceMuonClipWithAuxAdam
+            optimizer = optimizer_class(param_groups)
+
+            # Auto-detect and register attention parameters if enabled
+            if auto_detect and transformer is not None:
+                try:
+                    attention_params = auto_detect_attention_params(
+                        transformer, all_params
+                    )
+                    if attention_params:
+                        optimizer.register_attention_params(attention_params)
+                        logger.info("QK-Clip attention stabilization enabled")
+                    else:
+                        logger.info(
+                            "No attention parameters detected - MuonClip will work as standard Muon"
+                        )
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to auto-detect attention parameters: {e}. "
+                        "MuonClip will work as standard Muon."
+                    )
+
+            logger.info("MuonClip configuration:")
+            logger.info(f"  - MuonClip LR: {muonclip_lr}")
+            logger.info(f"  - Aux Adam LR: {muonclip_adam_lr}")
+            logger.info(f"  - Weight decay: {weight_decay}")
+            logger.info(f"  - Momentum: {momentum}")
+            logger.info(f"  - QK-Clip tau: {tau}")
+            logger.info(f"  - Newton-Schulz steps: {ns_steps}")
+            logger.info(f"  - Nesterov: {nesterov}")
+            logger.info(f"  - Aux Adam betas: {betas}")
+
         elif optimizer_type == "Prodigy".lower():
             # Prodigy optimizer from prodigyopt
             try:
