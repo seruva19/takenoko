@@ -133,6 +133,8 @@ class SliderIntegration:
                 network=network,
                 control_signal_processor=kwargs.get("control_signal_processor"),
                 repa_helper=kwargs.get("repa_helper"),
+                semfeat_helper=kwargs.get("semfeat_helper"),
+                bfm_conditioning_helper=kwargs.get("bfm_conditioning_helper"),
                 reg_helper=kwargs.get("reg_helper"),
                 reg_cls_pred=kwargs.get("reg_cls_pred"),
                 reg_cls_target=kwargs.get("reg_cls_target"),

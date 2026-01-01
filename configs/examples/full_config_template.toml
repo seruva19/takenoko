@@ -643,7 +643,7 @@ use_stochastic_rounding_cuda = false
 # Method to sample timesteps
 # Available methods: sigma, uniform, sigmoid, shift, flux_shift, logsnr, qwen_shift, qinglong_flux, qinglong_qwen, logit_normal,
 # bell_shaped, half_bell, lognorm_blend, lognorm_continuous_blend, enhanced_sigmoid, fopp, content, style, content_style_blend, mode_shift,
-# temporal_pyramid
+# temporal_pyramid, blockwise
 timestep_sampling = "shift"
 
 # Shift amount for discrete timestep sampling (used with 'shift' timestep_sampling)
@@ -929,6 +929,114 @@ dispersive_loss_metric = "l2_sq"
 
 # Optional: pool spatial tokens per frame before dispersion ("none" or "frame_mean")
 dispersive_loss_pooling = "none"
+
+# ============================================================================
+# ⚠️ BLOCKWISE FLOW MATCHING SETTINGS
+# ============================================================================
+
+# Enable blockwise flow matching for training (no inference changes).
+# Requires timestep_sampling = "blockwise".
+enable_blockwise_flow_matching = false
+
+# Number of temporal segments for blockwise sampling (>= 2).
+bfm_num_segments = 6
+
+# Segment sampling strategy: "stratified" forces per-batch segment coverage,
+# "uniform" samples globally within [bfm_segment_min_t, bfm_segment_max_t].
+bfm_segment_sampling = "stratified"
+
+# Segment boundary min in normalized time [0.0, 1.0].
+bfm_segment_min_t = 0.0
+
+# Segment boundary max in normalized time [0.0, 1.0].
+bfm_segment_max_t = 1.0
+
+# Log per-segment losses during training (informational).
+bfm_log_segment_losses = true
+
+# Use segment endpoints to compute the blockwise FM interpolant + velocity target (Eq. 6-8).
+# When true, targets come from segment endpoints with shared noise (training-only).
+# Set false to keep the standard flow-matching target.
+bfm_use_segment_objective = true
+
+# Semantic Feature Guidance (SemFeat) alignment loss (training-only).
+bfm_semfeat_enabled = false
+
+# Pretrained encoder specification (EncoderManager format: "<type>-<arch>-<config>").
+bfm_semfeat_encoder_name = "dinov2-vit-b14"
+
+# Encoder input resolution (256 or 512; 512 only supported for DINOv2).
+bfm_semfeat_resolution = 256
+
+# Diffusion block index to capture features for alignment (0-based).
+bfm_semfeat_alignment_depth = 8
+
+# SemFeat alignment loss weight (>= 0).
+bfm_semfeat_loss_weight = 0.05
+
+# Spatial alignment for SemFeat token grids (recommended true).
+bfm_semfeat_spatial_align = true
+
+# Projection dimension for SemFeat alignment head (must be > 0).
+bfm_semfeat_projection_dim = 1024
+
+# Inject SemFeat conditioning tokens into text context (training-only).
+bfm_semfeat_conditioning_enabled = false
+
+# Conditioning strength multiplier (>= 0).
+bfm_semfeat_conditioning_scale = 1.0
+
+# Drop probability for SemFeat conditioning tokens in training [0, 1].
+bfm_semfeat_conditioning_dropout = 0.0
+
+# Add learned segment index tokens to context (training-only).
+bfm_segment_conditioning_enabled = false
+
+# Segment token strength multiplier (>= 0).
+bfm_segment_conditioning_scale = 1.0
+
+# Enable segment-specific velocity blocks (replicate DiT blocks per segment).
+# Warning: changes inference behavior if enabled.
+bfm_segment_blocks_enabled = false
+
+# Segment block mode: "shared" reuses base blocks, "replicated" creates per-segment blocks.
+bfm_segment_block_mode = "shared"
+
+# Inject SemFeat tokens into the model time embedding (training/inference change).
+bfm_semfeat_model_injection_enabled = false
+
+# Scale for SemFeat time embedding injection (>= 0).
+bfm_semfeat_model_injection_scale = 1.0
+
+# Enable FRN residual approximation training (training-only).
+bfm_frn_enabled = false
+
+# FRN loss weight (>= 0).
+bfm_frn_loss_weight = 0.1
+
+# FRN hidden dimension (> 0).
+bfm_frn_hidden_dim = 1024
+
+# Enable BFM inference features (changes inference behavior; gated off by default).
+bfm_inference_enabled = false
+
+# Enable semantic feature conditioning during inference (requires bfm_inference_enabled).
+bfm_inference_semfeat_enabled = false
+
+# Refresh semantic features "per_segment" or "per_step" during inference.
+bfm_inference_semfeat_refresh = "per_segment"
+
+# Semantic feature strength multiplier for inference (>= 0).
+bfm_inference_semfeat_scale = 1.0
+
+# Enable segment token conditioning during inference (requires bfm_inference_enabled).
+bfm_inference_segment_enabled = false
+
+# Segment token strength multiplier for inference (>= 0).
+bfm_inference_segment_scale = 1.0
+
+# Use FRN-predicted semantic tokens during inference (requires bfm_frn_enabled).
+bfm_inference_use_frn = false
 
 # =============================================================================
 # ⚠️ EQUILIBRIUM MATCHING SETTINGS
@@ -3497,11 +3605,11 @@ log_batch_item_info = false
 # - 1: every step
 # - 10: every 10 steps
 # Default: 1
-log_batch_item_info_interval = 1
+log_batch_item_info_interval = 50
 
 # Limit the number of items printed per step (batch can contain multiple items).
 # Default: 8
-log_batch_item_info_max_items = 8
+log_batch_item_info_max_items = 10
 
 # Enable gradient norm logging (logs total gradient norm before clipping)
 # Creates TensorBoard metric: grad_norm

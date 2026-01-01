@@ -3,6 +3,9 @@ import logging
 from typing import Any, Dict
 from common.logger import get_logger
 from enhancements.semanticgen.config import parse_semanticgen_config
+from enhancements.blockwise_flow_matching.config import (
+    parse_blockwise_flow_matching_config,
+)
 from enhancements.equivdm_noise.config import parse_equivdm_noise_config
 from enhancements.catlvdm.config import parse_catlvdm_config
 from enhancements.temporal_pyramid.config import parse_temporal_pyramid_config
@@ -908,6 +911,7 @@ def create_args_from_config(
 
     # Timestep and flow matching settings
     args.timestep_sampling = config.get("timestep_sampling", "shift")
+    parse_blockwise_flow_matching_config(config, args, logger)
     parse_temporal_pyramid_config(config, args, logger)
 
     # Parse new timestep optimization flags

@@ -165,6 +165,19 @@ class ModelManager:
                 if hasattr(args, "compile_args") and args.compile_args is not None
                 else None
             ),
+            bfm_segment_blocks_enabled=bool(
+                getattr(args, "bfm_segment_blocks_enabled", False)
+            ),
+            bfm_segment_block_mode=str(
+                getattr(args, "bfm_segment_block_mode", "shared")
+            ),
+            bfm_num_segments=int(getattr(args, "bfm_num_segments", 6)),
+            bfm_semfeat_model_injection_enabled=bool(
+                getattr(args, "bfm_semfeat_model_injection_enabled", False)
+            ),
+            bfm_semfeat_model_injection_scale=float(
+                getattr(args, "bfm_semfeat_model_injection_scale", 1.0)
+            ),
             enable_memory_mapping=bool(getattr(args, "enable_memory_mapping", False)),
             enable_zero_copy_loading=bool(
                 getattr(args, "enable_zero_copy_loading", False)
@@ -327,6 +340,19 @@ class ModelManager:
             ),
             scale_input_tensor=getattr(args, "scale_input_tensor", None),
             rope_use_float32=bool(getattr(args, "rope_use_float32", False)),
+            bfm_segment_blocks_enabled=bool(
+                getattr(args, "bfm_segment_blocks_enabled", False)
+            ),
+            bfm_segment_block_mode=str(
+                getattr(args, "bfm_segment_block_mode", "shared")
+            ),
+            bfm_num_segments=int(getattr(args, "bfm_num_segments", 6)),
+            bfm_semfeat_model_injection_enabled=bool(
+                getattr(args, "bfm_semfeat_model_injection_enabled", False)
+            ),
+            bfm_semfeat_model_injection_scale=float(
+                getattr(args, "bfm_semfeat_model_injection_scale", 1.0)
+            ),
             enable_memory_mapping=bool(getattr(args, "enable_memory_mapping", False)),
             enable_zero_copy_loading=bool(
                 getattr(args, "enable_zero_copy_loading", False)

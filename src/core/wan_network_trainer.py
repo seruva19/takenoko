@@ -50,6 +50,10 @@ from enhancements.semanticgen.trainer_integration import (
     setup_semantic_training_integration,
     teardown_semantic_training_integration,
 )
+from enhancements.blockwise_flow_matching.conditioning import (
+    BFMConditioningHelper,
+    infer_text_context_dim,
+)
 from scheduling.timestep_utils import (
     initialize_timestep_distribution,
     get_noisy_model_input_and_timesteps,
@@ -860,6 +864,46 @@ class WanNetworkTrainer:
                 logger.warning(f"CREPA setup failed: {exc}")
                 crepa_helper = None
 
+        semfeat_helper = None
+        if getattr(args, "bfm_semfeat_enabled", False):
+            try:
+                from enhancements.blockwise_flow_matching.semantic_guidance import (
+                    SemFeatAlignmentHelper,
+                )
+
+                semfeat_helper = SemFeatAlignmentHelper(
+                    transformer, args, accelerator.device
+                )
+                semfeat_params = semfeat_helper.get_trainable_params()
+                if semfeat_params:
+                    trainable_params.append(
+                        {"params": semfeat_params, "lr": args.learning_rate}
+                    )
+                    lr_descriptions.append("bfm_semfeat_projection")
+            except Exception as exc:
+                logger.warning(f"BFM SemFeat setup failed: {exc}")
+                semfeat_helper = None
+
+        bfm_conditioning_helper = None
+        if (
+            getattr(args, "bfm_semfeat_conditioning_enabled", False)
+            or getattr(args, "bfm_segment_conditioning_enabled", False)
+        ):
+            try:
+                text_dim = infer_text_context_dim(transformer)
+                bfm_conditioning_helper = BFMConditioningHelper(
+                    args, text_dim, accelerator.device
+                )
+                bfm_params = bfm_conditioning_helper.get_trainable_params()
+                if bfm_params:
+                    trainable_params.append(
+                        {"params": bfm_params, "lr": args.learning_rate}
+                    )
+                    lr_descriptions.append("bfm_conditioning")
+            except Exception as exc:
+                logger.warning(f"BFM conditioning setup failed: {exc}")
+                bfm_conditioning_helper = None
+
         (
             semantic_conditioning_helper,
             semantic_alignment_helper,
@@ -972,6 +1016,7 @@ class WanNetworkTrainer:
             lr_scheduler=lr_scheduler,
             semantic_conditioning_helper=semantic_conditioning_helper,
             semantic_alignment_helper=semantic_alignment_helper,
+            bfm_conditioning_helper=bfm_conditioning_helper,
         )
         prepared = accelerator.prepare(*prepare_items)
         prepared_map = dict(zip(prepare_slots, prepared))
@@ -982,6 +1027,9 @@ class WanNetworkTrainer:
         )
         semantic_alignment_helper = prepared_map.get(
             "semantic_alignment_helper", semantic_alignment_helper
+        )
+        bfm_conditioning_helper = prepared_map.get(
+            "bfm_conditioning_helper", bfm_conditioning_helper
         )
         optimizer = prepared_map["optimizer"]
         train_dataloader = prepared_map["train_dataloader"]
@@ -997,6 +1045,7 @@ class WanNetworkTrainer:
             transformer.eval()
 
         accelerator.unwrap_model(network).prepare_grad_etc(transformer)
+        self.training_core.bfm_conditioning_helper = bfm_conditioning_helper
         # Initialize optional weight EMA before registering checkpoint hooks/resume
         try:
             self.training_core.initialize_weight_ema(
@@ -1515,6 +1564,13 @@ class WanNetworkTrainer:
                 except Exception as exc:
                     logger.warning(f"LayerSync setup failed: {exc}")
                     layer_sync_helper = None
+            if semfeat_helper is not None:
+                try:
+                    semfeat_helper.setup_hooks()
+                    semfeat_helper = accelerator.prepare(semfeat_helper)
+                except Exception as exc:
+                    logger.warning(f"BFM SemFeat hook setup failed: {exc}")
+                    semfeat_helper = None
 
             from enhancements.haste.integration import (
                 add_haste_params,
@@ -1594,7 +1650,8 @@ class WanNetworkTrainer:
                 remove_model=remove_model,
                 is_main_process=is_main_process,
                 val_epoch_step_sync=val_epoch_step_sync,
-                repa_helper=repa_helper if sara_helper is None else None,       
+                repa_helper=repa_helper if sara_helper is None else None,
+                semfeat_helper=semfeat_helper,
                 reg_helper=reg_helper,
                 sara_helper=sara_helper,
                 layer_sync_helper=layer_sync_helper,
@@ -1615,6 +1672,8 @@ class WanNetworkTrainer:
             from enhancements.haste.integration import remove_haste_helper
 
             remove_haste_helper(haste_helper)
+        if "semfeat_helper" in locals() and semfeat_helper is not None:
+            semfeat_helper.remove_hooks()
         if "crepa_helper" in locals() and crepa_helper is not None:
             crepa_helper.remove_hooks()
         if "semantic_alignment_helper" in locals():

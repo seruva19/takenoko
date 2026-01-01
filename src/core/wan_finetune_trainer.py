@@ -45,6 +45,10 @@ from distillation.glance_distiller import GlanceDistiller
 from core.vae_training_core import VaeTrainingCore
 from reward.reward_training_core import RewardTrainingCore
 from enhancements.repa.repa_helper import RepaHelper
+from enhancements.blockwise_flow_matching.conditioning import (
+    BFMConditioningHelper,
+    infer_text_context_dim,
+)
 from tqdm import tqdm
 
 from finetune.checkpoint_utils import CheckpointUtils
@@ -631,6 +635,7 @@ class WanFinetuneTrainer:
         batch: Dict[str, torch.Tensor],
         text_encoder: Optional[torch.nn.Module] = None,
         repa_helper: Optional[Any] = None,
+        semfeat_helper: Optional[Any] = None,
         reg_helper: Optional[Any] = None,
         sara_helper: Optional[Any] = None,
         layer_sync_helper: Optional[Any] = None,
@@ -788,6 +793,8 @@ class WanFinetuneTrainer:
             network=transformer,
             control_signal_processor=None,
             repa_helper=repa_helper if sara_helper is None else None,
+            semfeat_helper=semfeat_helper,
+            bfm_conditioning_helper=bfm_conditioning_helper,
             reg_helper=reg_helper,
             reg_cls_pred=reg_cls_pred,
             reg_cls_target=reg_cls_target,
@@ -1214,6 +1221,46 @@ class WanFinetuneTrainer:
                 logger.warning(f"CREPA setup failed: {exc}")
                 crepa_helper = None
 
+        semfeat_helper = None
+        if getattr(args, "bfm_semfeat_enabled", False):
+            try:
+                from enhancements.blockwise_flow_matching.semantic_guidance import (
+                    SemFeatAlignmentHelper,
+                )
+
+                semfeat_helper = SemFeatAlignmentHelper(
+                    transformer, args, accelerator.device
+                )
+                semfeat_params = semfeat_helper.get_trainable_params()
+                if semfeat_params:
+                    params_to_optimize.append(
+                        {"params": semfeat_params, "lr": args.learning_rate}
+                    )
+                    param_names.append("bfm_semfeat_projection")
+            except Exception as exc:
+                logger.warning(f"BFM SemFeat setup failed: {exc}")
+                semfeat_helper = None
+
+        bfm_conditioning_helper = None
+        if (
+            getattr(args, "bfm_semfeat_conditioning_enabled", False)
+            or getattr(args, "bfm_segment_conditioning_enabled", False)
+        ):
+            try:
+                text_dim = infer_text_context_dim(transformer)
+                bfm_conditioning_helper = BFMConditioningHelper(
+                    args, text_dim, accelerator.device
+                )
+                bfm_params = bfm_conditioning_helper.get_trainable_params()
+                if bfm_params:
+                    params_to_optimize.append(
+                        {"params": bfm_params, "lr": args.learning_rate}
+                    )
+                    param_names.append("bfm_conditioning")
+            except Exception as exc:
+                logger.warning(f"BFM conditioning setup failed: {exc}")
+                bfm_conditioning_helper = None
+
         # Log detailed network information if verbose mode is enabled
         if getattr(args, "verbose_network", False):
             NetworkLoggingUtils.log_detailed_network_info(transformer, args)
@@ -1571,6 +1618,23 @@ class WanFinetuneTrainer:
             except Exception as exc:
                 logger.warning(f"CREPA setup failed: {exc}")
                 crepa_helper = None
+
+        if semfeat_helper is not None:
+            try:
+                semfeat_helper.setup_hooks()
+                semfeat_helper = accelerator.prepare(semfeat_helper)
+            except Exception as exc:
+                logger.warning(f"BFM SemFeat hook setup failed: {exc}")
+                semfeat_helper = None
+        if bfm_conditioning_helper is not None:
+            try:
+                bfm_conditioning_helper = accelerator.prepare(
+                    bfm_conditioning_helper
+                )
+            except Exception as exc:
+                logger.warning(f"BFM conditioning setup failed: {exc}")
+                bfm_conditioning_helper = None
+        self.training_core.bfm_conditioning_helper = bfm_conditioning_helper
 
         # Initialize REG helper if enabled
         reg_helper = None
@@ -1951,6 +2015,7 @@ class WanFinetuneTrainer:
                         batch,
                         text_encoder,
                         repa_helper=repa_helper,
+                        semfeat_helper=semfeat_helper,
                         reg_helper=reg_helper,
                         sara_helper=None,
                         layer_sync_helper=layer_sync_helper,
@@ -2340,6 +2405,8 @@ class WanFinetuneTrainer:
             from enhancements.haste.integration import remove_haste_helper
 
             remove_haste_helper(haste_helper)
+        if "semfeat_helper" in locals() and semfeat_helper is not None:
+            semfeat_helper.remove_hooks()
         if "crepa_helper" in locals() and crepa_helper is not None:
             crepa_helper.remove_hooks()
         progress_bar.close()

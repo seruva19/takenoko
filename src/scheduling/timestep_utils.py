@@ -20,6 +20,10 @@ from scheduling.timestep_distribution import (
     TimestepDistribution,
     should_use_precomputed_timesteps,
 )
+from enhancements.blockwise_flow_matching.segment_utils import (
+    build_segment_boundaries,
+    stratified_segment_timesteps,
+)
 from utils.train_utils import get_sigmas, compute_density_for_timestep_sampling
 from scheduling.fopp import (
     FoPPScheduler,
@@ -343,6 +347,21 @@ def map_uniform_to_sampling(
         z = _normal_ppf(t_uniform)
         z = z * float(getattr(args, "sigmoid_scale", 1.0))
         return torch.sigmoid(z)
+
+    if method == "blockwise":
+        boundaries = build_segment_boundaries(
+            num_segments=int(getattr(args, "bfm_num_segments", 6)),
+            min_t=float(getattr(args, "bfm_segment_min_t", 0.0)),
+            max_t=float(getattr(args, "bfm_segment_max_t", 1.0)),
+            device=device,
+            dtype=t_uniform.dtype,
+        )
+        sampling = str(getattr(args, "bfm_segment_sampling", "stratified"))
+        if sampling == "stratified":
+            return stratified_segment_timesteps(
+                t_uniform.size(0), boundaries, t_uniform=t_uniform
+            )
+        return boundaries[0] + t_uniform * (boundaries[-1] - boundaries[0])
 
     if method == "bell_shaped":
         # Build bell density over x∈[0,1], invert its CDF at given uniform quantiles
@@ -747,6 +766,21 @@ def _generate_timesteps_from_distribution(
             stage_end = boundaries[stage + 1]
             t = stage_start + u * (stage_end - stage_start)
 
+    elif args.timestep_sampling == "blockwise":
+        boundaries = build_segment_boundaries(
+            num_segments=int(getattr(args, "bfm_num_segments", 6)),
+            min_t=float(getattr(args, "bfm_segment_min_t", 0.0)),
+            max_t=float(getattr(args, "bfm_segment_max_t", 1.0)),
+            device=device,
+            dtype=torch.float32,
+        )
+        sampling = str(getattr(args, "bfm_segment_sampling", "stratified"))
+        if sampling == "stratified":
+            t = stratified_segment_timesteps(batch_size, boundaries)
+        else:
+            t = torch.rand(batch_size, device=device)
+            t = boundaries[0] + t * (boundaries[-1] - boundaries[0])
+
     else:
         raise ValueError(f"Unknown timestep sampling method: {args.timestep_sampling}")
 
@@ -1071,6 +1105,7 @@ def get_noisy_model_input_and_timesteps(
             or args.timestep_sampling == "content_style_blend"
             or args.timestep_sampling == "mode_shift"
             or args.timestep_sampling == "temporal_pyramid"
+            or args.timestep_sampling == "blockwise"
         ):
             # Sample timesteps using standard methods
             if presampled_uniform is not None and not should_use_precomputed_timesteps(

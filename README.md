@@ -114,3 +114,7 @@ Keep in mind that work on some features is not yet complete due to time and hard
 | [TPDiff: Temporal Pyramid Video Diffusion Model](https://arxiv.org/abs/2503.09566) | paper | - Temporal pyramid bounded sampling<br>- Stage‑wise temporal resampling<br>- Stage‑specific scheduler‑aware gamma/sigma | Lingmin Ran, Mike Zheng Shou | CC BY 4.0 | |
 | [relora](https://github.com/Guitaricet/relora) | repo | - ReLoRA pipeline | [Guitaricet](https://github.com/Guitaricet) | Apache 2.0 | see also [paper](https://arxiv.org/abs/2307.05695) |
 | [DenseDPO: Fine-Grained Temporal Preference Optimization for Video Diffusion Models](https://arxiv.org/abs/2506.03517) | paper | - DenseDPO training method | Ziyi Wu, Anil Kag, Ivan Skorokhodov, Willi Menapace, Ashkan Mirzaei, Igor Gilitschenski, Sergey Tulyakov, Aliaksandr Siarohin | CC BY 4.0 | |
+| [Blockwise-Flow-Matching](https://github.com/mlvlab/Blockwise-Flow-Matching) | repo | - Blockwise timestep segment objective<br>- SemFeat alignment conditioning<br>- SemFeat time-embedding injection<br>- FRN loss| [mlvlab](https://github.com/mlvlab) |  | see also [paper](https://arxiv.org/abs/2510.21167) |
+
+
+

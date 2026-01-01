@@ -144,6 +144,20 @@ def collect_and_log_training_metrics(
         )
     if loss_components.repa_loss is not None:
         logs["loss/repa"] = float(loss_components.repa_loss.item())
+    if getattr(loss_components, "bfm_semfeat_loss", None) is not None:
+        logs["loss/bfm_semfeat"] = float(
+            loss_components.bfm_semfeat_loss.item()
+        )
+    if getattr(loss_components, "bfm_semfeat_similarity", None) is not None:
+        logs["bfm_semfeat_similarity"] = float(
+            loss_components.bfm_semfeat_similarity.item()
+        )
+    if getattr(loss_components, "bfm_frn_loss", None) is not None:
+        logs["loss/bfm_frn"] = float(loss_components.bfm_frn_loss.item())
+    if getattr(loss_components, "bfm_segment_losses", None):
+        for key, value in loss_components.bfm_segment_losses.items():
+            if value is not None:
+                logs[f"loss/bfm_{key}"] = float(value.item())
     if getattr(loss_components, "reg_align_loss", None) is not None:
         logs["loss/reg_align"] = float(loss_components.reg_align_loss.item())
     if getattr(loss_components, "reg_cls_loss", None) is not None:

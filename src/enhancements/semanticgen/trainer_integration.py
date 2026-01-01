@@ -28,6 +28,7 @@ def build_semantic_prepare_items(
     lr_scheduler: Any,
     semantic_conditioning_helper: Optional[Any],
     semantic_alignment_helper: Optional[Any],
+    bfm_conditioning_helper: Optional[Any],
 ) -> tuple[list[Any], list[str]]:
     items: list[Any] = [network]
     slots: list[str] = ["network"]
@@ -40,6 +41,9 @@ def build_semantic_prepare_items(
     if semantic_alignment_helper is not None:
         items.append(semantic_alignment_helper)
         slots.append("semantic_alignment_helper")
+    if bfm_conditioning_helper is not None:
+        items.append(bfm_conditioning_helper)
+        slots.append("bfm_conditioning_helper")
     items.extend([optimizer, train_dataloader, lr_scheduler])
     slots.extend(["optimizer", "train_dataloader", "lr_scheduler"])
     return items, slots

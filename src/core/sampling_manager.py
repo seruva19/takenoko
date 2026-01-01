@@ -26,6 +26,10 @@ from torch.utils.tensorboard.writer import SummaryWriter
 from energy_based.eqm_mode.integration import EqMModeContext, setup_eqm_mode
 from energy_based.eqm_mode.eval import save_npz_from_samples
 from energy_based.eqm_mode.sampling_helper import EqMSamplingResult, run_eqm_sampling
+from sampling.bfm_sampling import (
+    apply_bfm_sampling_step,
+    setup_bfm_sampling,
+)
 
 logger = get_logger(__name__, level=logging.INFO)
 
@@ -612,6 +616,11 @@ class SamplingManager:
         else:
             context_null = None
 
+        bfm_state = setup_bfm_sampling(
+            args, context=context, device=device, vae=vae
+        )
+        bfm_inference_semfeat = bfm_state.bfm_inference_semfeat
+
         num_channels_latents = 16  # model.in_dim
         vae_scale_factor = self.config["vae_stride"][1]
 
@@ -763,6 +772,9 @@ class SamplingManager:
                 boundary = boundary / 1000.0
 
             with torch.no_grad():
+                if bfm_inference_semfeat and vae is not None:
+                    vae.to(device)
+                    vae.eval()
                 reg_cls_token = None
                 reg_scheduler = None
                 if reg_enabled:
@@ -858,12 +870,25 @@ class SamplingManager:
                                 )
                         except Exception:
                             pass
+                        arg_c_step = arg_c
+                        arg_null_step = arg_null
+                        if bfm_state is not None:
+                            arg_c_step, arg_null_step, _ = apply_bfm_sampling_step(
+                                bfm_state,
+                                context=context,
+                                context_null=context_null,
+                                timestep=timestep,
+                                latent=latent,
+                                vae=vae,
+                                arg_c=arg_c,
+                                arg_null=arg_null,
+                            )
 
                         if reg_enabled and reg_cls_token is not None:
-                            arg_c["reg_cls_token"] = reg_cls_token
-                            arg_null["reg_cls_token"] = reg_cls_token
+                            arg_c_step["reg_cls_token"] = reg_cls_token
+                            arg_null_step["reg_cls_token"] = reg_cls_token
                         model_out_cond = model(
-                            latent_model_input, t=timestep, **arg_c
+                            latent_model_input, t=timestep, **arg_c_step
                         )
                         reg_cls_pred_cond = None
                         if isinstance(model_out_cond, tuple):
@@ -873,7 +898,7 @@ class SamplingManager:
                         noise_pred_cond = out_cond[0]
                         if do_classifier_free_guidance:
                             model_out_uncond = model(
-                                latent_model_input, t=timestep, **arg_null
+                                latent_model_input, t=timestep, **arg_null_step
                             )
                             reg_cls_pred_uncond = None
                             if isinstance(model_out_uncond, tuple):

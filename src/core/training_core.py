@@ -46,6 +46,11 @@ from enhancements.differential_guidance.training_integration import (
     create_differential_guidance_integration,
     transform_target_with_differential_guidance,
 )
+from enhancements.blockwise_flow_matching.segment_utils import (
+    build_segment_boundaries,
+    normalize_timesteps,
+    segment_index_for_timesteps,
+)
 from enhancements.temporal_pyramid.training_integration import (
     create_temporal_pyramid_helper,
 )
@@ -277,6 +282,8 @@ class TrainingCore:
         self.semantic_conditioning_helper = None
         self.semantic_alignment_helper = None
         self.semanticgen_state = SemanticGenTrainingState()
+        # BFM conditioning helper (optional, training-only)
+        self.bfm_conditioning_helper = None
 
         # Error recycling helper (optional, training-only)
         self.error_recycling_helper: Optional[ErrorRecyclingHelper] = None
@@ -575,6 +582,44 @@ class TrainingCore:
                 context,
                 attention_masks=attention_masks,
             )
+        if self.bfm_conditioning_helper is not None:
+            try:
+                context = self.bfm_conditioning_helper.apply_context(
+                    context,
+                    batch,
+                    timesteps,
+                )
+            except Exception as exc:
+                logger.warning("BFM conditioning failed: %s", exc)
+        bfm_semfeat_tokens = None
+        bfm_segment_idx = None
+        if self.bfm_conditioning_helper is not None:
+            if getattr(args, "bfm_semfeat_model_injection_enabled", False):
+                try:
+                    bfm_semfeat_tokens = (
+                        self.bfm_conditioning_helper.compute_semantic_tokens_from_batch(
+                            batch
+                        )
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "BFM SemFeat model injection failed: %s", exc
+                    )
+            if getattr(args, "bfm_segment_blocks_enabled", False):
+                try:
+                    boundaries = build_segment_boundaries(
+                        num_segments=int(getattr(args, "bfm_num_segments", 6)),
+                        min_t=float(getattr(args, "bfm_segment_min_t", 0.0)),
+                        max_t=float(getattr(args, "bfm_segment_max_t", 1.0)),
+                        device=timesteps.device,
+                        dtype=timesteps.dtype,
+                    )
+                    t_norm = normalize_timesteps(timesteps.view(-1))
+                    bfm_segment_idx = segment_index_for_timesteps(
+                        t_norm, boundaries
+                    )
+                except Exception as exc:
+                    logger.warning("BFM segment index compute failed: %s", exc)
 
         # ensure the hidden state will require grad
         if args.gradient_checkpointing:
@@ -783,6 +828,8 @@ class TrainingCore:
                     getattr(args, "enable_dispersive_loss", False)
                 ),
                 reg_cls_token=reg_cls_token,
+                segment_idx=bfm_segment_idx,
+                bfm_semfeat_tokens=bfm_semfeat_tokens,
             )
         # Unpack optional intermediate
         intermediate_z: Optional[torch.Tensor] = None
@@ -921,6 +968,7 @@ class TrainingCore:
         is_main_process: bool = False,
         val_epoch_step_sync: Optional[Tuple[Any, Any]] = None,
         repa_helper: Optional[Any] = None,
+        semfeat_helper: Optional[Any] = None,
         reg_helper: Optional[Any] = None,
         sara_helper: Optional[Any] = None,
         layer_sync_helper: Optional[Any] = None,
@@ -1676,6 +1724,8 @@ class TrainingCore:
                                 repa_helper=(
                                     repa_helper if sara_helper is None else None
                                 ),
+                                semfeat_helper=semfeat_helper,
+                                bfm_conditioning_helper=self.bfm_conditioning_helper,
                                 reg_helper=reg_helper,
                                 reg_cls_pred=reg_cls_pred,
                                 reg_cls_target=reg_cls_target,

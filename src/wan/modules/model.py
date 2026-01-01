@@ -1,5 +1,6 @@
 # Copyright 2024-2025 The Alibaba Wan Team Authors. All rights reserved.
 import argparse
+import copy
 import math
 import time
 from typing import Dict, List, Optional, Union
@@ -866,6 +867,11 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
         lean_attention_fp32_default: bool = True,
         simple_modulation: bool = False,
         optimized_torch_compile: bool = False,
+        bfm_segment_blocks_enabled: bool = False,
+        bfm_segment_block_mode: str = "shared",
+        bfm_num_segments: int = 6,
+        bfm_semfeat_model_injection_enabled: bool = False,
+        bfm_semfeat_model_injection_scale: float = 1.0,
     ):
         r"""
         Initialize the diffusion model backbone.
@@ -965,6 +971,16 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
         self.reg_cls_dim: Optional[int] = None
         self.reg_cls_proj: Optional[nn.Module] = None
         self.reg_cls_head: Optional[nn.Module] = None
+        self.bfm_segment_blocks_enabled = bool(bfm_segment_blocks_enabled)
+        self.bfm_segment_block_mode = str(bfm_segment_block_mode)
+        self.bfm_num_segments = int(bfm_num_segments)
+        self.bfm_semfeat_model_injection_enabled = bool(
+            bfm_semfeat_model_injection_enabled
+        )
+        self.bfm_semfeat_model_injection_scale = float(
+            bfm_semfeat_model_injection_scale
+        )
+        self.bfm_semfeat_projection: Optional[nn.Module] = None
 
         # embeddings
         self.patch_embedding = nn.Conv3d(
@@ -975,6 +991,10 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
             nn.GELU(approximate="tanh"),
             make_linear(dim, dim, True, tag="text_out"),
         )
+        if self.bfm_semfeat_model_injection_enabled:
+            self.bfm_semfeat_projection = make_linear(
+                text_dim, dim, True, tag="bfm_semfeat_proj"
+            )
 
         # Optional RoPE variant flag (comfy), configured via loader
         self.rope_func = "default"
@@ -1012,6 +1032,18 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
                 for _ in range(num_layers)
             ]
         )
+        self.bfm_segment_blocks: Optional[nn.ModuleList] = None
+        if self.bfm_segment_blocks_enabled and self.bfm_segment_block_mode == "replicated":
+            if self.bfm_num_segments < 2:
+                raise ValueError("bfm_num_segments must be >= 2 for segment blocks.")
+            self.bfm_segment_blocks = nn.ModuleList()
+            for _ in range(self.bfm_num_segments):
+                self.bfm_segment_blocks.append(
+                    nn.ModuleList([copy.deepcopy(block) for block in self.blocks])
+                )
+            logger.warning(
+                "BFM segment blocks replicated; memory usage increases and inference will change."
+            )
 
         # head
         self.head = Head(
@@ -1318,6 +1350,8 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
         dispersive_loss_target_block: int | None = None,
         return_intermediate: bool = False,
         reg_cls_token: torch.Tensor | None = None,
+        segment_idx: torch.Tensor | None = None,
+        bfm_semfeat_tokens: torch.Tensor | None = None,
     ):
         r"""
         Forward pass through the diffusion model
@@ -1536,6 +1570,42 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
                         .to(self.e_dtype)
                     )
         # dtype assertions relaxed: e/e0 may be fp16 when lower_precision_attention
+        if (
+            self.bfm_semfeat_model_injection_enabled
+            and self.bfm_semfeat_projection is not None
+            and bfm_semfeat_tokens is not None
+            and float(self.bfm_semfeat_model_injection_scale) != 0.0
+        ):
+            semfeat_tensor = (
+                bfm_semfeat_tokens
+                if torch.is_tensor(bfm_semfeat_tokens)
+                else None
+            )
+            if semfeat_tensor is not None:
+                if semfeat_tensor.dim() == 3:
+                    semfeat_vec = semfeat_tensor.mean(dim=1)
+                elif semfeat_tensor.dim() == 2:
+                    semfeat_vec = semfeat_tensor
+                else:
+                    semfeat_vec = None
+                if semfeat_vec is not None:
+                    semfeat_vec = semfeat_vec.to(
+                        device=device,
+                        dtype=self.bfm_semfeat_projection.weight.dtype,
+                    )
+                    semfeat_proj = self.bfm_semfeat_projection(semfeat_vec)
+                    semfeat_proj = semfeat_proj.to(device=device, dtype=e0.dtype)
+                    semfeat_proj = semfeat_proj * float(
+                        self.bfm_semfeat_model_injection_scale
+                    )
+                    if e.dim() == 3:
+                        e = e + semfeat_proj.unsqueeze(1)
+                    else:
+                        e = e + semfeat_proj
+                    if e0.dim() == 4:
+                        e0 = e0 + semfeat_proj[:, None, None, :]
+                    elif e0.dim() == 3:
+                        e0 = e0 + semfeat_proj[:, None, :]
 
         # context
         context_lens = None
@@ -1596,7 +1666,28 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
             x = local_patching(x, H, W, P)
             x = x.reshape(1, H * W * T, -1)  # type: ignore
 
-        if self.blocks_to_swap:
+        active_blocks = self.blocks
+        using_segment_blocks = False
+        if (
+            self.bfm_segment_blocks_enabled
+            and self.bfm_segment_block_mode == "replicated"
+            and self.bfm_segment_blocks is not None
+            and segment_idx is not None
+        ):
+            seg_idx = segment_idx.to(device=x.device)
+            if seg_idx.numel() > 0:
+                unique_segments = torch.unique(seg_idx)
+                if unique_segments.numel() == 1:
+                    seg_value = int(unique_segments[0].item())
+                    if 0 <= seg_value < len(self.bfm_segment_blocks):
+                        active_blocks = self.bfm_segment_blocks[seg_value]
+                        using_segment_blocks = True
+                else:
+                    logger.warning(
+                        "BFM segment blocks enabled but batch spans multiple segments; using shared blocks."
+                    )
+
+        if self.blocks_to_swap and active_blocks is self.blocks:
             clean_memory_on_device(device)
 
         # print(f"x: {x.shape}, e: {e0.shape}, context: {context.shape}, seq_lens: {seq_lens}")
@@ -1604,6 +1695,12 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
         routes = self._tread_routes or []
         router = self._tread_router
         use_routing = self.training and torch.is_grad_enabled() and len(routes) > 0
+        if using_segment_blocks and use_routing:
+            logger.warning(
+                "BFM segment blocks do not support TREAD routing; disabling routing for this forward."
+            )
+            use_routing = False
+            routes = []
         route_ptr = 0
         tread_state = TREADRoutingState()
 
@@ -1624,12 +1721,15 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
 
         # Track input device for consistency check when CPU offloading is enabled
         input_device = x.device
-
         # ═══════════════════════════════════════════════════════════════════════════════
         # SPRINT SPARSE-DENSE FUSION PATH
         # ═══════════════════════════════════════════════════════════════════════════════
         use_sprint = False
-        if self.sprint_fusion is not None:
+        if using_segment_blocks and self.sprint_fusion is not None:
+            logger.warning(
+                "BFM segment blocks do not support Sprint; disabling Sprint for this forward."
+            )
+        elif self.sprint_fusion is not None:
             try:
                 from enhancements.sprint.exports import (
                     can_use_sprint,
@@ -1677,12 +1777,16 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
 
         # Standard block iteration path (only if Sprint not used)
         if not use_sprint:
-            for block_idx, block in enumerate(self.blocks):  # type: ignore
+            for block_idx, block in enumerate(active_blocks):  # type: ignore  
                 is_block_skipped = (
                     skip_block_indices is not None and block_idx in skip_block_indices
                 )
 
-                if self.blocks_to_swap and not is_block_skipped:
+                if (
+                    self.blocks_to_swap
+                    and active_blocks is self.blocks
+                    and not is_block_skipped
+                ):
                     self.offloader.wait_for_block(block_idx)  # type: ignore
 
                 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1775,7 +1879,7 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
                     x = handle_routing_end(self, x, kwargs, tread_state, freqs_list)
                     route_ptr += 1
 
-                if self.blocks_to_swap:
+                if self.blocks_to_swap and active_blocks is self.blocks:
                     self.offloader.submit_move_blocks_forward(self.blocks, block_idx)  # type: ignore
 
         # Ensure device consistency after CPU offloading operations
@@ -1927,6 +2031,11 @@ def load_wan_model(
     torchao_fp8_weight_dtype: str = "e4m3fn",
     torchao_fp8_target_modules: Optional[List[str]] = None,
     torchao_fp8_exclude_modules: Optional[List[str]] = None,
+    bfm_segment_blocks_enabled: bool = False,
+    bfm_segment_block_mode: str = "shared",
+    bfm_num_segments: int = 6,
+    bfm_semfeat_model_injection_enabled: bool = False,
+    bfm_semfeat_model_injection_scale: float = 1.0,
 ) -> WanModel:
     """
     Load a WAN model from the specified checkpoint.
@@ -1989,6 +2098,11 @@ def load_wan_model(
             simple_modulation=simple_modulation,
             optimized_torch_compile=optimized_torch_compile,
             lean_attention_fp32_default=lean_attention_fp32_default,
+            bfm_segment_blocks_enabled=bfm_segment_blocks_enabled,
+            bfm_segment_block_mode=bfm_segment_block_mode,
+            bfm_num_segments=bfm_num_segments,
+            bfm_semfeat_model_injection_enabled=bfm_semfeat_model_injection_enabled,
+            bfm_semfeat_model_injection_scale=bfm_semfeat_model_injection_scale,
         )
         # Set advanced RoPE knob on model
         try:

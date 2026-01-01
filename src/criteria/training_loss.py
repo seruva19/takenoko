@@ -22,6 +22,12 @@ from core.masked_training_manager import (
     MaskedTrainingManager,
 )
 from utils.train_utils import get_sigmas
+from enhancements.blockwise_flow_matching.segment_utils import (
+    build_segment_boundaries,
+    compute_blockwise_interpolant,
+    normalize_timesteps,
+    segment_index_for_timesteps,
+)
 
 
 logger = get_logger(__name__)
@@ -108,8 +114,16 @@ class LossComponents:
         SemanticGen alignment loss between diffusion features and semantics.
     semantic_align_similarity: Optional[torch.Tensor]
         Semantic alignment cosine similarity (if enabled).
+    bfm_semfeat_loss: Optional[torch.Tensor]
+        Blockwise FM SemFeat alignment loss (if enabled).
+    bfm_semfeat_similarity: Optional[torch.Tensor]
+        SemFeat alignment cosine similarity (if enabled).
+    bfm_segment_losses: Optional[Dict[str, torch.Tensor]]
+        Per-segment averaged base loss values (if enabled).
+    bfm_frn_loss: Optional[torch.Tensor]
+        BFM FRN residual approximation loss (if enabled).
     ortho_reg_p: Optional[torch.Tensor]
-        The orthogonal regularization loss component for p, if enabled.
+        The orthogonal regularization loss component for p, if enabled.    
     ortho_reg_q: Optional[torch.Tensor]
         The orthogonal regularization loss component for q, if enabled.
     """
@@ -136,6 +150,10 @@ class LossComponents:
     semantic_kl_loss: Optional[torch.Tensor] = None
     semantic_align_loss: Optional[torch.Tensor] = None
     semantic_align_similarity: Optional[torch.Tensor] = None
+    bfm_semfeat_loss: Optional[torch.Tensor] = None
+    bfm_semfeat_similarity: Optional[torch.Tensor] = None
+    bfm_segment_losses: Optional[Dict[str, torch.Tensor]] = None
+    bfm_frn_loss: Optional[torch.Tensor] = None
     ortho_reg_p: Optional[torch.Tensor] = None
     ortho_reg_q: Optional[torch.Tensor] = None
 
@@ -410,6 +428,8 @@ class TrainingLossComputer:
         network: Optional[Any] = None,
         control_signal_processor: Optional[Any] = None,
         repa_helper: Optional[Any] = None,
+        semfeat_helper: Optional[Any] = None,
+        bfm_conditioning_helper: Optional[Any] = None,
         reg_helper: Optional[Any] = None,
         reg_cls_pred: Optional[torch.Tensor] = None,
         reg_cls_target: Optional[torch.Tensor] = None,
@@ -447,6 +467,32 @@ class TrainingLossComputer:
             except Exception:
                 transition_directional_weight = 0.0
         wanvideo_cfm_loss_value: Optional[torch.Tensor] = None
+        bfm_segment_losses_value: Optional[Dict[str, torch.Tensor]] = None
+        bfm_semfeat_loss_value: Optional[torch.Tensor] = None
+        bfm_semfeat_similarity_value: Optional[torch.Tensor] = None
+        bfm_frn_loss_value: Optional[torch.Tensor] = None
+
+        if getattr(args, "enable_blockwise_flow_matching", False) and getattr(
+            args, "bfm_use_segment_objective", True
+        ):
+            try:
+                boundaries = build_segment_boundaries(
+                    num_segments=int(getattr(args, "bfm_num_segments", 6)),
+                    min_t=float(getattr(args, "bfm_segment_min_t", 0.0)),
+                    max_t=float(getattr(args, "bfm_segment_max_t", 1.0)),
+                    device=timesteps.device,
+                    dtype=timesteps.dtype,
+                )
+                noisy_model_input, target, _ = compute_blockwise_interpolant(
+                    latents=latents,
+                    noise=noise,
+                    timesteps=timesteps,
+                    boundaries=boundaries,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "BFM segment objective computation failed: %s", exc
+                )
 
         # ---- Contrastive Flow Matching (Enhanced with DeltaFM improvements) ----
         if (
@@ -738,6 +784,35 @@ class TrainingLossComputer:
                 logger.debug(f"Error applying adaptive importance weights: {e}")
                 # Continue without adaptive weighting
 
+        # ---- Blockwise FM segment-wise loss diagnostics (optional) ----
+        if getattr(args, "enable_blockwise_flow_matching", False) and getattr(
+            args, "bfm_log_segment_losses", True
+        ):
+            try:
+                per_sample_loss = loss
+                if per_sample_loss.dim() > 1:
+                    per_sample_loss = per_sample_loss.view(
+                        per_sample_loss.size(0), -1
+                    ).mean(dim=1)
+                t_norm = normalize_timesteps(timesteps)
+                boundaries = build_segment_boundaries(
+                    num_segments=int(getattr(args, "bfm_num_segments", 6)),
+                    min_t=float(getattr(args, "bfm_segment_min_t", 0.0)),
+                    max_t=float(getattr(args, "bfm_segment_max_t", 1.0)),
+                    device=t_norm.device,
+                    dtype=t_norm.dtype,
+                )
+                segment_idx = segment_index_for_timesteps(t_norm, boundaries)
+                segment_losses: Dict[str, torch.Tensor] = {}
+                for idx in range(int(boundaries.numel() - 1)):
+                    mask = segment_idx == idx
+                    if mask.any():
+                        segment_losses[f"segment_{idx}"] = per_sample_loss[mask].mean()
+                if segment_losses:
+                    bfm_segment_losses_value = segment_losses
+            except Exception as e:
+                logger.debug(f"BFM segment loss logging failed: {e}")
+
         # ---- Explicit video-aware loss reduction
         use_explicit = getattr(args, "use_explicit_video_loss_reduction", False)
         if use_explicit and loss.dim() > 1:
@@ -942,6 +1017,61 @@ class TrainingLossComputer:
                     )
             except Exception as e:
                 logger.warning(f"REPA loss computation failed: {e}")
+
+        # ---- Optional BFM SemFeat Loss ----
+        if semfeat_helper is not None and getattr(args, "bfm_semfeat_enabled", False):
+            try:
+                if "pixels" in batch:
+                    clean_pixels = batch.get("pixels")
+                    if isinstance(clean_pixels, list):
+                        clean_pixels = torch.stack(clean_pixels, dim=0)
+                    if torch.is_tensor(clean_pixels):
+                        clean_pixels = clean_pixels.to(loss.device)
+                    semfeat_loss, semfeat_similarity = semfeat_helper.compute_loss(
+                        clean_pixels
+                    )
+                    if semfeat_loss is not None:
+                        weight = float(
+                            getattr(args, "bfm_semfeat_loss_weight", 0.05)
+                        )
+                        weighted_loss = semfeat_loss * weight
+                        loss = loss + weighted_loss
+                        bfm_semfeat_loss_value = weighted_loss.detach()
+                    if semfeat_similarity is not None:
+                        bfm_semfeat_similarity_value = semfeat_similarity.detach()
+                else:
+                    logger.warning(
+                        "BFM SemFeat enabled, but no 'pixels' found in batch. Skipping SemFeat loss."
+                    )
+            except Exception as e:
+                logger.warning(f"BFM SemFeat loss computation failed: {e}")
+
+        # ---- Optional BFM FRN Loss ----
+        if (
+            bfm_conditioning_helper is not None
+            and getattr(args, "bfm_frn_enabled", False)
+            and getattr(args, "bfm_semfeat_enabled", False)
+        ):
+            try:
+                target_tokens = bfm_conditioning_helper.compute_semantic_tokens_from_batch(
+                    batch
+                )
+                if target_tokens is not None:
+                    frn_loss = bfm_conditioning_helper.compute_frn_loss(
+                        latents.to(network_dtype),
+                        timesteps,
+                        target_tokens.to(loss.device),
+                    )
+                    if frn_loss is not None:
+                        weight = float(getattr(args, "bfm_frn_loss_weight", 0.1))
+                        loss = loss + weight * frn_loss
+                        bfm_frn_loss_value = (weight * frn_loss).detach()
+                else:
+                    logger.warning(
+                        "BFM FRN enabled, but no semantic tokens found in batch."
+                    )
+            except Exception as e:
+                logger.warning(f"BFM FRN loss computation failed: {e}")
 
         # ---- Optional HASTE Loss ----
         haste_attn_loss_value: Optional[torch.Tensor] = None
@@ -1287,6 +1417,10 @@ class TrainingLossComputer:
             haste_proj_loss=haste_proj_loss_value,
             sara_loss=sara_loss_value,
             wanvideo_cfm_loss=wanvideo_cfm_loss_value,
+            bfm_semfeat_loss=bfm_semfeat_loss_value,
+            bfm_semfeat_similarity=bfm_semfeat_similarity_value,
+            bfm_segment_losses=bfm_segment_losses_value,
+            bfm_frn_loss=bfm_frn_loss_value,
             ortho_reg_p=ortho_p_val,
             ortho_reg_q=ortho_q_val,
         )
