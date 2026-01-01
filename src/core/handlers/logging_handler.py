@@ -17,12 +17,22 @@ from scheduling.timestep_logging import (
     log_live_timestep_distribution,
     log_loss_scatterplot,
 )
+from utils.lora_weight_stats import (
+    get_lora_stats_tracker,
+    initialize_lora_stats_tracker,
+    log_lora_weight_histograms,
+    get_lora_weight_metrics,
+)
 
 logger = logging.getLogger(__name__)
 
 # Advanced metrics tracker (lazy initialization, only loaded if enabled)
 _advanced_metrics_tracker = None
 _advanced_metrics_initialized = False
+
+# LoRA weight stats tracker (lazy initialization)
+_lora_stats_tracker = None
+_lora_stats_initialized = False
 
 
 def collect_and_log_training_metrics(
@@ -145,9 +155,7 @@ def collect_and_log_training_metrics(
     if loss_components.repa_loss is not None:
         logs["loss/repa"] = float(loss_components.repa_loss.item())
     if getattr(loss_components, "bfm_semfeat_loss", None) is not None:
-        logs["loss/bfm_semfeat"] = float(
-            loss_components.bfm_semfeat_loss.item()
-        )
+        logs["loss/bfm_semfeat"] = float(loss_components.bfm_semfeat_loss.item())
     if getattr(loss_components, "bfm_semfeat_similarity", None) is not None:
         logs["bfm_semfeat_similarity"] = float(
             loss_components.bfm_semfeat_similarity.item()
@@ -174,9 +182,7 @@ def collect_and_log_training_metrics(
     if getattr(loss_components, "crepa_similarity", None) is not None:
         logs["crepa_similarity"] = float(loss_components.crepa_similarity.item())
     if getattr(loss_components, "wanvideo_cfm_loss", None) is not None:
-        logs["loss/wanvideo_cfm"] = float(
-            loss_components.wanvideo_cfm_loss.item()
-        )
+        logs["loss/wanvideo_cfm"] = float(loss_components.wanvideo_cfm_loss.item())
     if getattr(loss_components, "memflow_guidance_loss", None) is not None:
         logs["loss/memflow_guidance"] = float(
             loss_components.memflow_guidance_loss.item()
@@ -342,25 +348,31 @@ def collect_and_log_training_metrics(
         _advanced_metrics_initialized = True
 
         # Only initialize if enabled in config
-        if getattr(args, 'enable_advanced_metrics', False):
+        if getattr(args, "enable_advanced_metrics", False):
             try:
                 from core.advanced_metrics_tracker import AdvancedMetricsTracker
 
                 # Get dual_model_manager from args (if it was stored there)
-                dual_model_manager = getattr(args, 'dual_model_manager', None)
+                dual_model_manager = getattr(args, "dual_model_manager", None)
 
                 # Parse features from config (default: all features if None)
-                feature_list = getattr(args, 'advanced_metrics_features', None)
+                feature_list = getattr(args, "advanced_metrics_features", None)
                 features = set(feature_list) if feature_list else None
 
                 _advanced_metrics_tracker = AdvancedMetricsTracker(
                     enabled=True,
                     features=features,
-                    max_history=getattr(args, 'advanced_metrics_max_history', 10000),
+                    max_history=getattr(args, "advanced_metrics_max_history", 10000),
                     dual_model_manager=dual_model_manager,
-                    gradient_watch_threshold=getattr(args, 'gradient_watch_threshold', 0.5),
-                    gradient_stability_window=getattr(args, 'gradient_stability_window', 10),
-                    convergence_window_sizes=getattr(args, 'convergence_window_sizes', [10, 25, 50, 100]),
+                    gradient_watch_threshold=getattr(
+                        args, "gradient_watch_threshold", 0.5
+                    ),
+                    gradient_stability_window=getattr(
+                        args, "gradient_stability_window", 10
+                    ),
+                    convergence_window_sizes=getattr(
+                        args, "convergence_window_sizes", [10, 25, 50, 100]
+                    ),
                 )
 
                 logger.info(
@@ -386,3 +398,43 @@ def collect_and_log_training_metrics(
                 accelerator.log(advanced_logs, step=global_step)
         except Exception as e:
             logger.debug(f"Advanced metrics tracking error: {e}")
+
+    # LoRA weight statistics tracking (lazy initialization)
+    global _lora_stats_tracker, _lora_stats_initialized
+
+    if not _lora_stats_initialized:
+        _lora_stats_initialized = True
+
+        if getattr(args, "log_lora_weight_histograms", False):
+            try:
+                _lora_stats_tracker = initialize_lora_stats_tracker(
+                    log_interval=getattr(args, "lora_weight_histogram_interval", 100),
+                    log_separate_matrices=getattr(
+                        args, "lora_weight_log_separate_matrices", False
+                    ),
+                )
+                # Initialize baseline stats
+                _lora_stats_tracker.initialize_baseline(network)
+                logger.info(
+                    f"LoRA weight histogram logging enabled "
+                    f"(interval: {_lora_stats_tracker.log_interval})"
+                )
+            except Exception as e:
+                logger.debug(f"LoRA weight stats initialization failed: {e}")
+                _lora_stats_tracker = None
+
+    # Log LoRA weight histograms and scalar metrics
+    if _lora_stats_tracker is not None:
+        try:
+            # Log histograms to TensorBoard
+            log_lora_weight_histograms(
+                accelerator, network, global_step, _lora_stats_tracker
+            )
+
+            # Add scalar metrics to logs (always, not just at histogram interval)
+            if global_step % 10 == 0:  # Log scalars more frequently
+                lora_metrics = get_lora_weight_metrics(network, _lora_stats_tracker)
+                if lora_metrics:
+                    accelerator.log(lora_metrics, step=global_step)
+        except Exception as e:
+            logger.debug(f"LoRA weight stats logging error: {e}")

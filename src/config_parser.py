@@ -602,6 +602,15 @@ def create_args_from_config(
     args.max_param_stats_logged = config.get("max_param_stats_logged", 20)
     args.log_per_source_loss = config.get("log_per_source_loss", False)
 
+    # LoRA weight distribution tracking
+    args.log_lora_weight_histograms = config.get("log_lora_weight_histograms", False)
+    args.lora_weight_histogram_interval = int(
+        config.get("lora_weight_histogram_interval", 100)
+    )
+    args.lora_weight_log_separate_matrices = config.get(
+        "lora_weight_log_separate_matrices", False
+    )
+
     # Prefer essential SNR metrics under `snr/` and move others to `snr_other/`
     args.snr_split_namespaces = config.get("snr_split_namespaces", True)
     # Prefer essential Validation metrics under `val/` and move others to `val_other/`
@@ -1612,9 +1621,7 @@ def create_args_from_config(
         args.cache_svi_y_anchor_latent = latent_cache_config.get(
             "cache_svi_y_anchor_latent", False
         )
-        args.cache_optical_flow = latent_cache_config.get(
-            "cache_optical_flow", False
-        )
+        args.cache_optical_flow = latent_cache_config.get("cache_optical_flow", False)
         args.optical_flow_cache_model = latent_cache_config.get(
             "optical_flow_model", "raft_small"
         )

@@ -3630,6 +3630,23 @@ max_param_stats_logged = 20
 # Creates TensorBoard metrics: loss/video, loss/image
 log_per_source_loss = false
 
+# Log LoRA weight value histograms to TensorBoard for training diagnostics.
+# Helps detect weight explosion, collapse, or drift during training.
+# Creates TensorBoard histograms: lora_weights/all_weights, lora_weights/down_weights, lora_weights/up_weights
+# Creates TensorBoard scalars: lora_weights/mean, lora_weights/std, lora_weights/abs_mean, etc.
+# Default: false
+log_lora_weight_histograms = false
+
+# Interval (in steps) between histogram logs. Histogram logging is more expensive than scalar logging.
+# Scalar metrics (mean, std, etc.) are logged every 10 steps regardless of this setting.
+# Default: 100
+lora_weight_histogram_interval = 100
+
+# Log lora_down and lora_up matrices separately in addition to combined histogram.
+# Useful for debugging initialization or understanding which projection is changing more.
+# Default: false
+lora_weight_log_separate_matrices = false
+
 # Log a scatter plot of per-sample loss vs timestep to TensorBoard
 log_loss_scatterplot = true
 
