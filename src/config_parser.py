@@ -611,6 +611,17 @@ def create_args_from_config(
         "lora_weight_log_separate_matrices", False
     )
 
+    # Activation statistics tracking
+    args.log_activation_stats = config.get("log_activation_stats", False)
+    args.activation_stats_interval = int(config.get("activation_stats_interval", 100))
+    args.activation_stats_max_layers = int(config.get("activation_stats_max_layers", 8))
+    args.activation_stats_warn_threshold = float(
+        config.get("activation_stats_warn_threshold", 1000.0)
+    )
+    args.activation_stats_critical_threshold = float(
+        config.get("activation_stats_critical_threshold", 10000.0)
+    )
+
     # Prefer essential SNR metrics under `snr/` and move others to `snr_other/`
     args.snr_split_namespaces = config.get("snr_split_namespaces", True)
     # Prefer essential Validation metrics under `val/` and move others to `val_other/`

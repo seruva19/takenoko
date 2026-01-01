@@ -669,9 +669,7 @@ class WanFinetuneTrainer:
 
         # Generate noise (device/dtype conversion later)
         if self.training_core.equivdm_noise_helper is not None:
-            noise = self.training_core.equivdm_noise_helper.sample_noise(
-                latents, batch
-            )
+            noise = self.training_core.equivdm_noise_helper.sample_noise(latents, batch)
         else:
             noise = torch.randn_like(latents)
 
@@ -698,16 +696,14 @@ class WanFinetuneTrainer:
             )
         else:
             # Get noisy input using Takenoko's method with timestep distribution
-            noisy_model_input, timesteps, _ = (
-                get_noisy_model_input_and_timesteps(
-                    args,
-                    noise,
-                    latents,
-                    noise_scheduler,
-                    device,
-                    transformer.dtype,
-                    timestep_distribution=self.timestep_distribution,
-                )
+            noisy_model_input, timesteps, _ = get_noisy_model_input_and_timesteps(
+                args,
+                noise,
+                latents,
+                noise_scheduler,
+                device,
+                transformer.dtype,
+                timestep_distribution=self.timestep_distribution,
             )
 
         # Convert tensors to correct device/dtype right before model call
@@ -832,9 +828,7 @@ class WanFinetuneTrainer:
             logger.warning("CREPA: failed to drop VAE encoder modules: %s", exc)
 
     @staticmethod
-    def _matches_q_galore_target(
-        module_name: str, targets: Optional[object]
-    ) -> bool:
+    def _matches_q_galore_target(module_name: str, targets: Optional[object]) -> bool:
         if targets is None:
             return True
         if isinstance(targets, str):
@@ -887,7 +881,9 @@ class WanFinetuneTrainer:
             nonlocal replaced
             for name, child in module.named_children():
                 full_name = f"{prefix}.{name}" if prefix else name
-                if isinstance(child, torch.nn.Linear) and WanFinetuneTrainer._matches_q_galore_target(
+                if isinstance(
+                    child, torch.nn.Linear
+                ) and WanFinetuneTrainer._matches_q_galore_target(
                     full_name, target_modules
                 ):
                     bias_data = child.bias.data if child.bias is not None else None
@@ -953,7 +949,6 @@ class WanFinetuneTrainer:
             lr,
         )
 
-
     def train(self, args: argparse.Namespace) -> None:
         """
         Main training loop for full fine-tuning.
@@ -1001,9 +996,7 @@ class WanFinetuneTrainer:
             logger.info(
                 "Glance distillation enabled (mode=%s, timesteps=%s)",
                 self.glance_distiller.config.mode,
-                ",".join(
-                    f"{t:.4f}" for t in self.glance_distiller.config.timesteps
-                ),
+                ",".join(f"{t:.4f}" for t in self.glance_distiller.config.timesteps),
             )
 
         # Configure advanced logging settings
@@ -1242,9 +1235,8 @@ class WanFinetuneTrainer:
                 semfeat_helper = None
 
         bfm_conditioning_helper = None
-        if (
-            getattr(args, "bfm_semfeat_conditioning_enabled", False)
-            or getattr(args, "bfm_segment_conditioning_enabled", False)
+        if getattr(args, "bfm_semfeat_conditioning_enabled", False) or getattr(
+            args, "bfm_segment_conditioning_enabled", False
         ):
             try:
                 text_dim = infer_text_context_dim(transformer)
@@ -1284,9 +1276,8 @@ class WanFinetuneTrainer:
             "qgalore_adamw8bit_layerwise",
             "q_galore_adamw8bit_layerwise",
         }
-        if (
-            optimizer_type in q_galore_types
-            and getattr(args, "q_galore_weight_quant", False)
+        if optimizer_type in q_galore_types and getattr(
+            args, "q_galore_weight_quant", False
         ):
             replaced = self._apply_q_galore_weight_quantization(transformer, args)
             q_galore_replaced_count = replaced
@@ -1321,9 +1312,7 @@ class WanFinetuneTrainer:
             )
 
             optimizer_name = "transformers.optimization.Adafactor"
-            optimizer_args = ",".join(
-                [f"{k}={v}" for k, v in optimizer_kwargs.items()]
-            )
+            optimizer_args = ",".join([f"{k}={v}" for k, v in optimizer_kwargs.items()])
 
             logger.info(
                 "✅ Created Adafactor optimizer: %s | %s",
@@ -1517,7 +1506,7 @@ class WanFinetuneTrainer:
         # Prepare models with accelerator
         if self.blocks_to_swap > 0:
             transformer = accelerator.prepare(
-                transformer, device_placement=[not self.blocks_to_swap > 0]     
+                transformer, device_placement=[not self.blocks_to_swap > 0]
             )
             accelerator.unwrap_model(transformer).move_to_device_except_swap_blocks(
                 accelerator.device
@@ -1593,6 +1582,30 @@ class WanFinetuneTrainer:
         # Register checkpoint hooks for proper fine-tuning save/load (matching LoRA approach)
         CheckpointUtils.register_hooks_for_finetuning(accelerator, args)
 
+        # ========== Activation Stats Tracking (optional) ==========
+        if getattr(args, "log_activation_stats", False):
+            try:
+                from utils.activation_stats import (
+                    initialize_activation_tracker,
+                    setup_activation_hooks,
+                )
+
+                initialize_activation_tracker(
+                    log_interval=getattr(args, "activation_stats_interval", 100),
+                    max_layers=getattr(args, "activation_stats_max_layers", 8),
+                    warn_threshold=getattr(
+                        args, "activation_stats_warn_threshold", 1000.0
+                    ),
+                    critical_threshold=getattr(
+                        args, "activation_stats_critical_threshold", 10000.0
+                    ),
+                )
+                num_hooks = setup_activation_hooks(transformer)
+                if num_hooks > 0:
+                    logger.info(f"Activation stats tracking: {num_hooks} layers hooked")
+            except Exception as e:
+                logger.debug(f"Activation stats setup failed: {e}")
+
         # training_model is the transformer itself (full fine-tuning)
         training_model = transformer
         # Optional weight EMA (shared helper from TrainingCore)
@@ -1628,9 +1641,7 @@ class WanFinetuneTrainer:
                 semfeat_helper = None
         if bfm_conditioning_helper is not None:
             try:
-                bfm_conditioning_helper = accelerator.prepare(
-                    bfm_conditioning_helper
-                )
+                bfm_conditioning_helper = accelerator.prepare(bfm_conditioning_helper)
             except Exception as exc:
                 logger.warning(f"BFM conditioning setup failed: {exc}")
                 bfm_conditioning_helper = None
@@ -1948,10 +1959,7 @@ class WanFinetuneTrainer:
             desc="Training",
             disable=not accelerator.is_local_main_process,
         )
-        if (
-            q_galore_replaced_count is not None
-            and accelerator.is_local_main_process
-        ):
+        if q_galore_replaced_count is not None and accelerator.is_local_main_process:
             tqdm.write(
                 f"Q-GaLore weight quantization: replaced {q_galore_replaced_count} Linear layers"
             )
@@ -2091,21 +2099,34 @@ class WanFinetuneTrainer:
                         }
                         if getattr(loss_components, "repa_loss", None) is not None:
                             logs["loss/repa"] = float(loss_components.repa_loss.item())
-                        if getattr(loss_components, "layer_sync_loss", None) is not None:
+                        if (
+                            getattr(loss_components, "layer_sync_loss", None)
+                            is not None
+                        ):
                             logs["loss/layer_sync"] = float(
                                 loss_components.layer_sync_loss.item()
                             )
                             logs["layersync_loss"] = float(
                                 loss_components.layer_sync_loss.item()
                             )
-                        if getattr(loss_components, "layer_sync_similarity", None) is not None:
+                        if (
+                            getattr(loss_components, "layer_sync_similarity", None)
+                            is not None
+                        ):
                             logs["layersync_similarity"] = float(
                                 loss_components.layer_sync_similarity.item()
                             )
                         if getattr(loss_components, "crepa_loss", None) is not None:
-                            logs["loss/crepa"] = float(loss_components.crepa_loss.item())
-                            logs["crepa_loss"] = float(loss_components.crepa_loss.item())
-                        if getattr(loss_components, "crepa_similarity", None) is not None:
+                            logs["loss/crepa"] = float(
+                                loss_components.crepa_loss.item()
+                            )
+                            logs["crepa_loss"] = float(
+                                loss_components.crepa_loss.item()
+                            )
+                        if (
+                            getattr(loss_components, "crepa_similarity", None)
+                            is not None
+                        ):
                             logs["crepa_similarity"] = float(
                                 loss_components.crepa_similarity.item()
                             )

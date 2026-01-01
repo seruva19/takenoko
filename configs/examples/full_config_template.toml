@@ -3647,6 +3647,32 @@ lora_weight_histogram_interval = 100
 # Default: false
 lora_weight_log_separate_matrices = false
 
+# Monitor activation values in DiT/transformer blocks during training.
+# Helps detect activation explosion before it causes NaN/Inf errors.
+# Creates TensorBoard scalars: activation/block_N/min, max, mean, std, abs_max
+# Also tracks global aggregates: activation/global_abs_max, global_mean, global_std
+log_activation_stats = false
+
+# Interval (in steps) between activation stats logging.
+# Activation tracking adds some overhead, so don't log too frequently.
+# Default: 100
+activation_stats_interval = 100
+
+# Maximum number of transformer blocks to track (first N blocks).
+# More blocks = more metrics but also more overhead.
+# Default: 8
+activation_stats_max_layers = 8
+
+# Activation magnitude that triggers a warning in logs.
+# If abs_max exceeds this, you'll see a warning message.
+# Default: 1000.0
+activation_stats_warn_threshold = 1000.0
+
+# Activation magnitude that triggers a critical alert.
+# Values this high often precede NaN/Inf explosions.
+# Default: 10000.0
+activation_stats_critical_threshold = 10000.0
+
 # Log a scatter plot of per-sample loss vs timestep to TensorBoard
 log_loss_scatterplot = true
 

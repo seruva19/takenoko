@@ -18,10 +18,13 @@ from scheduling.timestep_logging import (
     log_loss_scatterplot,
 )
 from utils.lora_weight_stats import (
-    get_lora_stats_tracker,
     initialize_lora_stats_tracker,
     log_lora_weight_histograms,
     get_lora_weight_metrics,
+)
+from utils.activation_stats import (
+    collect_activation_stats,
+    get_activation_metrics_after_forward,
 )
 
 logger = logging.getLogger(__name__)
@@ -33,6 +36,9 @@ _advanced_metrics_initialized = False
 # LoRA weight stats tracker (lazy initialization)
 _lora_stats_tracker = None
 _lora_stats_initialized = False
+
+# Activation stats tracker (initialized in wan_network_trainer.py)
+_activation_stats_enabled = False
 
 
 def collect_and_log_training_metrics(
@@ -438,3 +444,12 @@ def collect_and_log_training_metrics(
                     accelerator.log(lora_metrics, step=global_step)
         except Exception as e:
             logger.debug(f"LoRA weight stats logging error: {e}")
+
+    # Log activation stats (hooks registered in wan_network_trainer.py)
+    # Stats are collected during forward pass via hooks, retrieve them here
+    try:
+        activation_metrics = get_activation_metrics_after_forward()
+        if activation_metrics:
+            accelerator.log(activation_metrics, step=global_step)
+    except Exception as e:
+        logger.debug(f"Activation stats logging error: {e}")

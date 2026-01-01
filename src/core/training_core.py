@@ -384,9 +384,7 @@ class TrainingCore:
             args
         )
 
-    def initialize_equivdm_consistent_noise(
-        self, args: argparse.Namespace
-    ) -> None:
+    def initialize_equivdm_consistent_noise(self, args: argparse.Namespace) -> None:
         """Initialize EquiVDM consistent noise helper if enabled."""
         try:
             self.equivdm_noise_helper = EquiVDMConsistentNoiseHelper.create_from_args(
@@ -602,9 +600,7 @@ class TrainingCore:
                         )
                     )
                 except Exception as exc:
-                    logger.warning(
-                        "BFM SemFeat model injection failed: %s", exc
-                    )
+                    logger.warning("BFM SemFeat model injection failed: %s", exc)
             if getattr(args, "bfm_segment_blocks_enabled", False):
                 try:
                     boundaries = build_segment_boundaries(
@@ -615,9 +611,7 @@ class TrainingCore:
                         dtype=timesteps.dtype,
                     )
                     t_norm = normalize_timesteps(timesteps.view(-1))
-                    bfm_segment_idx = segment_index_for_timesteps(
-                        t_norm, boundaries
-                    )
+                    bfm_segment_idx = segment_index_for_timesteps(t_norm, boundaries)
                 except Exception as exc:
                     logger.warning("BFM segment index compute failed: %s", exc)
 
@@ -809,6 +803,15 @@ class TrainingCore:
                     force_keep_mask = ms_tok.squeeze(1).flatten(1) > 0.5
             except Exception:
                 force_keep_mask = None
+
+            # Trigger activation stats collection if enabled (hooks capture during forward)
+            if getattr(args, "log_activation_stats", False) and global_step is not None:
+                try:
+                    from utils.activation_stats import collect_activation_stats
+
+                    collect_activation_stats(global_step)
+                except Exception:
+                    pass
 
             model_pred = model(
                 model_input,
@@ -1226,15 +1229,11 @@ class TrainingCore:
 
                     # Sample noise that we'll add to the latents
                     if self.equivdm_noise_helper is not None:
-                        noise = self.equivdm_noise_helper.sample_noise(
-                            latents, batch
-                        )
+                        noise = self.equivdm_noise_helper.sample_noise(latents, batch)
                     else:
                         noise = torch.randn_like(latents)
                     if self.temporal_pyramid_helper is not None:
-                        noise = self.temporal_pyramid_helper.align_noise(
-                            latents, noise
-                        )
+                        noise = self.temporal_pyramid_helper.align_noise(latents, noise)
 
                     fvdm_sampling_metadata = None
                     if self.fvdm_manager.enabled:
@@ -1335,7 +1334,9 @@ class TrainingCore:
                             self.glance_distiller is not None
                             and self.glance_distiller.enabled
                         )
-                        if use_glance and (dual_model_manager is not None or eqm_enabled):
+                        if use_glance and (
+                            dual_model_manager is not None or eqm_enabled
+                        ):
                             if not self._warned_glance_incompatible:
                                 logger.warning(
                                     "Glance distillation disabled for this run "
@@ -1415,9 +1416,7 @@ class TrainingCore:
                         and self.error_recycling_helper.enabled
                     ):
                         if eqm_enabled:
-                            logger.warning(
-                                "Error recycling skipped: EqM mode active."
-                            )
+                            logger.warning("Error recycling skipped: EqM mode active.")
                         else:
                             self.error_recycling_helper.maybe_build_svi_y(
                                 batch=batch, latents=latents, vae=vae
@@ -1430,15 +1429,13 @@ class TrainingCore:
                                 latents_for_noisy,
                                 rebuilt_noisy,
                                 error_recycling_state,
-                            ) = (
-                                self.error_recycling_helper.apply_to_inputs(
-                                    noise=noise,
-                                    latents=latents,
-                                    timesteps=timesteps,
-                                    sigmas=sigmas,
-                                    batch=batch,
-                                    noise_scheduler=noise_scheduler,
-                                )
+                            ) = self.error_recycling_helper.apply_to_inputs(
+                                noise=noise,
+                                latents=latents,
+                                timesteps=timesteps,
+                                sigmas=sigmas,
+                                batch=batch,
+                                noise_scheduler=noise_scheduler,
                             )
                             if rebuilt_noisy is not None:
                                 noisy_model_input = rebuilt_noisy
@@ -1971,9 +1968,7 @@ class TrainingCore:
                             )
                             optimizer.set_snr_scale(snr_scale)
                         except Exception as e:
-                            logger.debug(
-                                "TemporalAdamW SNR weighting skipped: %s", e
-                            )
+                            logger.debug("TemporalAdamW SNR weighting skipped: %s", e)
 
                     # Start optimizer step timing
                     start_optimizer_step_timing()

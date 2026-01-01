@@ -659,9 +659,8 @@ class WanNetworkTrainer:
             hasattr(args, "enable_control_lora") and args.enable_control_lora
         )
         need_vae_for_sampling = args.sample_prompts is not None
-        need_vae_for_crepa = (
-            getattr(args, "crepa_enabled", False)
-            and not getattr(args, "crepa_use_backbone_features", False)
+        need_vae_for_crepa = getattr(args, "crepa_enabled", False) and not getattr(
+            args, "crepa_use_backbone_features", False
         )
 
         if need_vae_for_sampling and self.sampling_manager is not None:
@@ -885,9 +884,8 @@ class WanNetworkTrainer:
                 semfeat_helper = None
 
         bfm_conditioning_helper = None
-        if (
-            getattr(args, "bfm_semfeat_conditioning_enabled", False)
-            or getattr(args, "bfm_segment_conditioning_enabled", False)
+        if getattr(args, "bfm_semfeat_conditioning_enabled", False) or getattr(
+            args, "bfm_segment_conditioning_enabled", False
         ):
             try:
                 text_dim = infer_text_context_dim(transformer)
@@ -1056,6 +1054,30 @@ class WanNetworkTrainer:
 
         # ========== Checkpoint Hooks ==========
         self.checkpoint_manager.register_hooks(accelerator, args, transformer, network)
+
+        # ========== Activation Stats Tracking (optional) ==========
+        if getattr(args, "log_activation_stats", False):
+            try:
+                from utils.activation_stats import (
+                    initialize_activation_tracker,
+                    setup_activation_hooks,
+                )
+
+                initialize_activation_tracker(
+                    log_interval=getattr(args, "activation_stats_interval", 100),
+                    max_layers=getattr(args, "activation_stats_max_layers", 8),
+                    warn_threshold=getattr(
+                        args, "activation_stats_warn_threshold", 1000.0
+                    ),
+                    critical_threshold=getattr(
+                        args, "activation_stats_critical_threshold", 10000.0
+                    ),
+                )
+                num_hooks = setup_activation_hooks(transformer)
+                if num_hooks > 0:
+                    logger.info(f"Activation stats tracking: {num_hooks} layers hooked")
+            except Exception as e:
+                logger.debug(f"Activation stats setup failed: {e}")
 
         # Resume from checkpoint if specified
         restored_step = self.checkpoint_manager.resume_from_local_if_specified(
