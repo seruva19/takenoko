@@ -1397,6 +1397,118 @@ class OptimizerManager:
             logger.info(f"  - Nesterov: {nesterov}")
             logger.info(f"  - Aux Adam betas: {betas}")
 
+        elif optimizer_type == "ManifoldMuon".lower():
+            logger.info(f"using ManifoldMuon optimizer | {optimizer_kwargs}")
+
+            from optimizers.manifoldmuon import (
+                SingleDeviceManifoldMuonWithAuxAdam,
+                apply_manifoldmuon_config_overrides,
+            )
+
+            all_params = extract_params(trainable_params)
+
+            hidden_weights = [p for p in all_params if p.ndim >= 2]
+            hidden_gains_biases = [p for p in all_params if p.ndim < 2]
+
+            log_param_structure(
+                "ManifoldMuon",
+                "Aux Adam",
+                trainable_params,
+                all_params,
+                hidden_weights,
+                hidden_gains_biases,
+            )
+
+            if len(hidden_weights) == 0 and len(hidden_gains_biases) == 0:
+                raise ValueError("No trainable parameters found for ManifoldMuon optimizer!")
+
+            if len(hidden_weights) == 0:
+                logger.warning(
+                    "No hidden weight parameters (≥2D) found for ManifoldMuon. Consider using a different optimizer."
+                )
+
+            if len(hidden_gains_biases) == 0:
+                logger.info(
+                    "No bias/gain parameters (<2D) found for ManifoldMuon. Optimizer will only update matrix weights."
+                )
+
+            apply_manifoldmuon_config_overrides(args, optimizer_kwargs)
+
+            manifoldmuon_lr = optimizer_kwargs.get(
+                "manifoldmuon_lr", optimizer_kwargs.get("muon_lr", 0.001)
+            )
+            manifoldmuon_adam_lr = optimizer_kwargs.get(
+                "manifoldmuon_adam_lr", optimizer_kwargs.get("adam_lr", lr)
+            )
+            weight_decay = optimizer_kwargs.get(
+                "manifoldmuon_weight_decay", optimizer_kwargs.get("weight_decay", 0.001)
+            )
+            betas_value = optimizer_kwargs.get(
+                "manifoldmuon_betas", optimizer_kwargs.get("betas", (0.9, 0.95))
+            )
+            if isinstance(betas_value, list):
+                betas = tuple(betas_value)
+            else:
+                betas = betas_value
+            if not isinstance(betas, (tuple, list)) or len(betas) != 2:
+                raise ValueError(
+                    f"ManifoldMuon auxiliary Adam betas must be a length-2 sequence. Received: {betas_value}"
+                )
+            betas = tuple(betas)
+
+            eta = optimizer_kwargs.get("manifoldmuon_eta", 0.1)
+            alpha = optimizer_kwargs.get("manifoldmuon_alpha", 0.01)
+            dual_steps = optimizer_kwargs.get("manifoldmuon_dual_steps", 100)
+            tolerance = optimizer_kwargs.get("manifoldmuon_tolerance", 1e-6)
+            weight_decay_type = optimizer_kwargs.get("weight_decay_type", "default")
+
+            param_groups = []
+
+            if len(hidden_weights) > 0:
+                param_groups.append(
+                    dict(
+                        params=hidden_weights,
+                        use_muon=True,
+                        lr=manifoldmuon_lr,
+                        eta=eta,
+                        alpha=alpha,
+                        dual_steps=dual_steps,
+                        tolerance=tolerance,
+                        weight_decay=weight_decay,
+                        initial_lr=manifoldmuon_lr,
+                        weight_decay_type=weight_decay_type,
+                    )
+                )
+
+            if len(hidden_gains_biases) > 0:
+                param_groups.append(
+                    dict(
+                        params=hidden_gains_biases,
+                        use_muon=False,
+                        lr=manifoldmuon_adam_lr,
+                        betas=tuple(betas),
+                        weight_decay=weight_decay,
+                        initial_lr=manifoldmuon_adam_lr,
+                        weight_decay_type=weight_decay_type,
+                    )
+                )
+
+            if len(param_groups) == 0:
+                raise ValueError("No parameter groups created for ManifoldMuon optimizer!")
+
+            optimizer_class = SingleDeviceManifoldMuonWithAuxAdam
+            optimizer = optimizer_class(param_groups)
+
+            logger.info("ManifoldMuon configuration:")
+            logger.info(f"  - ManifoldMuon LR: {manifoldmuon_lr}")
+            logger.info(f"  - Aux Adam LR: {manifoldmuon_adam_lr}")
+            logger.info(f"  - Weight decay: {weight_decay}")
+            logger.info(f"  - Eta (step size): {eta}")
+            logger.info(f"  - Alpha (dual update rate): {alpha}")
+            logger.info(f"  - Dual ascent steps: {dual_steps}")
+            logger.info(f"  - Tolerance: {tolerance}")
+            logger.info(f"  - Aux Adam betas: {betas}")
+
         elif optimizer_type == "Prodigy".lower():
             # Prodigy optimizer from prodigyopt
             try:
