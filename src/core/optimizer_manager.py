@@ -1882,6 +1882,7 @@ class OptimizerManager:
             alias_map = {
                 # Short alias → fully-qualified class path
                 "per_cycle_cosine": "optimizers.custom_schedulers.per_cycle_cosine.PerCycleWarmupCosineWithFloor",
+                "relora_jagged_cosine": "optimizers.custom_schedulers.relora_jagged_cosine.ReLoRAJaggedCosineScheduler",
                 "ema_adaptive": "optimizers.custom_schedulers.adaptive_schedulers.EMAAdaptiveScheduler",
                 "noise_adaptive": "optimizers.custom_schedulers.adaptive_schedulers.NoiseAdaptiveScheduler",
                 "hybrid_adaptive": "optimizers.custom_schedulers.adaptive_schedulers.HybridAdaptiveScheduler",
@@ -1915,6 +1916,31 @@ class OptimizerManager:
                         lr_scheduler_kwargs["min_lr_ratio"] = (
                             min_lr_ratio if min_lr_ratio is not None else 0.01
                         )
+                elif lr_scheduler_type == "relora_jagged_cosine":
+                    if "first_warmup_steps" not in lr_scheduler_kwargs:
+                        lr_scheduler_kwargs["first_warmup_steps"] = num_warmup_steps
+                    if "max_steps" not in lr_scheduler_kwargs:
+                        lr_scheduler_kwargs["max_steps"] = num_training_steps
+                    if (
+                        "restart_frequency" not in lr_scheduler_kwargs
+                        and hasattr(args, "relora_cycle_length")
+                    ):
+                        lr_scheduler_kwargs["restart_frequency"] = int(
+                            args.relora_cycle_length
+                        )
+                    if (
+                        "restart_warmup_steps" not in lr_scheduler_kwargs
+                        and hasattr(args, "relora_restart_warmup_steps")
+                    ):
+                        lr_scheduler_kwargs["restart_warmup_steps"] = int(
+                            args.relora_restart_warmup_steps
+                        )
+                    if (
+                        "min_lr_ratio" not in lr_scheduler_kwargs
+                        and min_lr_ratio is not None
+                        and min_lr_ratio > 0.0
+                    ):
+                        lr_scheduler_kwargs["min_lr_ratio"] = min_lr_ratio
 
                 return lr_scheduler_class(optimizer, **lr_scheduler_kwargs)
 

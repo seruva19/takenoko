@@ -594,8 +594,11 @@ prior_loss_weight = 1.0
 # =============================================================================
 
 # ReLoRA (periodic LoRA merge-and-reinit) is activated when network_module = "networks.relora_wan".
-# ReLoRA requires lr_scheduler_type = "per_cycle_cosine" with cycle_steps=relora_cycle_length and warmup_steps=relora_restart_warmup_steps.
+# ReLoRA requires lr_scheduler_type = "per_cycle_cosine" (cycle_steps=relora_cycle_length, warmup_steps=relora_restart_warmup_steps)
+# or lr_scheduler_type = "relora_jagged_cosine" (first_warmup_steps=lr_warmup_steps, restart_warmup_steps=relora_restart_warmup_steps).
 # Exactly one of relora_reset_optimizer_on_relora, relora_optimizer_random_pruning, relora_optimizer_magnitude_pruning must be enabled when relora_cycle_length > 0.
+#
+# relora_jagged_cosine also requires lr_scheduler_min_lr_ratio > 0 and lr_warmup_steps > 0.
 
 # merge-and-reinit frequency in update steps (0 disables) (int >= 0)
 relora_interval = 5000
@@ -607,13 +610,18 @@ relora_cycle_length = 5000
 relora_start_step = 0
 
 # offset applied to update step before modulo checks (int >= 0)
+# set to 1 to offset reset cadence (step % reset_frequency == 1)
 relora_adjust_step = 0
 
 # warmup length to align with cycle restarts (int >= 0)
 relora_restart_warmup_steps = 100
 
-# reset optimizer states via high-ratio pruning (bool)
+# reset optimizer states on ReLoRA cycles (bool)
 relora_reset_optimizer_on_relora = true
+
+# optional random pruning ratio for reset_optimizer_on_relora (float in [0,1])
+# set to 0.999 for aggressive optimizer reset pruning
+relora_reset_optimizer_prune_ratio = 0.0
 
 # random pruning ratio for optimizer state (float in [0,1])
 relora_optimizer_random_pruning = 0.0
@@ -623,6 +631,15 @@ relora_optimizer_magnitude_pruning = 0.0
 
 # optimizer state tensors to reset (list of strings)
 relora_optimizer_state_keys = ["exp_avg", "exp_avg_sq"]
+
+# enable DeepSpeed ZeRO flat-state reset (bool)
+relora_enable_deepspeed_zero_reset = false
+
+# log reset count and optimizer zeroed ratio (bool)
+relora_log_reset_metrics = false
+
+# skip ReLoRA merge/reset until lr_warmup_steps elapses (bool)
+relora_skip_reset_until_warmup = false
 
 # =============================================================================
 # ⚠️ SLIDER TRAINING SETTINGS

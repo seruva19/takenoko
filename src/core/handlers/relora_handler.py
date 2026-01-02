@@ -29,6 +29,21 @@ def _get_reset_params(network: Any) -> Optional[list]:
     return None
 
 
+def _resolve_warmup_steps(
+    args: argparse.Namespace,
+    accelerator: Accelerator,
+) -> int:
+    warmup_steps = getattr(args, "lr_warmup_steps", 0) or 0
+    if isinstance(warmup_steps, float):
+        max_steps = int(getattr(args, "max_train_steps", 0) or 0)
+        num_processes = int(getattr(accelerator, "num_processes", 1) or 1)
+        if max_steps > 0:
+            warmup_steps = int(warmup_steps * max_steps * num_processes)
+        else:
+            warmup_steps = int(warmup_steps)
+    return int(warmup_steps)
+
+
 def handle_relora_reset(
     args: argparse.Namespace,
     accelerator: Accelerator,
@@ -56,6 +71,17 @@ def handle_relora_reset(
     if not do_merge and not do_reset:
         return
 
+    if getattr(args, "relora_skip_reset_until_warmup", False):
+        warmup_steps = _resolve_warmup_steps(args, accelerator)
+        if warmup_steps > 0 and update_step <= warmup_steps:
+            if accelerator.is_main_process:
+                logger.info(
+                    "ReLoRA: skipping reset until warmup ends (step=%s <= %s)",
+                    update_step,
+                    warmup_steps,
+                )
+            return
+
     if accelerator.is_main_process:
         logger.info(
             "ReLoRA: reset at update step %s (effective=%s, merge=%s, opt_reset=%s)",
@@ -81,7 +107,15 @@ def handle_relora_reset(
         if not reset_params:
             logger.warning("ReLoRA: no parameters available for optimizer reset")
             return
-        optimizer_reset(
+        named_reset_params = None
+        if getattr(args, "relora_enable_deepspeed_zero_reset", False):
+            reset_param_set = {param for param in reset_params}
+            named_reset_params = [
+                (name, param)
+                for name, param in unwrapped.named_parameters()
+                if param in reset_param_set
+            ]
+        zeroed_ratio = optimizer_reset(
             optimizer,
             reset_params=reset_params,
             optimizer_state_keys=list(
@@ -100,4 +134,30 @@ def handle_relora_reset(
             optimizer_magnitude_pruning=float(
                 getattr(args, "relora_optimizer_magnitude_pruning", 0.0) or 0.0
             ),
+            reset_prune_ratio=float(
+                getattr(args, "relora_reset_optimizer_prune_ratio", 0.0) or 0.0
+            ),
+            enable_deepspeed_zero_reset=bool(
+                getattr(args, "relora_enable_deepspeed_zero_reset", False)
+            ),
+            named_reset_params=named_reset_params,
         )
+        if getattr(args, "relora_log_reset_metrics", False):
+            reset_count = int(getattr(args, "_relora_reset_count", 0) or 0) + 1
+            setattr(args, "_relora_reset_count", reset_count)
+            if accelerator.is_main_process:
+                if zeroed_ratio is None:
+                    logger.info("ReLoRA: optimizer reset count=%s", reset_count)
+                else:
+                    logger.info(
+                        "ReLoRA: optimizer reset count=%s zeroed=%.2f%%",
+                        reset_count,
+                        zeroed_ratio * 100.0,
+                    )
+            try:
+                logs = {"relora/reset_count": reset_count}
+                if zeroed_ratio is not None:
+                    logs["relora/optimizer_zeroed"] = float(zeroed_ratio)
+                accelerator.log(logs, step=global_step)
+            except Exception:
+                pass
