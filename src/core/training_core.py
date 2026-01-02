@@ -1208,9 +1208,28 @@ class TrainingCore:
                                 bucket_size = getattr(item, "bucket_size", None)
                                 frame_count = getattr(item, "frame_count", None)
                                 is_reg = getattr(item, "is_reg", None)
-                                lines.append(
-                                    f"  [{i}] item_key={item_key} bucket_size={bucket_size} frame_count={frame_count} is_reg={is_reg}"
+                                media_type = "unknown"
+                                try:
+                                    if frame_count is not None:
+                                        media_type = (
+                                            "video" if int(frame_count) > 1 else "image"
+                                        )
+                                    elif (
+                                        isinstance(bucket_size, tuple)
+                                        and len(bucket_size) >= 3
+                                    ):
+                                        media_type = (
+                                            "video"
+                                            if int(bucket_size[2]) > 1
+                                            else "image"
+                                        )
+                                except Exception:
+                                    media_type = "unknown"
+                                line = (
+                                    f"  [{i}] item_key={item_key} media_type={media_type} "
+                                    f"bucket_size={bucket_size} frame_count={frame_count} is_reg={is_reg}"
                                 )
+                                lines.append(line)
                             logger.info(
                                 f"[batch_item_info] global_step={global_step} epoch={epoch + 1} step_in_epoch={step}:\n"
                                 + "\n".join(lines)
