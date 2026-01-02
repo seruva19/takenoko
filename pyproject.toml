@@ -16,6 +16,7 @@ dependencies = [
   "fira>=1.0.2",
   "ftfy==6.3.1",
   "galore-torch>=1.0",
+  "heavyball==2.2.3",
   "hpsv2==1.2.0",
   "huggingface-hub==0.30.0",
   "lpips>=0.1.4",
