@@ -484,6 +484,52 @@ class OptimizerManager:
                 logger,
             )
 
+        # TensorFlow-ported optimizers
+        elif optimizer_type == "Kron".lower():
+            from optimizers.kron import Kron
+
+            optimizer_class, optimizer = Kron, Kron(
+                trainable_params,
+                lr=lr,
+                **optimizer_kwargs,
+            )
+
+        elif optimizer_type == "Conda".lower():
+            from optimizers.conda import Conda
+
+            optimizer_class, optimizer = Conda, Conda(
+                trainable_params,
+                lr=lr,
+                **optimizer_kwargs,
+            )
+
+        elif optimizer_type in {"vsgd", "VSGD", "Vsgd"}:
+            from optimizers.vsgd import VSGD
+
+            optimizer_class, optimizer = VSGD, VSGD(
+                trainable_params,
+                lr=lr,
+                **optimizer_kwargs,
+            )
+
+        elif optimizer_type in {"rangerva", "RangerVA", "RANGERVA"}:
+            from optimizers.rangerva import RangerVA
+
+            optimizer_class, optimizer = RangerVA, RangerVA(
+                trainable_params,
+                lr=lr,
+                **optimizer_kwargs,
+            )
+
+        elif optimizer_type in {"nvnovograd", "NvNovoGrad", "NVNOVOGRAD"}:
+            from optimizers.nvnovograd import NvNovoGrad
+
+            optimizer_class, optimizer = NvNovoGrad, NvNovoGrad(
+                trainable_params,
+                lr=lr,
+                **optimizer_kwargs,
+            )
+
         if optimizer is None:
             case_sensitive_optimizer_type = args.optimizer_type  # not lower
             logger.info(f"using {case_sensitive_optimizer_type} | {optimizer_kwargs}")
