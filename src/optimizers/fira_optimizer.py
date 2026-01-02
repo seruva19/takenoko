@@ -149,7 +149,7 @@ class FiraOptimizerManager:
         logger.info(f"Optimizer state keys: {list(optimizer.state_dict().keys())}")
         logger.info(f"Optimizer parameter groups: {len(optimizer.param_groups)}")
 
-        return optimizer, {"train_fn": lambda: None, "eval_fn": lambda: None}
+        return optimizer, {"train_fn": lambda: None, "eval_fn": lambda: None}   
 
 
     @staticmethod
@@ -228,5 +228,23 @@ class FiraOptimizerManager:
                     dummy = torch.empty(0, device=target_device)
                     align_method(dummy)
                     logger.debug("Invoked _align_ortho_matrix for projector %s", hex(id(projector)))
+
+
+def create_fira_optimizer_init(
+    args: Any,
+    transformer: torch.nn.Module,
+    trainable_params: List[torch.nn.Parameter],
+    lr: float,
+    optimizer_kwargs: Dict[str, Any],
+) -> Tuple[Any, Any, Any]:
+    logger.info(f"using Fira optimizer | {optimizer_kwargs}")
+
+    from vendor.fira.fira_adamw import FiraAdamW
+
+    optimizer_class = FiraAdamW
+    optimizer, functions = FiraOptimizerManager.create_fira_optimizer(
+        args, transformer, trainable_params, lr, optimizer_kwargs
+    )
+    return optimizer_class, optimizer, functions
 
 

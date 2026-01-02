@@ -33,6 +33,7 @@ from utils.tread.tread_router import TREADRouter
 # Import all our refactored components
 from core.trainer_config import TrainerConfig
 from core.optimizer_manager import OptimizerManager
+from core.scheduler_manager import SchedulerManager
 from core.model_manager import ModelManager
 from core.sampling_manager import SamplingManager
 from core.control_signal_processor import ControlSignalProcessor
@@ -981,7 +982,7 @@ class WanNetworkTrainer:
 
         train_dataset_group.set_max_train_steps(args.max_train_steps)
 
-        lr_scheduler = self.optimizer_manager.get_lr_scheduler(
+        lr_scheduler = SchedulerManager.get_lr_scheduler(
             args, optimizer, accelerator.num_processes
         )
 

@@ -11,6 +11,7 @@ import torch.nn as nn
 from common.logger import get_logger
 
 from core.optimizer_manager import OptimizerManager
+from core.scheduler_manager import SchedulerManager
 from distillation.rcm_core.config_loader import RCMConfig
 
 logger = get_logger(__name__)
@@ -45,7 +46,7 @@ def build_rcm_optimizer(
         optimizer_eval_fn,
     ) = optimizer_manager.get_optimizer(args, student, trainable_params)
 
-    scheduler = optimizer_manager.get_lr_scheduler(
+    scheduler = SchedulerManager.get_lr_scheduler(
         args, optimizer, accelerator.num_processes
     )
 
