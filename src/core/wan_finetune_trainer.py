@@ -59,6 +59,7 @@ from finetune.logging_utils import (
     TimestepDistributionLogger,
 )
 from finetune.weight_dynamics_analysis import WeightDynamicsAnalyzer
+from utils.profiling_util import TrainingProfiler
 
 from scheduling.timestep_distribution import TimestepDistribution
 
@@ -1015,19 +1016,10 @@ class WanFinetuneTrainer:
             except Exception as e:
                 logger.warning(f"Failed to initialize adaptive timestep sampling: {e}")
 
-        # Initialize masked training if available
-        try:
-            self.training_core.loss_computer.initialize_masked_training(args)
-        except Exception as e:
-            logger.warning(f"Failed to initialize masked training: {e}")
+            # Validate training configuration and provide helpful warnings
+            from common.training_validators import validate_training_config
 
-        # Initialize temporal consistency enhancement if available
-        try:
-            self.training_core.initialize_temporal_consistency_enhancement(args)
-        except Exception as e:
-            logger.warning(
-                f"Failed to initialize temporal consistency enhancement: {e}"
-            )
+            validate_training_config(args)
 
         # Initialize EquiVDM consistent noise if available
         try:
@@ -1042,6 +1034,43 @@ class WanFinetuneTrainer:
             logger.warning(
                 f"Failed to initialize differential guidance enhancement: {e}"
             )
+
+        # Initialize masked training if available
+        try:
+            if hasattr(self.training_core, "loss_computer") and hasattr(
+                self.training_core.loss_computer, "initialize_masked_training"
+            ):
+                self.training_core.loss_computer.initialize_masked_training(args)
+        except Exception as e:
+            logger.warning(f"Failed to initialize masked training: {e}")
+
+        # Initialize temporal consistency enhancement if available
+        try:
+            self.training_core.initialize_temporal_consistency_enhancement(args)
+        except Exception as e:
+            logger.warning(
+                f"Failed to initialize temporal consistency enhancement: {e}"
+            )
+
+        # Initialize temporal pyramid helper if available
+        try:
+            self.training_core.initialize_temporal_pyramid(args)
+        except Exception as e:
+            logger.warning(f"Failed to initialize temporal pyramid helper: {e}")
+
+        # Initialize temporal pyramid stagewise targets if available
+        try:
+            self.training_core.initialize_temporal_pyramid_stagewise_targets(args)
+        except Exception as e:
+            logger.warning(
+                f"Failed to initialize temporal pyramid stagewise targets: {e}"
+            )
+
+        # Initialize CAT-LVDM corruption if available
+        try:
+            self.training_core.initialize_catlvdm_corruption(args)
+        except Exception as e:
+            logger.warning(f"Failed to initialize CAT-LVDM corruption: {e}")
 
         # Create shared epoch/step counters BEFORE dataset creation
         # These are used for multiprocessing-safe epoch tracking and bucket shuffling
@@ -1998,6 +2027,10 @@ class WanFinetuneTrainer:
             )
         )
 
+        # Initialize Profiler
+        profiler = TrainingProfiler(args, accelerator.logging_dir)
+        profiler.start()
+
         for epoch in range(starting_epoch, max_epochs):
             logger.info(f"🔄 Starting epoch {epoch + 1}/{max_epochs}")
             training_model.train()
@@ -2430,6 +2463,8 @@ class WanFinetuneTrainer:
             semfeat_helper.remove_hooks()
         if "crepa_helper" in locals() and crepa_helper is not None:
             crepa_helper.remove_hooks()
+
+        profiler.stop()
         progress_bar.close()
 
         # Final save using checkpoint manager format

@@ -433,7 +433,7 @@ def create_args_from_config(
     else:
         args.network_args = []
 
-    # Extract LoRA-GGPO parameters from network_args (e.g., "ggpo_sigma=0.03")  
+    # Extract LoRA-GGPO parameters from network_args (e.g., "ggpo_sigma=0.03")
     args.ggpo_sigma = None
     args.ggpo_beta = None
     for net_arg in args.network_args:
@@ -712,6 +712,19 @@ def create_args_from_config(
     args.resume = config.get("resume")
 
     args.auto_resume = config.get("auto_resume", True)
+
+    # Profiling settings
+    args.profiling_enabled = bool(config.get("profiling_enabled", False))
+    args.profiling_skip_first = int(config.get("profiling_skip_first", 10))
+    args.profiling_wait_steps = int(config.get("profiling_wait_steps", 5))
+    args.profiling_warmup_steps = int(config.get("profiling_warmup_steps", 2))
+    args.profiling_active_steps = int(config.get("profiling_active_steps", 3))
+    args.profiling_repeat = int(config.get("profiling_repeat", 1))
+
+    args.profiling_record_shapes = bool(config.get("profiling_record_shapes", True))
+    args.profiling_profile_memory = bool(config.get("profiling_profile_memory", True))
+    args.profiling_with_stack = bool(config.get("profiling_with_stack", True))
+    args.profiling_with_flops = bool(config.get("profiling_with_flops", True))
 
     # Enhanced resume functionality
     args.initial_step = config.get("initial_step")

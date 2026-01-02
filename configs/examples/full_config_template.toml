@@ -744,6 +744,40 @@ use_stochastic_rounding = true
 use_stochastic_rounding_cuda = false
 
 # =============================================================================
+# PROFILING SETTINGS
+# =============================================================================
+
+# Enable PyTorch Profiler for performance analysis (CPU/GPU traces, memory usage)
+profiling_enabled = false
+
+# Number of steps to wait before starting profiling cycle (skip initial overhead)
+profiling_skip_first = 10
+
+# Number of steps to wait before starting profiling cycle (skip initial overhead)
+profiling_wait_steps = 5
+
+# Number of steps to warmup profiler
+profiling_warmup_steps = 2
+
+# Number of steps to record trace
+profiling_active_steps = 3
+
+# Number of times to repeat the cycle
+profiling_repeat = 1
+
+# Record shapes
+profiling_record_shapes = true
+
+# Record memory usage
+profiling_profile_memory = true
+
+# Record stack traces
+profiling_with_stack = true
+
+# Record FLOPs
+profiling_with_flops = true
+
+# =============================================================================
 # TIMESTEP AND FLOW MATCHING SETTINGS
 # =============================================================================
 

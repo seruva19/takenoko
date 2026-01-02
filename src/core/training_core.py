@@ -94,6 +94,8 @@ from criteria.training_loss import TrainingLossComputer
 from core.loi_utils import run_loi_extra_backward
 from common.context_memory_manager import ContextMemoryManager
 
+from utils.profiling_util import TrainingProfiler
+
 
 from core import ema_helper
 from core.handlers.logging_config import (
@@ -1109,6 +1111,10 @@ class TrainingCore:
         # Initialize throughput tracker with configuration
         _initialize_throughput_tracker(args)
 
+        # Initialize Profiler
+        profiler = TrainingProfiler(args, accelerator.logging_dir)
+        profiler.start()
+
         # Wire Temporal Consistency TensorBoard logger once (integration handles cadence)
         try:
             if (
@@ -1461,7 +1467,7 @@ class TrainingCore:
                         if unwrapped_net is None:
                             unwrapped_net = accelerator.unwrap_model(network)
                         if hasattr(unwrapped_net, "update_rank_mask_from_timesteps"):
-                            unwrapped_net.update_rank_mask_from_timesteps(      
+                            unwrapped_net.update_rank_mask_from_timesteps(
                                 timesteps, max_timestep=1000, device=accelerator.device
                             )
                     except Exception:
@@ -2004,8 +2010,10 @@ class TrainingCore:
                                 def _extra_backward(adapter_setup_fn):
                                     transition_forward_fn = None
                                     if transition_loss_context:
-                                        transition_forward_fn = transition_loss_context.get(
-                                            "transition_forward_fn"
+                                        transition_forward_fn = (
+                                            transition_loss_context.get(
+                                                "transition_forward_fn"
+                                            )
                                         )
                                     return run_loi_extra_backward(
                                         adapter_setup_fn=adapter_setup_fn,
@@ -2113,7 +2121,6 @@ class TrainingCore:
                         end_optimizer_step_timing()
                     else:
                         optimizer.zero_grad(set_to_none=True)
-
 
                     handle_relora_reset(
                         args,
@@ -2376,6 +2383,9 @@ class TrainingCore:
                 # Check for Windows shared GPU memory usage (if enabled, periodic)
                 handle_windows_shared_memory_check(args, global_step, accelerator)
 
+                # Step the profiler
+                profiler.step()
+
                 if global_step >= args.max_train_steps:
                     break
 
@@ -2464,5 +2474,7 @@ class TrainingCore:
             )
 
             # end of epoch
+
+        profiler.stop()
 
         return global_step, network
