@@ -2975,6 +2975,44 @@ freq_temporal_loss_reduction = "mean"
 freq_temporal_apply_to_latent = true
 
 # =============================================================================
+# ⚠️ PHYSICS-GUIDED MOTION LOSS
+# =============================================================================
+
+# Enable physics-guided motion loss using spectral cues for video training.
+# Adds a composite motion regularizer (translation/rotation/scaling) computed on
+# predicted x0 in latent (or optional pixel) space. Default off to preserve baseline behavior.
+enable_physics_guided_motion_loss = false
+
+# Composite loss weight (>= 0). Higher values emphasize motion plausibility.
+physics_motion_loss_weight = 0.05
+
+# Low-pass cutoff ratio in frequency space (0.0 < value <= 0.5). Typical range: 0.2 to 0.35.
+physics_motion_lowpass_ratio = 0.3
+
+# Adaptive weighting temperature (tau). Lower values focus on the best-matching motion type; higher values mix components more evenly.
+physics_motion_tau = 0.2
+
+# Ridge regularization strength for translation plane fit (>= 0).
+physics_motion_ridge_lambda = 0.0001
+
+# Components to include in the composite loss. Valid entries: translation, rotation, scaling.
+physics_motion_components = ["translation", "rotation", "scaling"]
+
+# Use latent-space x0 prediction (true) or decode to pixels (false, requires VAE).
+physics_motion_apply_to_latent = true
+
+# x0 estimation source:
+# - "flow": assumes flow-matching target (x0 ~= noise - model_pred).
+# - "sigma": uses noisy input and sigma scaling (x0 ~= xt - sigma * model_pred).
+physics_motion_x0_source = "flow"
+
+# Radial bins for ring energy statistics (>= 8 recommended).
+physics_motion_radial_bins = 32
+
+# Maximum frames to process per batch (0 = no limit).
+physics_motion_max_frames = 0
+
+# =============================================================================
 # ⚠️ DIFFERENTIAL GUIDANCE
 # =============================================================================
 

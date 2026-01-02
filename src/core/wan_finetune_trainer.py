@@ -2158,11 +2158,45 @@ class WanFinetuneTrainer:
                                 loss_components.crepa_loss.item()
                             )
                         if (
-                            getattr(loss_components, "crepa_similarity", None)
+                            getattr(loss_components, "crepa_similarity", None)  
                             is not None
                         ):
                             logs["crepa_similarity"] = float(
                                 loss_components.crepa_similarity.item()
+                            )
+                        if (
+                            getattr(loss_components, "physics_motion_loss", None)
+                            is not None
+                        ):
+                            logs["loss/physics_motion"] = float(
+                                loss_components.physics_motion_loss.item()
+                            )
+                        if (
+                            getattr(
+                                loss_components, "physics_motion_translation_loss", None
+                            )
+                            is not None
+                        ):
+                            logs["loss/physics_motion_translation"] = float(
+                                loss_components.physics_motion_translation_loss.item()
+                            )
+                        if (
+                            getattr(
+                                loss_components, "physics_motion_rotation_loss", None
+                            )
+                            is not None
+                        ):
+                            logs["loss/physics_motion_rotation"] = float(
+                                loss_components.physics_motion_rotation_loss.item()
+                            )
+                        if (
+                            getattr(
+                                loss_components, "physics_motion_scaling_loss", None
+                            )
+                            is not None
+                        ):
+                            logs["loss/physics_motion_scaling"] = float(
+                                loss_components.physics_motion_scaling_loss.item()
                             )
 
                         # Add gradient norm if available

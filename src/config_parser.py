@@ -21,6 +21,7 @@ from dataset.config_utils import (
 )
 from configs.relora_config import apply_relora_config
 from configs.glance_config import apply_glance_config
+from configs.physics_guided_motion_loss import apply_physics_guided_motion_config
 
 
 def create_args_from_config(
@@ -1784,6 +1785,9 @@ def create_args_from_config(
     args.freq_temporal_apply_to_latent = config.get(
         "freq_temporal_apply_to_latent", True
     )
+
+    # Physics-guided motion loss (training-only)
+    args = apply_physics_guided_motion_config(args, config)
 
     # Inline self-correction prompts in config (preferred over external files)
     args.self_correction_prompts = None

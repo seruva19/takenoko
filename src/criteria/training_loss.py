@@ -18,6 +18,7 @@ import torch.nn.functional as F
 from common.logger import get_logger
 from criteria.dispersive_loss import dispersive_loss_info_nce
 from criteria.loss_factory import conditional_loss_with_pseudo_huber
+from criteria.physics_guided_motion_loss import compute_physics_guided_motion_loss
 from core.masked_training_manager import (
     create_masked_training_manager,
     MaskedTrainingManager,
@@ -130,7 +131,15 @@ class LossComponents:
     mhc_identity_reg: Optional[torch.Tensor]
         The mHC-LoRA identity regularization loss component, if enabled.        
     mhc_entropy_reg: Optional[torch.Tensor]
-        The mHC-LoRA mixing entropy regularization loss component, if enabled.
+        The mHC-LoRA mixing entropy regularization loss component, if enabled.  
+    physics_motion_loss: Optional[torch.Tensor]
+        Physics-guided motion loss (composite), if enabled.
+    physics_motion_translation_loss: Optional[torch.Tensor]
+        Translation component of the physics-guided motion loss.
+    physics_motion_rotation_loss: Optional[torch.Tensor]
+        Rotation component of the physics-guided motion loss.
+    physics_motion_scaling_loss: Optional[torch.Tensor]
+        Scaling component of the physics-guided motion loss.
     """
 
     total_loss: torch.Tensor
@@ -163,6 +172,10 @@ class LossComponents:
     ortho_reg_q: Optional[torch.Tensor] = None
     mhc_identity_reg: Optional[torch.Tensor] = None
     mhc_entropy_reg: Optional[torch.Tensor] = None
+    physics_motion_loss: Optional[torch.Tensor] = None
+    physics_motion_translation_loss: Optional[torch.Tensor] = None
+    physics_motion_rotation_loss: Optional[torch.Tensor] = None
+    physics_motion_scaling_loss: Optional[torch.Tensor] = None
 
 
 class TrainingLossComputer:
@@ -852,6 +865,112 @@ class TrainingLossComputer:
 
         base_loss = loss
 
+        # ---- Physics-guided motion loss (optional, training-only) ----
+        physics_motion_loss_value: Optional[torch.Tensor] = None
+        physics_motion_translation_value: Optional[torch.Tensor] = None
+        physics_motion_rotation_value: Optional[torch.Tensor] = None
+        physics_motion_scaling_value: Optional[torch.Tensor] = None
+        if getattr(args, "enable_physics_guided_motion_loss", False):
+            try:
+                if model_pred.dim() != 5:
+                    raise ValueError(
+                        "Physics-guided motion loss requires video tensors (B, C, F, H, W)"
+                    )
+                x0_source = str(
+                    getattr(args, "physics_motion_x0_source", "flow")
+                ).lower()
+                if x0_source == "flow":
+                    x0_pred = noise.to(network_dtype) - model_pred.to(network_dtype)
+                elif x0_source == "sigma":
+                    if noise_scheduler is None:
+                        raise ValueError("noise_scheduler is required for sigma x0 source")
+                    sigmas = get_sigmas(
+                        noise_scheduler,
+                        timesteps,
+                        device=accelerator.device,
+                        n_dim=5,
+                        dtype=network_dtype,
+                        source="physics_motion",
+                        timestep_layout="auto",
+                    )
+                    x0_pred = noisy_model_input.to(network_dtype) - sigmas * model_pred.to(
+                        network_dtype
+                    )
+                else:
+                    raise ValueError(f"Unknown physics_motion_x0_source: {x0_source}")
+
+                apply_to_latent = bool(
+                    getattr(args, "physics_motion_apply_to_latent", True)
+                )
+                x0_for_loss = x0_pred
+                if not apply_to_latent:
+                    if vae is None:
+                        raise ValueError(
+                            "VAE must be provided to compute physics-guided loss in pixel space"
+                        )
+                    with torch.no_grad():
+                        decoded = vae.decode(
+                            x0_pred / getattr(vae, "scaling_factor", 1.0)
+                        )
+                        x0_frames = (
+                            torch.stack(decoded, dim=0)
+                            if isinstance(decoded, list)
+                            else decoded
+                        )
+                    if x0_frames.dim() != 5:
+                        raise ValueError(
+                            f"Expected decoded video tensor, got shape {x0_frames.shape}"
+                        )
+                    if (
+                        x0_frames.shape[1] == x0_pred.shape[2]
+                        and x0_frames.shape[2] == x0_pred.shape[1]
+                    ):
+                        x0_frames = x0_frames.permute(0, 2, 1, 3, 4)
+                    elif (
+                        x0_frames.shape[1] != x0_pred.shape[1]
+                        or x0_frames.shape[2] != x0_pred.shape[2]
+                    ):
+                        raise ValueError(
+                            f"Unexpected decoded video shape {x0_frames.shape}"
+                        )
+                    x0_for_loss = x0_frames
+
+                max_frames = int(getattr(args, "physics_motion_max_frames", 0))
+                if max_frames > 0 and x0_for_loss.shape[2] > max_frames:
+                    indices = (
+                        torch.linspace(0, x0_for_loss.shape[2] - 1, max_frames)
+                        .long()
+                        .to(x0_for_loss.device)
+                    )
+                    x0_for_loss = x0_for_loss.index_select(2, indices)
+
+                motion_components = getattr(args, "physics_motion_components", None)
+                motion_result = compute_physics_guided_motion_loss(
+                    x0_for_loss,
+                    lowpass_ratio=float(
+                        getattr(args, "physics_motion_lowpass_ratio", 0.3)
+                    ),
+                    ridge_lambda=float(
+                        getattr(args, "physics_motion_ridge_lambda", 1e-4)
+                    ),
+                    tau=float(getattr(args, "physics_motion_tau", 0.2)),
+                    components=motion_components,
+                    radial_bins=int(getattr(args, "physics_motion_radial_bins", 32)),
+                )
+                motion_weight = float(
+                    getattr(args, "physics_motion_loss_weight", 0.05)
+                )
+                physics_motion_loss_value = motion_result["total"].detach()
+                if motion_result.get("translation") is not None:
+                    physics_motion_translation_value = motion_result["translation"].detach()
+                if motion_result.get("rotation") is not None:
+                    physics_motion_rotation_value = motion_result["rotation"].detach()
+                if motion_result.get("scaling") is not None:
+                    physics_motion_scaling_value = motion_result["scaling"].detach()
+                loss = loss + motion_weight * motion_result["total"]
+            except Exception as e:
+                logger.warning(f"Physics-guided motion loss computation failed: {e}")
+
         # ---- WanVideo cross-batch CFM regularizer (optional, default off) ----
         if getattr(args, "enable_wanvideo_cfm", False):
             try:
@@ -1497,6 +1616,10 @@ class TrainingLossComputer:
             ortho_reg_q=ortho_q_val,
             mhc_identity_reg=mhc_identity_val,
             mhc_entropy_reg=mhc_entropy_val,
+            physics_motion_loss=physics_motion_loss_value,
+            physics_motion_translation_loss=physics_motion_translation_value,
+            physics_motion_rotation_loss=physics_motion_rotation_value,
+            physics_motion_scaling_loss=physics_motion_scaling_value,
         )
 
     @torch.no_grad()
