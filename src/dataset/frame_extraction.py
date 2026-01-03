@@ -4,6 +4,16 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 
+from common.constants import TEMPORAL_DOWNSAMPLE_FACTOR_WAN
+
+
+def round_frame_count_to_temporal_multiple(frame_count: int) -> int:
+    if frame_count <= 1:
+        return 1
+    return (
+        (int(frame_count) - 1) // TEMPORAL_DOWNSAMPLE_FACTOR_WAN
+    ) * TEMPORAL_DOWNSAMPLE_FACTOR_WAN + 1
+
 
 def generate_crop_positions(
     frame_count: int,
@@ -108,7 +118,11 @@ def generate_crop_positions(
 
             if effective_frame_count < target_frame:
                 # If effective clip is shorter than target, take it as whole
-                crop_pos_and_frames.append((0, effective_frame_count))
+                # but round to the temporal multiple expected by WAN VAE.
+                rounded_count = round_frame_count_to_temporal_multiple(
+                    effective_frame_count
+                )
+                crop_pos_and_frames.append((0, rounded_count))
             else:
                 # Calculate how many fragments we can fit in the effective length
                 num_fragments = effective_frame_count // target_frame
@@ -139,7 +153,11 @@ def generate_crop_positions(
 
             if effective_frame_count < target_frame:
                 # If effective clip is shorter than target, take it as whole
-                crop_pos_and_frames.append((0, effective_frame_count))
+                # but round to the temporal multiple expected by WAN VAE.
+                rounded_count = round_frame_count_to_temporal_multiple(
+                    effective_frame_count
+                )
+                crop_pos_and_frames.append((0, rounded_count))
             elif normalized_mode == "uniform_adaptive":
                 # Use uniform sampling on the effective length
                 samples = frame_sample or 1
@@ -178,14 +196,13 @@ def generate_crop_positions(
                 for pos in sampled_positions:
                     crop_pos_and_frames.append((int(pos), target_frame))
 
-
         elif normalized_mode == "full":
             if max_frames is None or max_frames <= 0:
                 use_frames = frame_count
             else:
                 use_frames = min(frame_count, max_frames)
             # round to N*4+1 as per original implementation
-            use_frames = (use_frames - 1) // 4 * 4 + 1
+            use_frames = round_frame_count_to_temporal_multiple(use_frames)
             crop_pos_and_frames.append((0, use_frames))
 
         else:

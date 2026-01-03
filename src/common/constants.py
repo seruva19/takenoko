@@ -12,3 +12,5 @@ and should be centralized for maintainability.
 # This determines the granularity of resolution bucketing for multi-resolution training
 # WAN 2.x requires resolutions to be divisible by this value for optimal performance
 RESOLUTION_STEPS_WAN_2 = 16
+
+TEMPORAL_DOWNSAMPLE_FACTOR_WAN = 4

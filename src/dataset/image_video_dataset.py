@@ -21,8 +21,10 @@ from dataset.data_sources import (
     VideoDirectoryDataSource,
 )
 from dataset.datasource_utils import resize_image_to_bucket
-from dataset.frame_extraction import generate_crop_positions
-
+from dataset.frame_extraction import (
+    generate_crop_positions,
+    round_frame_count_to_temporal_multiple,
+)
 from dataset.item_info import ItemInfo
 from common.logger import get_logger
 
@@ -170,7 +172,7 @@ class BaseDataset(torch.utils.data.Dataset):
 
         if details:
             return f" ({', '.join(details)})"
-        return ""  
+        return ""
 
     def _validate_sequence_batch_names(self, item_keys: list[str]) -> None:
         if not self.sequence_batches:
@@ -202,9 +204,7 @@ class BaseDataset(torch.utils.data.Dataset):
             if should_report:
                 logger.warning("sequence_batches_report_names: %s", message)
             if should_validate:
-                raise ValueError(
-                    "sequence_batches_validate_names failed: " + message
-                )
+                raise ValueError("sequence_batches_validate_names failed: " + message)
 
     def _apply_dataset_metadata(self, item_info: ItemInfo) -> None:
         if item_info is None:
@@ -564,6 +564,7 @@ class BaseDataset(torch.utils.data.Dataset):
 
         executor.shutdown()
 
+
 class ImageDataset(BaseDataset):
     def __init__(
         self,
@@ -611,8 +612,8 @@ class ImageDataset(BaseDataset):
             concept_name=concept_name,
             sequence_batches=sequence_batches,
             sequence_batches_pattern=sequence_batches_pattern,
-            sequence_batches_validate_names=sequence_batches_validate_names,    
-            sequence_batches_report_names=sequence_batches_report_names,        
+            sequence_batches_validate_names=sequence_batches_validate_names,
+            sequence_batches_report_names=sequence_batches_report_names,
         )
 
         self.image_directory = image_directory
@@ -1110,7 +1111,10 @@ class ImageDataset(BaseDataset):
         if self.shared_epoch is not None:
             epoch = self.shared_epoch.value
 
-        if self._epoch_slide_last_epoch_applied == epoch and self.batch_manager is not None:
+        if (
+            self._epoch_slide_last_epoch_applied == epoch
+            and self.batch_manager is not None
+        ):
             return
 
         bucketed_item_info: dict[tuple[int, int], list[ItemInfo]] = {}
@@ -1155,7 +1159,9 @@ class ImageDataset(BaseDataset):
         if self.epoch_slide_enabled:
             self._rebuild_epoch_slide_batch_manager()
         if self.batch_manager is None:
-            logger.warning(f"[{dataset_id}] shuffle_buckets() called before batch manager was initialized")
+            logger.warning(
+                f"[{dataset_id}] shuffle_buckets() called before batch manager was initialized"
+            )
             return
         # set random seed for this epoch
         random.seed(self.seed + self.current_epoch)  # type: ignore
@@ -1316,14 +1322,29 @@ class VideoDataset(BaseDataset):
             concept_name=concept_name,
             sequence_batches=sequence_batches,
             sequence_batches_pattern=sequence_batches_pattern,
-            sequence_batches_validate_names=sequence_batches_validate_names,    
-            sequence_batches_report_names=sequence_batches_report_names,        
+            sequence_batches_validate_names=sequence_batches_validate_names,
+            sequence_batches_report_names=sequence_batches_report_names,
         )
 
         self.video_directory = video_directory
         self.frame_extraction = frame_extraction
         self.frame_stride = frame_stride
         self.frame_sample = frame_sample
+        if target_frames is not None:
+            target_frames = list(set(target_frames))
+            target_frames.sort()
+
+            rounded_target_frames = [
+                round_frame_count_to_temporal_multiple(f) for f in target_frames
+            ]
+            rounded_target_frames = list(set(rounded_target_frames))
+            rounded_target_frames.sort()
+
+            if target_frames != rounded_target_frames:
+                logger.warning(f"target_frames are rounded to {rounded_target_frames}")
+
+            target_frames = rounded_target_frames
+
         self.target_frames = target_frames
         self.max_frames = max_frames
         self.source_fps = source_fps
@@ -1333,9 +1354,7 @@ class VideoDataset(BaseDataset):
         self.mask_path = mask_path
 
         self.epoch_slide_enabled = self.frame_extraction == "epoch_slide"
-        self._epoch_slide_groups: dict[
-            tuple[int, int], dict[str, list[ItemInfo]]
-        ] = {}
+        self._epoch_slide_groups: dict[tuple[int, int], dict[str, list[ItemInfo]]] = {}
         self._epoch_slide_prior_loss_weight: Optional[float] = None
         self._epoch_slide_num_timestep_buckets: Optional[int] = None
         self._epoch_slide_logged_info = False
@@ -1917,7 +1936,9 @@ class VideoDataset(BaseDataset):
         if self.epoch_slide_enabled:
             self._rebuild_epoch_slide_batch_manager()
         if self.batch_manager is None:
-            logger.warning(f"[{dataset_id}] shuffle_buckets() called before batch manager was initialized")
+            logger.warning(
+                f"[{dataset_id}] shuffle_buckets() called before batch manager was initialized"
+            )
             return
         # set random seed for this epoch
         random.seed(self.seed + self.current_epoch)  # type: ignore
@@ -2135,7 +2156,9 @@ class DatasetGroup(torch.utils.data.ConcatDataset):
             return None
 
         hash_payload = {
-            "latent_cache_files": sorted(os.path.normpath(p) for p in latent_cache_files),
+            "latent_cache_files": sorted(
+                os.path.normpath(p) for p in latent_cache_files
+            ),
             "k_neighbors": k_neighbors,
             "k_bandwidth": k_bandwidth,
             "d_cdc": d_cdc,

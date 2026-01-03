@@ -14,6 +14,7 @@ from accelerate import Accelerator, PartialState
 
 import logging
 from dataset.image_video_dataset import TARGET_FPS_WAN
+from dataset.frame_extraction import round_frame_count_to_temporal_multiple
 from common.logger import get_logger
 from utils.train_utils import clean_memory_on_device, should_sample_images, load_prompts
 from common.model_downloader import download_model_if_needed
@@ -282,7 +283,9 @@ class SamplingManager:
         width = (width // 8) * 8
         height = (height // 8) * 8
 
-        frame_count = (frame_count - 1) // 4 * 4 + 1  # 1, 5, 9, 13, ...
+        frame_count = round_frame_count_to_temporal_multiple(
+            frame_count
+        )  # 1, 5, 9, 13, ...
 
         image_path = None
         control_video_path = None
@@ -616,9 +619,7 @@ class SamplingManager:
         else:
             context_null = None
 
-        bfm_state = setup_bfm_sampling(
-            args, context=context, device=device, vae=vae
-        )
+        bfm_state = setup_bfm_sampling(args, context=context, device=device, vae=vae)
         bfm_inference_semfeat = bfm_state.bfm_inference_semfeat
 
         num_channels_latents = 16  # model.in_dim
