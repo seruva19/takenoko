@@ -564,12 +564,11 @@ class TrainingCore:
                         f"reason={'not enough dimensions' if latents.ndim <= frame_dim else 'only 1 frame'}"
                     )
 
-        context_source = context_override if context_override is not None else batch[
-            "t5"
-        ]
+        context_source = (
+            context_override if context_override is not None else batch["t5"]
+        )
         context = [
-            t.to(device=accelerator.device, dtype=network_dtype)
-            for t in context_source
+            t.to(device=accelerator.device, dtype=network_dtype) for t in context_source
         ]
 
         self.semanticgen_state.reset()
@@ -945,7 +944,6 @@ class TrainingCore:
             return model_pred, target, intermediate_z, reg_cls_pred
         return model_pred, target, intermediate_z
 
-
     def run_training_loop(
         self,
         args: argparse.Namespace,
@@ -1222,15 +1220,15 @@ class TrainingCore:
                                         media_type = (
                                             "video" if int(frame_count) > 1 else "image"
                                         )
-                                    elif (
-                                        isinstance(bucket_size, tuple)
-                                        and len(bucket_size) >= 3
-                                    ):
-                                        media_type = (
-                                            "video"
-                                            if int(bucket_size[2]) > 1
-                                            else "image"
-                                        )
+                                    elif isinstance(bucket_size, tuple):
+                                        if len(bucket_size) >= 3:
+                                            media_type = (
+                                                "video"
+                                                if int(bucket_size[2]) > 1
+                                                else "image"
+                                            )
+                                        elif len(bucket_size) == 2:
+                                            media_type = "image"
                                 except Exception:
                                     media_type = "unknown"
                                 line = (
@@ -1254,9 +1252,8 @@ class TrainingCore:
                 from enhancements.contrastive_attention.training_integration import (
                     begin_contrastive_step,
                 )
-                begin_contrastive_step(
-                    contrastive_attention_helper, batch, global_step
-                )
+
+                begin_contrastive_step(contrastive_attention_helper, batch, global_step)
 
                 # Initialize metrics for this step
                 per_source_losses = {}
@@ -1641,13 +1638,13 @@ class TrainingCore:
 
                                 noisy_model_input, did_latent_update = (
                                     apply_latent_update(
-                                    helper=contrastive_attention_helper,
-                                    args=args,
-                                    batch=batch,
-                                    call_dit_fn=_call_dit_fn,
-                                    noisy_model_input=noisy_model_input,
-                                    accelerator=accelerator,
-                                    global_step=global_step,
+                                        helper=contrastive_attention_helper,
+                                        args=args,
+                                        batch=batch,
+                                        call_dit_fn=_call_dit_fn,
+                                        noisy_model_input=noisy_model_input,
+                                        accelerator=accelerator,
+                                        global_step=global_step,
                                     )
                                 )
                                 if did_latent_update:
@@ -2203,7 +2200,7 @@ class TrainingCore:
                             crepa_helper=crepa_helper,
                             haste_helper=haste_helper,
                             contrastive_attention_helper=contrastive_attention_helper,
-                            transition_loss_context=transition_loss_context,    
+                            transition_loss_context=transition_loss_context,
                             transition_forward_fn=(
                                 transition_loss_context.get("transition_forward_fn")
                                 if transition_loss_context
