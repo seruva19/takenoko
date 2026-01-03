@@ -4607,6 +4607,12 @@ frame_sample = 1
 # Cap total frames used by frame_extraction = "full"; final length is rounded to (4n+1)
 # max_frames = 129
 
+# When frame_extraction is adaptive/uniform_adaptive/epoch_slide and the video is shorter than target_frame,
+# a fallback window is taken from the available frames. If that fallback would be shorter than this value,
+# it is skipped (prevents tiny/1-frame fragments from entering training).
+# Set to 0 to disable.
+min_short_clip_frames = 5
+
 # Source FPS
 source_fps = 24
 

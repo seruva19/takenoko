@@ -1285,6 +1285,7 @@ class VideoDataset(BaseDataset):
         frame_sample: Optional[int] = 1,
         target_frames: Optional[list[int]] = None,
         max_frames: Optional[int] = None,
+        min_short_clip_frames: Optional[int] = 5,
         source_fps: Optional[float] = None,
         video_directory: Optional[str] = None,
         cache_directory: Optional[str] = None,
@@ -1347,6 +1348,7 @@ class VideoDataset(BaseDataset):
 
         self.target_frames = target_frames
         self.max_frames = max_frames
+        self.min_short_clip_frames = min_short_clip_frames
         self.source_fps = source_fps
         self.target_fps = TARGET_FPS_WAN
         self.load_control = load_control
@@ -1466,8 +1468,66 @@ class VideoDataset(BaseDataset):
                     # process control/mask videos if available
                     control_video = control
                     mask_video = None
+                    if control_video is not None:
+                        try:
+                            control_list = list(control_video)
+                            if len(control_list) > frame_count:
+                                control_list = control_list[:frame_count]
+                            elif len(control_list) < frame_count and control_list:
+                                control_list.extend(
+                                    [control_list[-1]]
+                                    * (frame_count - len(control_list))
+                                )
+                            control_video = control_list
+                        except Exception as exc:
+                            logger.warning(
+                                "Failed to normalize control length for %s: %s",
+                                video_key,
+                                exc,
+                            )
+                    if control_video is not None:
+                        try:
+                            if isinstance(control_video, np.ndarray):
+                                ctrl_len = int(control_video.shape[0])
+                                if ctrl_len > frame_count:
+                                    control_video = control_video[:frame_count]
+                                elif ctrl_len < frame_count and ctrl_len > 0:
+                                    last = control_video[-1:]
+                                    pad = np.repeat(
+                                        last,
+                                        frame_count - ctrl_len,
+                                        axis=0,
+                                    )
+                                    control_video = np.concatenate(
+                                        [control_video, pad],
+                                        axis=0,
+                                    )
+                            elif isinstance(control_video, (list, tuple)):
+                                ctrl_list = list(control_video)
+                                if len(ctrl_list) > frame_count:
+                                    ctrl_list = ctrl_list[:frame_count]
+                                elif (
+                                    len(ctrl_list) < frame_count and len(ctrl_list) > 0
+                                ):
+                                    ctrl_list.extend(
+                                        [ctrl_list[-1]] * (frame_count - len(ctrl_list))
+                                    )
+                                control_video = ctrl_list
+                        except Exception:
+                            pass
                     if mask is not None:
                         try:
+                            if isinstance(mask, (list, tuple)):
+                                mask_list = list(mask)
+                                if len(mask_list) > frame_count:
+                                    mask = mask_list[:frame_count]
+                                elif (
+                                    len(mask_list) < frame_count and len(mask_list) > 0
+                                ):
+                                    mask_list.extend(
+                                        [mask_list[-1]] * (frame_count - len(mask_list))
+                                    )
+                                    mask = mask_list
                             mask = [
                                 resize_image_to_bucket(frame, bucket_reso)
                                 for frame in mask
@@ -1488,6 +1548,7 @@ class VideoDataset(BaseDataset):
                         frame_stride=self.frame_stride,
                         frame_sample=self.frame_sample,
                         max_frames=self.max_frames,
+                        min_short_clip_frames=self.min_short_clip_frames,
                     )
 
                     for crop_pos, target_frame in crop_pos_and_frames:

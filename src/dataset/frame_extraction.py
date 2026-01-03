@@ -22,6 +22,7 @@ def generate_crop_positions(
     frame_stride: Optional[int] = 1,
     frame_sample: Optional[int] = 1,
     max_frames: Optional[int] = None,
+    min_short_clip_frames: Optional[int] = None,
 ) -> List[Tuple[int, int]]:
     """
     Generate a list of (start_index, window_size) pairs for extracting frame windows.
@@ -122,6 +123,12 @@ def generate_crop_positions(
                 rounded_count = round_frame_count_to_temporal_multiple(
                     effective_frame_count
                 )
+                if (
+                    min_short_clip_frames is not None
+                    and int(min_short_clip_frames) > 0
+                    and int(rounded_count) < int(min_short_clip_frames)
+                ):
+                    continue
                 crop_pos_and_frames.append((0, rounded_count))
             else:
                 # Calculate how many fragments we can fit in the effective length
@@ -157,6 +164,12 @@ def generate_crop_positions(
                 rounded_count = round_frame_count_to_temporal_multiple(
                     effective_frame_count
                 )
+                if (
+                    min_short_clip_frames is not None
+                    and int(min_short_clip_frames) > 0
+                    and int(rounded_count) < int(min_short_clip_frames)
+                ):
+                    continue
                 crop_pos_and_frames.append((0, rounded_count))
             elif normalized_mode == "uniform_adaptive":
                 # Use uniform sampling on the effective length

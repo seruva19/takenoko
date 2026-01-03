@@ -41,7 +41,7 @@ class BaseDatasetParams:
     resolution: Tuple[int, int] = (960, 544)
     enable_bucket: bool = False
     bucket_no_upscale: bool = False
-    bucket_constraint_type: str = "area"  # "area" (default) or "dimension"     
+    bucket_constraint_type: str = "area"  # "area" (default) or "dimension"
     _constrained_dimension: Optional[str] = (
         None  # Internal: "width", "height", or None (auto-detected)
     )
@@ -76,6 +76,7 @@ class VideoDatasetParams(BaseDatasetParams):
     frame_stride: Optional[int] = 1
     frame_sample: Optional[int] = 1
     max_frames: Optional[int] = 129
+    min_short_clip_frames: Optional[int] = 5
     source_fps: Optional[float] = None
 
 
@@ -182,6 +183,7 @@ class ConfigSanitizer:
         "frame_stride": int,
         "frame_sample": int,
         "max_frames": int,
+        "min_short_clip_frames": int,
         "cache_directory": str,
         "source_fps": float,
     }
