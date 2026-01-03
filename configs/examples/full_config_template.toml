@@ -2008,12 +2008,109 @@ haste_attn_coeff = 0.5
 # Early-stop step when alignment losses are disabled (must be > 0)
 haste_early_stop_step = 250000
 
-# Input resolution for the teacher encoder (256 or 512; 512 requires DINOv2)
+# Input resolution for the teacher encoder (256 or 512; 512 requires DINOv2)    
 haste_input_resolution = 256
 
 # =============================================================================
-# ⚠️ SPRINT (SPARSE-DENSE RESIDUAL FUSION) SETTINGS
+# ⚠️ CONTRASTIVE ATTENTION SEPARATION SETTINGS
 # =============================================================================
+
+# Enable contrastive attention separation (default off).
+# Uses cross-attention summaries to push concepts apart when multiple datasets
+# are mixed in a single LoRA training run.
+enable_contrastive_attention = false
+
+# Weight for the contrastive attention loss (>= 0). Typical range: 0.01 - 0.5.
+contrastive_attention_weight = 0.1
+
+# Temperature for supervised contrastive loss (must be > 0).
+# Lower = sharper separation; higher = softer separation.
+contrastive_attention_temperature = 0.1
+
+# Attention block range [start, end) to sample (end is exclusive).
+# Keep the window small to reduce overhead.
+contrastive_attention_layer_start = 10
+
+# Attention block end layer
+contrastive_attention_layer_end = 20
+
+# Layer aggregation mode across sampled blocks ("mean" or "max").
+contrastive_attention_layer_agg = "mean"
+
+# Limit number of heads used (0 = all heads).
+contrastive_attention_head_limit = 4
+
+# Subsample query tokens to reduce memory/compute (must be > 0).
+contrastive_attention_max_queries = 128
+
+# Only compute this loss every N steps (must be > 0).
+contrastive_attention_interval = 1
+
+# Focus on specific text token indices per concept (optional).
+# Requires knowing the text encoder token indices for your concept tokens.
+# When enabled, attention is masked to these indices before contrastive loss.
+contrastive_attention_focus_tokens = false
+
+# Renormalize focused attention mass (recommended).
+contrastive_attention_focus_renorm = true
+
+# Weight queries by their attention to the focused tokens to derive a spatial
+# mask-like summary (CLoRA-inspired).
+contrastive_attention_spatial_focus = false
+
+# Power applied to spatial focus weights (> 0). Larger = sharper focus.
+contrastive_attention_spatial_focus_power = 1.0
+
+# Mapping: concept_id -> [token indices].
+# String example: "0:5,6,7;1:12,13"
+# contrastive_attention_token_indices = "0:5,6,7;1:12,13"
+
+# Penalize attention mass on non-target tokens (entropy-based).
+# Encourages cleaner token separation when focus tokens are used.
+contrastive_attention_diversity_weight = 0.0
+
+# Encourage per-concept attention stability across steps (EMA consistency).
+contrastive_attention_consistency_weight = 0.0
+
+# EMA decay for consistency loss (0..1). Higher = slower updates.
+contrastive_attention_consistency_decay = 0.9
+
+# Optional weight ramp schedule for contrastive attention loss.
+# Set ramp_end > ramp_start to enable ramping.
+contrastive_attention_weight_ramp_start = 0
+
+# Optional weight ramp end step for contrastive attention loss.
+contrastive_attention_weight_ramp_end = 0
+
+# Optional weight ramp type for contrastive attention loss ("linear" or "cosine").
+contrastive_attention_weight_ramp_type = "linear"
+
+# Optional per-concept LoRA multiplier override (requires a single concept per batch).
+# String example: "0:1.0;1:0.8"
+# contrastive_attention_concept_multipliers = "0:1.0;1:0.8"
+
+# Extra prompt passes to sample additional attention maps using shuffled/rolled
+# batch contexts (adds forward passes; keep small).
+contrastive_attention_extra_prompt_passes = 0
+
+# Strategy for extra prompt passes: "shuffle" or "roll".
+contrastive_attention_extra_prompt_strategy = "shuffle"
+
+# Iterative latent update using contrastive attention (adds forward passes).
+contrastive_attention_latent_update = false
+
+# Number of inner steps for latent update (>= 0).
+contrastive_attention_latent_update_steps = 0
+
+# Step size for latent updates (> 0).
+contrastive_attention_latent_update_step_size = 0.1
+
+# Only run latent update every N steps (must be > 0).
+contrastive_attention_latent_update_interval = 1
+
+# ============================================================================= 
+# ⚠️ SPRINT (SPARSE-DENSE RESIDUAL FUSION) SETTINGS
+# ============================================================================= 
 
 # Enable Sprint sparse-dense residual fusion for efficient training
 enable_sprint = false
@@ -4418,8 +4515,15 @@ sequence_batches_report_names = false
 # Directory containing mask images for masked training
 # When using masked training, ensure your dataset includes mask files alongside images/videos
 # Masks should be binary: 0 = unmasked regions, 255 = masked regions
-# For videos: masks can be per-frame or single mask applied to all frames
-# mask_path = "/path/to/mask/images" 
+# For videos: masks can be per-frame or single mask applied to all frames       
+# mask_path = "/path/to/mask/images"
+
+# Optional concept metadata used for contrastive attention separation.
+# concept_id defaults to dataset index if omitted.
+# concept_id = 0
+
+# concept_name is only for logging/debugging.
+# concept_name = "concept_a"
 
 # =============================================================================
 # TRAINING DATASETS
@@ -4440,8 +4544,14 @@ resolution = [512, 512]
 # Batch size for this dataset (overrides general setting)
 batch_size = 1
 
-# Number of times to repeat this dataset per epoch (overrides general setting)
+# Number of times to repeat this dataset per epoch (overrides general setting)  
 num_repeats = 1
+
+# Optional concept metadata (overrides general setting)
+# concept_id = 0
+
+# concept_name is only for logging/debugging.
+# concept_name = "concept_a"
 
 # Path to mask images for this dataset (overrides general setting)
 # mask_path = "/path/to/mask/images" 
@@ -4463,6 +4573,12 @@ batch_size = 1
 
 # Number of times to repeat this dataset per epoch
 num_repeats = 1
+
+# Optional concept metadata (overrides general setting)
+# concept_id = 1
+
+# concept_name is only for logging/debugging.
+# concept_name = "concept_b"
 
 # Supported frame extraction modes
 # - head: take first window, requires setting target_frames. 

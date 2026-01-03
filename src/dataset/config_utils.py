@@ -41,10 +41,12 @@ class BaseDatasetParams:
     resolution: Tuple[int, int] = (960, 544)
     enable_bucket: bool = False
     bucket_no_upscale: bool = False
-    bucket_constraint_type: str = "area"  # "area" (default) or "dimension"
+    bucket_constraint_type: str = "area"  # "area" (default) or "dimension"     
     _constrained_dimension: Optional[str] = (
         None  # Internal: "width", "height", or None (auto-detected)
     )
+    concept_id: Optional[int] = None
+    concept_name: Optional[str] = None
     caption_extension: Optional[str] = None
     caption_dropout_rate: float = 0.0
     batch_size: int = 1
@@ -153,6 +155,8 @@ class ConfigSanitizer:
 
     # datasets schema
     DATASET_ASCENDABLE_SCHEMA = {
+        "concept_id": int,
+        "concept_name": str,
         "caption_extension": str,
         "caption_dropout_rate": float,
         "batch_size": int,

@@ -319,6 +319,8 @@ class BucketBatchManager:
         mask_signals = []  # Collect mask signals for the batch
         pixels_list = []  # Collect original (or resized) pixel tensors
         svi_y_anchor_latents = []  # Collect optional SVI y anchor latents
+        concept_ids = []
+        dataset_indices = []
 
         for item_info in bucket[start:end]:
             if item_info.latent_cache_path is not None:
@@ -363,6 +365,18 @@ class BucketBatchManager:
             # This is the key change: determine the weight for this specific item
             loss_weight = self.prior_loss_weight if item_info.is_reg else 1.0
             weights.append(loss_weight)
+            concept_id = getattr(item_info, "concept_id", None)
+            if concept_id is None:
+                concept_id = getattr(item_info, "dataset_index", None)
+            try:
+                concept_ids.append(int(concept_id))
+            except Exception:
+                concept_ids.append(-1)
+            dataset_index = getattr(item_info, "dataset_index", None)
+            try:
+                dataset_indices.append(int(dataset_index))
+            except Exception:
+                dataset_indices.append(-1)
 
             # Load optional SVI y anchor cache if available
             svi_anchor_latent = None
@@ -516,6 +530,12 @@ class BucketBatchManager:
 
         # Add weights to the batch tensor data
         batch_tensor_data["weight"] = torch.tensor(weights, dtype=torch.float32)
+        batch_tensor_data["concept_id"] = torch.tensor(
+            concept_ids, dtype=torch.long
+        )
+        batch_tensor_data["dataset_index"] = torch.tensor(
+            dataset_indices, dtype=torch.long
+        )
 
         # Add control signals to batch if any are available
         if any(cs is not None for cs in control_signals):

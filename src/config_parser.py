@@ -1320,6 +1320,13 @@ def create_args_from_config(
 
     parse_haste_config(config, args)
 
+    # Contrastive Attention (multi-concept separation) settings
+    from enhancements.contrastive_attention.config_parser import (
+        parse_contrastive_attention_config,
+    )
+
+    parse_contrastive_attention_config(config, args)
+
     # CDC-FM (Carre du Champ Flow Matching) settings
     from enhancements.cdc.config_parser import parse_cdc_config
 

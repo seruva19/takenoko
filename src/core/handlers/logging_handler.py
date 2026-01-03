@@ -183,6 +183,18 @@ def collect_and_log_training_metrics(
         logs["loss/haste_attn"] = float(loss_components.haste_attn_loss.item())
     if getattr(loss_components, "haste_proj_loss", None) is not None:
         logs["loss/haste_proj"] = float(loss_components.haste_proj_loss.item())
+    if getattr(loss_components, "contrastive_attn_loss", None) is not None:
+        logs["loss/contrastive_attn"] = float(
+            loss_components.contrastive_attn_loss.item()
+        )
+    if getattr(loss_components, "contrastive_attn_diversity_loss", None) is not None:
+        logs["loss/contrastive_attn_diversity"] = float(
+            loss_components.contrastive_attn_diversity_loss.item()
+        )
+    if getattr(loss_components, "contrastive_attn_consistency_loss", None) is not None:
+        logs["loss/contrastive_attn_consistency"] = float(
+            loss_components.contrastive_attn_consistency_loss.item()
+        )
     if getattr(loss_components, "crepa_loss", None) is not None:
         logs["loss/crepa"] = float(loss_components.crepa_loss.item())
         logs["crepa_loss"] = float(loss_components.crepa_loss.item())

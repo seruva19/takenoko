@@ -643,6 +643,7 @@ class WanFinetuneTrainer:
         layer_sync_helper: Optional[Any] = None,
         crepa_helper: Optional[Any] = None,
         haste_helper: Optional[Any] = None,
+        contrastive_attention_helper: Optional[Any] = None,
         vae: Optional[Any] = None,
         global_step: Optional[int] = None,
     ) -> Any:
@@ -654,8 +655,16 @@ class WanFinetuneTrainer:
         """
         device = accelerator.device
 
-        # Extract batch data (adapt to WAN video format) - no early conversion
+        # Extract batch data (adapt to WAN video format) - no early conversion  
         latents = batch["latents"]
+        from enhancements.contrastive_attention.training_integration import (
+            begin_contrastive_step,
+            apply_concept_multiplier,
+            restore_concept_multiplier,
+            apply_latent_update,
+            run_extra_prompt_passes,
+        )
+        begin_contrastive_step(contrastive_attention_helper, batch, global_step)
 
         # Use batch["t5"] context for text embeddings - no early conversion
         if "t5" in batch:
@@ -735,21 +744,73 @@ class WanFinetuneTrainer:
                     "REG enabled, but no 'pixels' found in batch. Skipping REG class token."
                 )
 
+        unwrapped_net_for_contrastive = accelerator.unwrap_model(transformer)
+        prev_multiplier, multiplier_applied = apply_concept_multiplier(
+            network=unwrapped_net_for_contrastive,
+            args=args,
+            batch=batch,
+        )
+
         # Use TrainingCore's call_dit method
-        with accelerator.autocast():
-            model_result = self.training_core.call_dit(
-                args,
-                accelerator,
-                transformer,
-                latents,
-                batch,
-                noise,
-                noisy_model_input,
-                timesteps,
-                transformer.dtype,
+        if contrastive_attention_helper is not None and global_step is not None:
+            def _call_dit_fn(model_input, context_override=None):
+                return self.training_core.call_dit(
+                    args,
+                    accelerator,
+                    transformer,
+                    latents,
+                    batch,
+                    noise,
+                    model_input,
+                    timesteps,
+                    transformer.dtype,
+                    global_step=global_step,
+                    reg_cls_token=None,
+                    context_override=context_override,
+                )
+
+            noisy_model_input, did_latent_update = apply_latent_update(
+                helper=contrastive_attention_helper,
+                args=args,
+                batch=batch,
+                call_dit_fn=_call_dit_fn,
+                noisy_model_input=noisy_model_input,
+                accelerator=accelerator,
                 global_step=global_step,
-                reg_cls_token=reg_cls_input,
             )
+            if did_latent_update:
+                begin_contrastive_step(
+                    contrastive_attention_helper, batch, global_step
+                )
+            run_extra_prompt_passes(
+                helper=contrastive_attention_helper,
+                args=args,
+                batch=batch,
+                call_dit_fn=_call_dit_fn,
+                noisy_model_input=noisy_model_input,
+                accelerator=accelerator,
+            )
+        with accelerator.autocast():
+            try:
+                model_result = self.training_core.call_dit(
+                    args,
+                    accelerator,
+                    transformer,
+                    latents,
+                    batch,
+                    noise,
+                    noisy_model_input,
+                    timesteps,
+                    transformer.dtype,
+                    global_step=global_step,
+                    reg_cls_token=reg_cls_input,
+                )
+            finally:
+                restore_concept_multiplier(
+                    network=unwrapped_net_for_contrastive,
+                    previous_multiplier=prev_multiplier,
+                    applied=multiplier_applied,
+                )
             reg_cls_pred = None
             if len(model_result) == 4:
                 model_pred, target, intermediate_z, reg_cls_pred = model_result
@@ -800,6 +861,7 @@ class WanFinetuneTrainer:
             layer_sync_helper=layer_sync_helper,
             crepa_helper=crepa_helper,
             haste_helper=haste_helper,
+            contrastive_attention_helper=contrastive_attention_helper,
             raft=None,
             warp_fn=None,
             adaptive_manager=None,
@@ -1709,6 +1771,7 @@ class WanFinetuneTrainer:
         # Initialize REPA/iREPA helper if enabled
         repa_helper = None
         haste_helper = None
+        contrastive_attention_helper = None
         if getattr(args, "enable_irepa", False):
             try:
                 from enhancements.repa.enhanced_repa_helper import EnhancedRepaHelper
@@ -1757,9 +1820,17 @@ class WanFinetuneTrainer:
             setup_haste_helper,
         )
 
-        haste_helper = setup_haste_helper(args, transformer, accelerator)
+        haste_helper = setup_haste_helper(args, transformer, accelerator)       
 
         add_haste_params(optimizer, haste_helper, args)
+
+        from enhancements.contrastive_attention.integration import (
+            setup_contrastive_attention_helper,
+        )
+
+        contrastive_attention_helper = setup_contrastive_attention_helper(
+            args, transformer, accelerator
+        )
 
         # Set training mode and ensure proper device placement
         # Always use training mode for fine-tuning to ensure weight updates
@@ -2063,6 +2134,7 @@ class WanFinetuneTrainer:
                         layer_sync_helper=layer_sync_helper,
                         crepa_helper=crepa_helper,
                         haste_helper=haste_helper,
+                        contrastive_attention_helper=contrastive_attention_helper,
                         vae=vae,
                         global_step=global_step,
                     )
@@ -2494,6 +2566,15 @@ class WanFinetuneTrainer:
             from enhancements.haste.integration import remove_haste_helper
 
             remove_haste_helper(haste_helper)
+        if (
+            "contrastive_attention_helper" in locals()
+            and contrastive_attention_helper is not None
+        ):
+            from enhancements.contrastive_attention.integration import (
+                remove_contrastive_attention_helper,
+            )
+
+            remove_contrastive_attention_helper(contrastive_attention_helper)
         if "semfeat_helper" in locals() and semfeat_helper is not None:
             semfeat_helper.remove_hooks()
         if "crepa_helper" in locals() and crepa_helper is not None:

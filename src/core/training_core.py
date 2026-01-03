@@ -502,6 +502,7 @@ class TrainingCore:
         rcm_trigflow: Optional[torch.Tensor] = None,
         rcm_t_scaling_factor: Optional[float] = None,
         reg_cls_token: Optional[torch.Tensor] = None,
+        context_override: Optional[List[torch.Tensor]] = None,
     ) -> Union[
         Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]],
         Tuple[
@@ -563,8 +564,12 @@ class TrainingCore:
                         f"reason={'not enough dimensions' if latents.ndim <= frame_dim else 'only 1 frame'}"
                     )
 
+        context_source = context_override if context_override is not None else batch[
+            "t5"
+        ]
         context = [
-            t.to(device=accelerator.device, dtype=network_dtype) for t in batch["t5"]
+            t.to(device=accelerator.device, dtype=network_dtype)
+            for t in context_source
         ]
 
         self.semanticgen_state.reset()
@@ -940,6 +945,7 @@ class TrainingCore:
             return model_pred, target, intermediate_z, reg_cls_pred
         return model_pred, target, intermediate_z
 
+
     def run_training_loop(
         self,
         args: argparse.Namespace,
@@ -980,6 +986,7 @@ class TrainingCore:
         layer_sync_helper: Optional[Any] = None,
         crepa_helper: Optional[Any] = None,
         haste_helper: Optional[Any] = None,
+        contrastive_attention_helper: Optional[Any] = None,
         controlnet: Optional[Any] = None,
         dual_model_manager: Optional[Any] = None,
     ) -> Tuple[int, Any]:
@@ -1175,6 +1182,7 @@ class TrainingCore:
                     _attn_metrics.begin_step(global_step)
                 except Exception:
                     pass
+                # Contrastive attention step setup happens after batch is available.
 
                 # Skip batches when resuming in the middle of an epoch
                 if epoch == epoch_to_start and step < step_offset:
@@ -1243,6 +1251,12 @@ class TrainingCore:
                 bsz = latents.shape[0]
                 if current_step is not None:
                     current_step.value = global_step
+                from enhancements.contrastive_attention.training_integration import (
+                    begin_contrastive_step,
+                )
+                begin_contrastive_step(
+                    contrastive_attention_helper, batch, global_step
+                )
 
                 # Initialize metrics for this step
                 per_source_losses = {}
@@ -1584,21 +1598,93 @@ class TrainingCore:
                                         "REG enabled, but no 'pixels' found in batch. Skipping REG class token."
                                     )
 
-                            model_result = self.call_dit(
-                                args,
-                                accelerator,
-                                active_transformer,
-                                latents_for_dit,
-                                batch,
-                                noise,
-                                noisy_model_input,
-                                timesteps,
-                                network_dtype,
-                                control_signal_processor,
-                                controlnet,
-                                global_step=global_step,
-                                reg_cls_token=reg_cls_input,
+                            from enhancements.contrastive_attention.training_integration import (
+                                apply_concept_multiplier,
+                                restore_concept_multiplier,
                             )
+
+                            unwrapped_net_for_contrastive = accelerator.unwrap_model(
+                                network
+                            )
+                            prev_multiplier, multiplier_applied = (
+                                apply_concept_multiplier(
+                                    network=unwrapped_net_for_contrastive,
+                                    args=args,
+                                    batch=batch,
+                                )
+                            )
+
+                            if contrastive_attention_helper is not None:
+                                from enhancements.contrastive_attention.training_integration import (
+                                    apply_latent_update,
+                                    run_extra_prompt_passes,
+                                    begin_contrastive_step,
+                                )
+
+                                def _call_dit_fn(model_input, context_override=None):
+                                    return self.call_dit(
+                                        args,
+                                        accelerator,
+                                        active_transformer,
+                                        latents_for_dit,
+                                        batch,
+                                        noise,
+                                        model_input,
+                                        timesteps,
+                                        network_dtype,
+                                        control_signal_processor=control_signal_processor,
+                                        controlnet=controlnet,
+                                        global_step=global_step,
+                                        reg_cls_token=None,
+                                        context_override=context_override,
+                                    )
+
+                                noisy_model_input, did_latent_update = (
+                                    apply_latent_update(
+                                    helper=contrastive_attention_helper,
+                                    args=args,
+                                    batch=batch,
+                                    call_dit_fn=_call_dit_fn,
+                                    noisy_model_input=noisy_model_input,
+                                    accelerator=accelerator,
+                                    global_step=global_step,
+                                    )
+                                )
+                                if did_latent_update:
+                                    begin_contrastive_step(
+                                        contrastive_attention_helper, batch, global_step
+                                    )
+                                run_extra_prompt_passes(
+                                    helper=contrastive_attention_helper,
+                                    args=args,
+                                    batch=batch,
+                                    call_dit_fn=_call_dit_fn,
+                                    noisy_model_input=noisy_model_input,
+                                    accelerator=accelerator,
+                                )
+
+                            try:
+                                model_result = self.call_dit(
+                                    args,
+                                    accelerator,
+                                    active_transformer,
+                                    latents_for_dit,
+                                    batch,
+                                    noise,
+                                    noisy_model_input,
+                                    timesteps,
+                                    network_dtype,
+                                    control_signal_processor,
+                                    controlnet,
+                                    global_step=global_step,
+                                    reg_cls_token=reg_cls_input,
+                                )
+                            finally:
+                                restore_concept_multiplier(
+                                    network=unwrapped_net_for_contrastive,
+                                    previous_multiplier=prev_multiplier,
+                                    applied=multiplier_applied,
+                                )
 
                             # End forward pass timing
                             end_forward_pass_timing()
@@ -1775,6 +1861,7 @@ class TrainingCore:
                                 layer_sync_helper=layer_sync_helper,
                                 crepa_helper=crepa_helper,
                                 haste_helper=haste_helper,
+                                contrastive_attention_helper=contrastive_attention_helper,
                                 raft=getattr(self, "raft", None),
                                 warp_fn=getattr(self, "warp", None),
                                 adaptive_manager=self.adaptive_manager,
@@ -2064,6 +2151,7 @@ class TrainingCore:
                                         layer_sync_helper=layer_sync_helper,
                                         crepa_helper=crepa_helper,
                                         haste_helper=haste_helper,
+                                        contrastive_attention_helper=contrastive_attention_helper,
                                         transition_loss_context=transition_loss_context,
                                         transition_forward_fn=transition_forward_fn,
                                     )
@@ -2114,7 +2202,8 @@ class TrainingCore:
                             layer_sync_helper=layer_sync_helper,
                             crepa_helper=crepa_helper,
                             haste_helper=haste_helper,
-                            transition_loss_context=transition_loss_context,
+                            contrastive_attention_helper=contrastive_attention_helper,
+                            transition_loss_context=transition_loss_context,    
                             transition_forward_fn=(
                                 transition_loss_context.get("transition_forward_fn")
                                 if transition_loss_context

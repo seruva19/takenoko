@@ -26,6 +26,9 @@ class ItemInfo:
         mask_content: Optional[np.ndarray] = None,
         is_reg: bool = False,
         optical_flow_cache_path: Optional[str] = None,
+        dataset_index: Optional[int] = None,
+        concept_id: Optional[int] = None,
+        concept_name: Optional[str] = None,
     ) -> None:
         self.item_key = item_key
         self.caption = caption
@@ -36,11 +39,14 @@ class ItemInfo:
         self.latent_cache_path = latent_cache_path
         self.text_encoder_output_cache_path: Optional[str] = None
         self.semantic_encoder_output_cache_path: Optional[str] = None
-        self.optical_flow_cache_path: Optional[str] = optical_flow_cache_path
+        self.optical_flow_cache_path: Optional[str] = optical_flow_cache_path   
         self.weight = weight
         self.control_content = control_content
         self.mask_content = mask_content
         self.is_reg = is_reg
+        self.dataset_index = dataset_index
+        self.concept_id = concept_id
+        self.concept_name = concept_name
 
     def __str__(self) -> str:
         return (

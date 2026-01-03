@@ -80,6 +80,8 @@ class BaseDataset(torch.utils.data.Dataset):
         is_val: bool = False,
         target_model: Optional[str] = None,
         is_reg: bool = False,
+        concept_id: Optional[int] = None,
+        concept_name: Optional[str] = None,
         sequence_batches: bool = False,
         sequence_batches_pattern: Optional[str] = None,
         sequence_batches_validate_names: bool = False,
@@ -102,6 +104,8 @@ class BaseDataset(torch.utils.data.Dataset):
         self.is_val = is_val
         self.target_model = target_model
         self.is_reg = is_reg
+        self.concept_id = concept_id
+        self.concept_name = concept_name
         self.sequence_batches = bool(sequence_batches)
         self.sequence_batches_pattern = sequence_batches_pattern
         self.sequence_batches_validate_names = bool(sequence_batches_validate_names)
@@ -202,9 +206,35 @@ class BaseDataset(torch.utils.data.Dataset):
                     "sequence_batches_validate_names failed: " + message
                 )
 
+    def _apply_dataset_metadata(self, item_info: ItemInfo) -> None:
+        if item_info is None:
+            return
+        if getattr(item_info, "dataset_index", None) is None:
+            item_info.dataset_index = self.dataset_index
+        if getattr(item_info, "concept_id", None) is None:
+            item_info.concept_id = self.concept_id
+        if getattr(item_info, "concept_name", None) is None:
+            item_info.concept_name = self.concept_name
+
+    def _propagate_dataset_metadata(self) -> None:
+        manager = getattr(self, "batch_manager", None)
+        if manager is not None and hasattr(manager, "buckets"):
+            for bucket in manager.buckets.values():
+                for item_info in bucket:
+                    self._apply_dataset_metadata(item_info)
+        epoch_groups = getattr(self, "_epoch_slide_groups", None)
+        if epoch_groups:
+            for groups in epoch_groups.values():
+                for items in groups.values():
+                    for item_info in items:
+                        self._apply_dataset_metadata(item_info)
+
     def set_dataset_index(self, index: int):
         """Set the dataset index (used by DatasetGroup)."""
         self.dataset_index = index
+        if self.concept_id is None:
+            self.concept_id = index
+        self._propagate_dataset_metadata()
 
     def get_metadata(self) -> dict:
         metadata = {
@@ -555,6 +585,8 @@ class ImageDataset(BaseDataset):
         mask_path: Optional[str] = None,
         is_reg: bool = False,
         caption_dropout_rate: float = 0.0,
+        concept_id: Optional[int] = None,
+        concept_name: Optional[str] = None,
         sequence_batches: bool = False,
         sequence_batches_pattern: Optional[str] = None,
         sequence_batches_validate_names: bool = False,
@@ -575,10 +607,12 @@ class ImageDataset(BaseDataset):
             is_val=is_val,
             target_model=target_model,
             is_reg=is_reg,
+            concept_id=concept_id,
+            concept_name=concept_name,
             sequence_batches=sequence_batches,
             sequence_batches_pattern=sequence_batches_pattern,
-            sequence_batches_validate_names=sequence_batches_validate_names,
-            sequence_batches_report_names=sequence_batches_report_names,
+            sequence_batches_validate_names=sequence_batches_validate_names,    
+            sequence_batches_report_names=sequence_batches_report_names,        
         )
 
         self.image_directory = image_directory
@@ -1256,6 +1290,8 @@ class VideoDataset(BaseDataset):
         mask_path: Optional[str] = None,
         is_reg: bool = False,
         caption_dropout_rate: float = 0.0,
+        concept_id: Optional[int] = None,
+        concept_name: Optional[str] = None,
         sequence_batches: bool = False,
         sequence_batches_pattern: Optional[str] = None,
         sequence_batches_validate_names: bool = False,
@@ -1276,10 +1312,12 @@ class VideoDataset(BaseDataset):
             is_val=is_val,
             target_model=target_model,
             is_reg=is_reg,
+            concept_id=concept_id,
+            concept_name=concept_name,
             sequence_batches=sequence_batches,
             sequence_batches_pattern=sequence_batches_pattern,
-            sequence_batches_validate_names=sequence_batches_validate_names,
-            sequence_batches_report_names=sequence_batches_report_names,
+            sequence_batches_validate_names=sequence_batches_validate_names,    
+            sequence_batches_report_names=sequence_batches_report_names,        
         )
 
         self.video_directory = video_directory

@@ -1509,6 +1509,7 @@ class WanNetworkTrainer:
             reg_helper = None
             layer_sync_helper = None
             haste_helper = None
+            contrastive_attention_helper = None
             if crepa_helper is not None:
                 try:
                     logger.info("CREPA is enabled. Setting up the helper module.")
@@ -1604,6 +1605,14 @@ class WanNetworkTrainer:
 
             add_haste_params(optimizer, haste_helper, args)
 
+            from enhancements.contrastive_attention.integration import (
+                setup_contrastive_attention_helper,
+            )
+
+            contrastive_attention_helper = setup_contrastive_attention_helper(
+                args, transformer, accelerator
+            )
+
             # Run the main training loop using TrainingCore
             # Attach a self-correction manager instance if enabled so the core can call it
             try:
@@ -1680,6 +1689,7 @@ class WanNetworkTrainer:
                 layer_sync_helper=layer_sync_helper,
                 crepa_helper=crepa_helper,
                 haste_helper=haste_helper,
+                contrastive_attention_helper=contrastive_attention_helper,
                 dual_model_manager=dual_model_manager,
             )
 
@@ -1695,6 +1705,15 @@ class WanNetworkTrainer:
             from enhancements.haste.integration import remove_haste_helper
 
             remove_haste_helper(haste_helper)
+        if (
+            "contrastive_attention_helper" in locals()
+            and contrastive_attention_helper is not None
+        ):
+            from enhancements.contrastive_attention.integration import (
+                remove_contrastive_attention_helper,
+            )
+
+            remove_contrastive_attention_helper(contrastive_attention_helper)
         if "semfeat_helper" in locals() and semfeat_helper is not None:
             semfeat_helper.remove_hooks()
         if "crepa_helper" in locals() and crepa_helper is not None:

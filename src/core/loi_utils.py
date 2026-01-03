@@ -45,6 +45,7 @@ def run_loi_extra_backward(
     layer_sync_helper,
     crepa_helper,
     haste_helper,
+    contrastive_attention_helper=None,
     transition_loss_context,
     transition_forward_fn=None,
 ) -> Optional[tuple]:
@@ -120,6 +121,7 @@ def run_loi_extra_backward(
         layer_sync_helper=layer_sync_helper,
         crepa_helper=crepa_helper,
         haste_helper=haste_helper,
+        contrastive_attention_helper=contrastive_attention_helper,
         raft=getattr(training_core, "raft", None),
         warp_fn=getattr(training_core, "warp", None),
         adaptive_manager=training_core.adaptive_manager,

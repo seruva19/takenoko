@@ -104,6 +104,12 @@ class LossComponents:
         The HASTE attention alignment loss, if enabled.
     haste_proj_loss: Optional[torch.Tensor]
         The HASTE projection alignment loss, if enabled.
+    contrastive_attn_loss: Optional[torch.Tensor]
+        The contrastive attention separation loss, if enabled.
+    contrastive_attn_diversity_loss: Optional[torch.Tensor]
+        The contrastive attention diversity loss, if enabled.
+    contrastive_attn_consistency_loss: Optional[torch.Tensor]
+        The contrastive attention consistency loss, if enabled.
     sara_loss: Optional[torch.Tensor]
         The SARA loss component, if enabled.
     wanvideo_cfm_loss: Optional[torch.Tensor]
@@ -158,6 +164,9 @@ class LossComponents:
     crepa_similarity: Optional[torch.Tensor] = None
     haste_attn_loss: Optional[torch.Tensor] = None
     haste_proj_loss: Optional[torch.Tensor] = None
+    contrastive_attn_loss: Optional[torch.Tensor] = None
+    contrastive_attn_diversity_loss: Optional[torch.Tensor] = None
+    contrastive_attn_consistency_loss: Optional[torch.Tensor] = None
     sara_loss: Optional[torch.Tensor] = None
     wanvideo_cfm_loss: Optional[torch.Tensor] = None
     memflow_guidance_loss: Optional[torch.Tensor] = None
@@ -457,6 +466,7 @@ class TrainingLossComputer:
         layer_sync_helper: Optional[Any] = None,
         crepa_helper: Optional[Any] = None,
         haste_helper: Optional[Any] = None,
+        contrastive_attention_helper: Optional[Any] = None,
         raft: Optional[Any] = None,
         warp_fn: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
         adaptive_manager: Optional[Any] = None,
@@ -1219,6 +1229,58 @@ class TrainingLossComputer:
             except Exception as e:
                 logger.warning(f"HASTE loss computation failed: {e}")
 
+        # ---- Optional Contrastive Attention Loss ----
+        contrastive_attn_loss_value: Optional[torch.Tensor] = None
+        contrastive_attn_diversity_value: Optional[torch.Tensor] = None
+        contrastive_attn_consistency_value: Optional[torch.Tensor] = None
+        if (
+            contrastive_attention_helper is not None
+            and getattr(args, "enable_contrastive_attention", False)
+        ):
+            try:
+                concept_ids = batch.get("concept_id")
+                diversity_loss = contrastive_attention_helper.compute_diversity_loss(
+                    concept_ids
+                )
+                consistency_loss = (
+                    contrastive_attention_helper.compute_consistency_loss(
+                        concept_ids
+                    )
+                )
+                contrastive_loss = contrastive_attention_helper.compute_loss(
+                    concept_ids
+                )
+                helper_weight = (
+                    contrastive_attention_helper.get_weight(global_step)
+                    if hasattr(contrastive_attention_helper, "get_weight")
+                    else float(getattr(args, "contrastive_attention_weight", 0.0))
+                )
+                if contrastive_loss is not None and helper_weight > 0:
+                    loss = loss + contrastive_loss * helper_weight
+                    contrastive_attn_loss_value = (
+                        contrastive_loss * helper_weight
+                    ).detach()
+                diversity_weight = float(
+                    getattr(args, "contrastive_attention_diversity_weight", 0.0)
+                )
+                if diversity_loss is not None and diversity_weight > 0:
+                    loss = loss + diversity_loss * diversity_weight
+                    contrastive_attn_diversity_value = (
+                        diversity_loss * diversity_weight
+                    ).detach()
+                consistency_weight = float(
+                    getattr(args, "contrastive_attention_consistency_weight", 0.0)
+                )
+                if consistency_loss is not None and consistency_weight > 0:
+                    loss = loss + consistency_loss * consistency_weight
+                    contrastive_attn_consistency_value = (
+                        consistency_loss * consistency_weight
+                    ).detach()
+            except Exception as e:
+                logger.warning(
+                    f"Contrastive attention loss computation failed: {e}"
+                )
+
         # ---- Optional CREPA Loss ----
         crepa_loss_value: Optional[torch.Tensor] = None
         crepa_similarity_value: Optional[torch.Tensor] = None
@@ -1606,6 +1668,9 @@ class TrainingLossComputer:
             crepa_similarity=crepa_similarity_value,
             haste_attn_loss=haste_attn_loss_value,
             haste_proj_loss=haste_proj_loss_value,
+            contrastive_attn_loss=contrastive_attn_loss_value,
+            contrastive_attn_diversity_loss=contrastive_attn_diversity_value,
+            contrastive_attn_consistency_loss=contrastive_attn_consistency_value,
             sara_loss=sara_loss_value,
             wanvideo_cfm_loss=wanvideo_cfm_loss_value,
             bfm_semfeat_loss=bfm_semfeat_loss_value,

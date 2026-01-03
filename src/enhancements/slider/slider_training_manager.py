@@ -171,6 +171,9 @@ class SliderTrainingManager:
                 layer_sync_helper=kwargs.get("layer_sync_helper"),
                 crepa_helper=kwargs.get("crepa_helper"),
                 haste_helper=kwargs.get("haste_helper"),
+                contrastive_attention_helper=kwargs.get(
+                    "contrastive_attention_helper"
+                ),
                 raft=kwargs.get("raft"),
                 warp_fn=kwargs.get("warp_fn"),
                 adaptive_manager=kwargs.get("adaptive_manager"),
@@ -233,6 +236,9 @@ class SliderTrainingManager:
                 layer_sync_helper=kwargs.get("layer_sync_helper"),
                 crepa_helper=kwargs.get("crepa_helper"),
                 haste_helper=kwargs.get("haste_helper"),
+                contrastive_attention_helper=kwargs.get(
+                    "contrastive_attention_helper"
+                ),
                 raft=kwargs.get("raft"),
                 warp_fn=kwargs.get("warp_fn"),
                 adaptive_manager=kwargs.get("adaptive_manager"),
