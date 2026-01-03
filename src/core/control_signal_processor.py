@@ -59,14 +59,94 @@ class ControlSignalProcessor:
         Returns:
             Processed control latents or None if not available
         """
-        # DISABLED: Cached control signal path - forcing on-the-fly generation for video saving
-        # The cached control signal path doesn't support video saving, so we skip it entirely
-        # to ensure all control processing goes through the on-the-fly path where video saving happens
+        # Cached control signal path (latents or raw pixels).
+        # Enables cache-only control LoRA training without requiring source videos.
+        if "control_signal" in batch:
+            control_signal = batch["control_signal"]
+            if isinstance(control_signal, torch.Tensor):
+                if control_signal.dim() == 5 and control_signal.shape[1] == latents.shape[1]:
+                    logger.info("🎯 Found cached control latents in batch")
+                    return control_signal.to(
+                        device=latents.device, dtype=network_dtype
+                    )
+                if vae is not None:
+                    logger.info(
+                        "🎯 Found cached control pixels in batch; encoding with VAE"
+                    )
+                    vae_dtype = vae.dtype if vae is not None else torch.float16
+                    control_pixels = control_signal.to(
+                        device=latents.device, dtype=vae_dtype
+                    )
+                    max_val = float(control_pixels.max().detach().cpu())
+                    min_val = float(control_pixels.min().detach().cpu())
+                    if max_val > 1.5:
+                        control_pixels = control_pixels / 127.5 - 1.0
+                    elif min_val >= 0.0 and max_val <= 1.0:
+                        control_pixels = control_pixels * 2.0 - 1.0
 
-        # if "control_signal" in batch:
-        #     logger.info("🎯 Found cached control signal in batch")
-        #     # ... cached control signal processing (DISABLED)
-        #     # return cached_control_latents
+                    control_latents_list = []
+                    for idx in range(control_pixels.shape[0]):
+                        one_pixels = control_pixels[idx]
+                        if self._utils_proc is not None:
+                            self._utils_proc.control_type = getattr(
+                                args, "control_lora_type", "tile"
+                            )
+                            self._utils_proc.preprocessing = getattr(
+                                args, "control_preprocessing", "blur"
+                            )
+                            self._utils_proc.blur_kernel_size = getattr(
+                                args, "control_blur_kernel_size", 15
+                            )
+                            self._utils_proc.blur_sigma = getattr(
+                                args, "control_blur_sigma", 4.0
+                            )
+                            self._utils_proc.scale_factor = getattr(
+                                args, "control_scale_factor", 1.0
+                            )
+                            self._utils_proc.concatenation_dim = getattr(
+                                args, "control_concatenation_dim", -2
+                            )
+
+                            if latents.dim() == 5:
+                                target_shape = (
+                                    latents.shape[2],
+                                    latents.shape[3],
+                                    latents.shape[4],
+                                )
+                            else:
+                                target_shape = (
+                                    latents.shape[1],
+                                    latents.shape[2],
+                                    latents.shape[3],
+                                )
+
+                            control_pixel = self._utils_proc._process_tile_control(
+                                one_pixels, target_shape, latents.device, vae_dtype
+                            )
+                        else:
+                            control_pixel = self.apply_blur_preprocessing_on_the_fly(
+                                one_pixels,
+                                args,
+                            )
+                        control_latents_list.append(control_pixel)
+
+                    vae_device = vae.device
+                    try:
+                        vae.to(latents.device)
+                        with torch.no_grad():
+                            control_latents = vae.encode(control_latents_list)
+                        if isinstance(control_latents, list):
+                            control_latents = torch.stack(control_latents)
+                        control_latents = control_latents.to(
+                            device=latents.device, dtype=network_dtype
+                        )
+                        return control_latents
+                    finally:
+                        vae.to(vae_device)
+                else:
+                    logger.warning(
+                        "Control signal present but no VAE available; skipping cached control"
+                    )
 
         # On-the-fly control generation from raw pixels
         if "pixels" in batch and vae is not None:
