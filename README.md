@@ -123,3 +123,5 @@ Keep in mind that work on some features is not yet complete due to time and hard
 | [Physics-Guided Motion Loss for Video Generation Model](https://arxiv.org/abs/2506.02244) | paper | - Physics-guided motion loss | Bowen Xue, Giuseppe Claudio Guarnera, Shuang Zhao, Zahra Montazeri | arXiv 1.0 |  |
 | [optimizers](https://github.com/NoteDance/optimizers) | repo | - Original implementation of Kron, Conda, VSGD, RangerVA and NvNovoGrad optimizers | [NoteDance](https://github.com/NoteDance) | Apache 2.0 |  |
 | [clora](https://github.com/gemlab-vt/clora) | repo | - Cross-attention capture<br>- Token-focused attention<br>- Spatial attention masking<br>- Contrastive attention separation | [gemlab-vt](https://github.com/gemlab-vt) | MIT | see also [paper](https://arxiv.org/abs/2403.19776) |
+| [splus](https://github.com/kvfrans/splus) | repo | - SPlus optimizer | [kvfrans](https://github.com/kvfrans) |  | see also [paper](https://arxiv.org/abs/2506.07254) |
+

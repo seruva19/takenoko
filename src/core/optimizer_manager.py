@@ -5,13 +5,14 @@ Extracted from wan_network_trainer.py to improve code
 organization and maintainability.
 """
 
+import argparse
 import ast
 import importlib
-import argparse
-from typing import Any, Dict, List, Optional, Tuple, Union, Callable
+import logging
+from typing import Any, Callable, Dict, List, Optional, Tuple
+
 import torch
 
-import logging
 from common.logger import get_logger
 
 logger = get_logger(__name__, level=logging.INFO)
@@ -155,9 +156,10 @@ class OptimizerManager:
                 f"{scalar_label}: {len(scalar_params)} bias/gain parameters (<2D)"
             )
 
-        from optimizers.factory.galore_factory import is_q_galore_optimizer_type
-
-        from optimizers.factory.galore_factory import prepare_galore_trainable_params
+        from optimizers.factory.galore_factory import (
+            is_q_galore_optimizer_type,
+            prepare_galore_trainable_params,
+        )
 
         trainable_params, optimizer_kwargs = prepare_galore_trainable_params(
             args,
@@ -174,7 +176,9 @@ class OptimizerManager:
         optimizer_class = None
 
         if optimizer_type == "AdamW8bit".lower():
-            from optimizers.factory.bitsandbytes_factory import create_adamw8bit_optimizer
+            from optimizers.factory.bitsandbytes_factory import (
+                create_adamw8bit_optimizer,
+            )
 
             optimizer_class, optimizer = create_adamw8bit_optimizer(
                 trainable_params,
@@ -205,7 +209,9 @@ class OptimizerManager:
             )
 
         elif is_q_galore_optimizer_type(optimizer_type):
-            from optimizers.factory.q_galore_factory import create_q_galore_adamw8bit_optimizer
+            from optimizers.factory.q_galore_factory import (
+                create_q_galore_adamw8bit_optimizer,
+            )
 
             optimizer_class, optimizer = create_q_galore_adamw8bit_optimizer(
                 trainable_params,
@@ -225,7 +231,9 @@ class OptimizerManager:
             )
 
         elif optimizer_type in {"galoreadamw8bit", "galore_adamw8bit"}:
-            from optimizers.factory.galore_factory import create_galore_adamw8bit_optimizer
+            from optimizers.factory.galore_factory import (
+                create_galore_adamw8bit_optimizer,
+            )
 
             optimizer_class, optimizer = create_galore_adamw8bit_optimizer(
                 trainable_params,
@@ -235,7 +243,9 @@ class OptimizerManager:
             )
 
         elif optimizer_type in {"galoreadafactor", "galore_adafactor"}:
-            from optimizers.factory.galore_factory import create_galore_adafactor_optimizer
+            from optimizers.factory.galore_factory import (
+                create_galore_adafactor_optimizer,
+            )
 
             optimizer_class, optimizer = create_galore_adafactor_optimizer(
                 trainable_params,
@@ -256,7 +266,9 @@ class OptimizerManager:
             )
 
         elif optimizer_type == "CAME8Bit".lower():
-            from optimizers.factory.bitsandbytes_factory import create_came8bit_optimizer
+            from optimizers.factory.bitsandbytes_factory import (
+                create_came8bit_optimizer,
+            )
 
             optimizer_class, optimizer = create_came8bit_optimizer(
                 trainable_params,
@@ -276,7 +288,9 @@ class OptimizerManager:
             )
 
         elif optimizer_type == "AdamW8bitKahan".lower():
-            from optimizers.factory.bitsandbytes_factory import create_adamw8bitkahan_optimizer
+            from optimizers.factory.bitsandbytes_factory import (
+                create_adamw8bitkahan_optimizer,
+            )
 
             optimizer_class, optimizer = create_adamw8bitkahan_optimizer(
                 trainable_params,
@@ -338,8 +352,17 @@ class OptimizerManager:
                 logger,
             )
 
+        elif optimizer_type == "SPlus".lower():
+            from optimizers.splus import SPlus
+
+            logger.info(f"using SPlus optimizer | {optimizer_kwargs}")
+            optimizer_class = SPlus
+            optimizer = optimizer_class(trainable_params, lr=lr, **optimizer_kwargs)
+
         elif optimizer_type == "TemporalAdamW".lower():
-            from optimizers.factory.custom_factory import create_temporal_adamw_optimizer
+            from optimizers.factory.custom_factory import (
+                create_temporal_adamw_optimizer,
+            )
 
             optimizer_class, optimizer = create_temporal_adamw_optimizer(
                 trainable_params,
@@ -349,7 +372,9 @@ class OptimizerManager:
             )
 
         elif optimizer_type == "TemporalAdamW8bit".lower():
-            from optimizers.factory.bitsandbytes_factory import create_temporal_adamw8bit_optimizer
+            from optimizers.factory.bitsandbytes_factory import (
+                create_temporal_adamw8bit_optimizer,
+            )
 
             optimizer_class, optimizer = create_temporal_adamw8bit_optimizer(
                 trainable_params,
@@ -369,7 +394,9 @@ class OptimizerManager:
             )
 
         elif optimizer_type == "RavenAdamW8bit".lower():
-            from optimizers.factory.bitsandbytes_factory import create_raven_adamw8bit_optimizer
+            from optimizers.factory.bitsandbytes_factory import (
+                create_raven_adamw8bit_optimizer,
+            )
 
             optimizer_class, optimizer = create_raven_adamw8bit_optimizer(
                 trainable_params,
@@ -560,4 +587,3 @@ class OptimizerManager:
             eval_fn = lambda: None
 
         return optimizer_name, optimizer_args, optimizer, train_fn, eval_fn
-

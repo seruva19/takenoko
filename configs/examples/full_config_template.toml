@@ -256,6 +256,7 @@ rope_use_float32 = false
 # - "GaLoreAdamW", "GaLoreAdamW8bit", "GaLoreAdafactor": GaLore optimizers
 # - "QGaLoreAdamW8bit": Q-GaLore optimizer (requires q-galore-torch)
 # - "IVON": Bayesian optimizer that samples parameters each step (requires ivon_ess)
+# - "SPlus": SPlus optimizer (kvfrans/splus)
 # - "SOAP", "SophiaG", "Scion", etc. (see optimizer_manager.py)
 optimizer_type = "adamw8bit"
 
