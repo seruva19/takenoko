@@ -23,10 +23,66 @@
 # SOFTWARE.
 
 
+from typing import Any, Dict, Optional
+
 import torch
-from torch import Tensor
-from typing import Optional
 from optimum.quanto import QBytesTensor
+from torch import Tensor
+
+
+def track_gradient_consistency(
+    state: Dict[str, Any], grad: torch.Tensor, momentum_buffer: Optional[torch.Tensor]
+) -> None:
+    """
+    Track the cosine similarity between the gradient and the momentum buffer.
+    Updates state["grad_consistency"].
+    """
+    if "grad_consistency" not in state:
+        state["grad_consistency"] = 0.0
+
+    if momentum_buffer is None:
+        state["grad_consistency"] = 0.0
+        return
+
+    if momentum_buffer.norm() > 1e-6:
+        flat_grad = grad.flatten()
+        flat_mom = momentum_buffer.flatten()
+        dot_prod = torch.dot(flat_grad, flat_mom)
+        grad_norm = flat_grad.norm()
+        mom_norm = flat_mom.norm()
+
+        if grad_norm > 1e-6 and mom_norm > 1e-6:
+            state["grad_consistency"] = (dot_prod / (grad_norm * mom_norm)).item()
+        else:
+            state["grad_consistency"] = 0.0
+    else:
+        state["grad_consistency"] = 0.0
+
+
+def track_update_ratio(
+    state: Dict[str, Any], param: torch.Tensor, update: torch.Tensor, lr: float = 1.0
+) -> None:
+    """
+    Track the ratio of the update norm to the parameter norm.
+    Updates state["update_ratio"].
+
+    Args:
+        state: Optimizer state dictionary for the parameter
+        param: The parameter tensor
+        update: The update tensor (direction) to be applied
+        lr: The learning rate scaling factor (default 1.0 if update is already scaled)
+    """
+    if "update_ratio" not in state:
+        state["update_ratio"] = 0.0
+
+    with torch.no_grad():
+        param_norm = param.norm().item()
+        update_norm = update.norm().item() * lr
+
+        if param_norm > 1e-6:
+            state["update_ratio"] = update_norm / param_norm
+        else:
+            state["update_ratio"] = 0.0
 
 
 def compute_scale_for_dtype(tensor, dtype):
@@ -266,7 +322,7 @@ class Auto8bitTensor:
 
         if dtype is not None:
             # First dequantize then convert to requested dtype
-            return self.dequantize().to(dtype=dtype, *args, **kwargs)
+            return self.dequantize().to(*args, dtype=dtype, **kwargs)
 
         # If no dtype specified, just pass through to parent
         return self.dequantize().to(*args, **kwargs)
@@ -331,3 +387,47 @@ def apply_weight_decay(
             p.mul_(torch.where(mask, decay_factor, 1.0))
     else:
         p.mul_(decay_factor)
+
+
+def zeropower_via_newtonschulz5(G, steps: int):
+    """
+    Newton-Schulz iteration to compute the zeroth power / orthogonalization of G.
+    Uses a quintic iteration to maximize slope at zero.
+    """
+    assert G.ndim >= 2  # batched Muon implementation
+    a, b, c = (3.4445, -4.7750, 2.0315)
+    X = G.bfloat16()
+    if G.size(-2) > G.size(-1):
+        X = X.mT
+
+    # Ensure spectral norm is at most 1
+    X = X / (X.norm(dim=(-2, -1), keepdim=True) + 1e-7)
+    # Perform the NS iterations
+    for _ in range(steps):
+        A = X @ X.mT
+        B = (
+            b * A + c * A @ A
+        )  # quintic computation strategy adapted from suggestion by @jxbz, @leloykun, and @YouJiacheng
+        X = a * X + B @ X
+
+    if G.size(-2) > G.size(-1):
+        X = X.mT
+    return X
+
+
+def muon_update(grad, momentum, beta=0.95, ns_steps=5, nesterov=True):
+    momentum.lerp_(grad, 1 - beta)
+    update = grad.lerp_(momentum, beta) if nesterov else momentum
+    if update.ndim == 4:  # for the case of conv filters
+        update = update.view(len(update), -1)
+    update = zeropower_via_newtonschulz5(update, steps=ns_steps)
+    update *= max(1, grad.size(-2) / grad.size(-1)) ** 0.5
+    return update
+
+
+def adam_update(grad, buf1, buf2, step, betas, eps):
+    buf1.lerp_(grad, 1 - betas[0])
+    buf2.lerp_(grad.square(), 1 - betas[1])
+    buf1c = buf1 / (1 - betas[0] ** step)
+    buf2c = buf2 / (1 - betas[1] ** step)
+    return buf1c / (buf2c.sqrt() + eps)

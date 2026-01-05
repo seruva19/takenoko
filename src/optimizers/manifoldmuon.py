@@ -32,8 +32,12 @@ from typing import Any, Dict, Optional, Tuple
 import torch
 
 from common.logger import get_logger
-from optimizers.muon import adam_update
-from optimizers.optimizer_utils import apply_weight_decay
+from optimizers.optimizer_utils import (
+    adam_update,
+    apply_weight_decay,
+    track_gradient_consistency,
+    track_update_ratio,
+)
 
 logger = get_logger(__name__)
 
@@ -184,8 +188,8 @@ def msign(W: torch.Tensor, steps: int = 5) -> torch.Tensor:
         # Compute X^T @ X
         XTX = X.mT @ X
         # Compute 3*I - X^T @ X
-        I = torch.eye(XTX.size(-1), device=X.device, dtype=X.dtype)
-        coeff = 3.0 * I - XTX
+        identity = torch.eye(XTX.size(-1), device=X.device, dtype=X.dtype)
+        coeff = 3.0 * identity - XTX
         # Update: X = 0.5 * X @ (3*I - X^T @ X)
         X = 0.5 * X @ coeff
 
@@ -328,6 +332,7 @@ class SingleDeviceManifoldMuonWithAuxAdam(torch.optim.Optimizer):
                 group["dual_steps"] = group.get("dual_steps", 100)
                 group["tolerance"] = group.get("tolerance", 1e-6)
                 group["weight_decay"] = group.get("weight_decay", 0)
+                group["log_muon_metrics"] = group.get("log_muon_metrics", False)
                 assert set(group.keys()) == set(
                     [
                         "params",
@@ -340,6 +345,7 @@ class SingleDeviceManifoldMuonWithAuxAdam(torch.optim.Optimizer):
                         "use_muon",
                         "initial_lr",
                         "weight_decay_type",
+                        "log_muon_metrics",
                     ]
                 )
             else:
@@ -376,6 +382,12 @@ class SingleDeviceManifoldMuonWithAuxAdam(torch.optim.Optimizer):
                     if p.grad is None:
                         p.grad = torch.zeros_like(p)
 
+                    state = self.state[p]
+                    # Track gradient consistency
+                    # ManifoldMuon doesn't use a standard momentum buffer, so we set this to 0.0 via None
+                    if group.get("log_muon_metrics", False):
+                        track_gradient_consistency(state, p.grad, None)
+
                     # ManifoldMuon requires current weights and gradients
                     # Note: Unlike standard Muon, we don't use momentum buffer
                     # The dual ascent handles the optimization dynamics
@@ -394,6 +406,13 @@ class SingleDeviceManifoldMuonWithAuxAdam(torch.optim.Optimizer):
                     # Compute the actual update direction
                     delta = update - p.data
 
+                    if group.get("log_muon_metrics", False):
+                        track_update_ratio(state, p, delta, lr=1.0)
+
+                    # Update parameters
+                    # Note: We use the manifold-constrained update directly
+                    p.data.copy_(update)
+
                     # Apply weight decay
                     apply_weight_decay(
                         p,
@@ -403,10 +422,6 @@ class SingleDeviceManifoldMuonWithAuxAdam(torch.optim.Optimizer):
                         group.get("weight_decay_type", "default"),
                         group.get("initial_lr", group.get("lr")),
                     )
-
-                    # Update parameters
-                    # Note: We use the manifold-constrained update directly
-                    p.data.copy_(update)
 
             else:
                 # Apply AdamW to scalar parameters

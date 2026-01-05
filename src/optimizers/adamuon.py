@@ -27,8 +27,13 @@ from typing import Any, Dict, Optional, Tuple
 import torch
 
 from common.logger import get_logger
-from optimizers.muon import adam_update, zeropower_via_newtonschulz5
-from optimizers.optimizer_utils import apply_weight_decay
+from optimizers.optimizer_utils import (
+    adam_update,
+    apply_weight_decay,
+    track_gradient_consistency,
+    track_update_ratio,
+    zeropower_via_newtonschulz5,
+)
 
 logger = get_logger(__name__)
 
@@ -222,6 +227,7 @@ def adamuon_update(
     update_tensor = grad.add(momentum, alpha=beta1) if nesterov else momentum
 
     update_view, original_shape = _flatten_parameter(update_tensor)
+
     ortho_input = update_view.sign() if sign_stabilization else update_view
     orth_update = zeropower_via_newtonschulz5(ortho_input, steps=ns_steps)
 
@@ -267,6 +273,7 @@ class SingleDeviceAdaMuonWithAuxAdam(torch.optim.Optimizer):
                 group["nesterov"] = group.get("nesterov", True)
                 group["scale_factor"] = group.get("scale_factor", 0.2)
                 group["sign_stabilization"] = group.get("sign_stabilization", True)
+                group["log_muon_metrics"] = group.get("log_muon_metrics", False)
                 assert set(group.keys()) == {
                     "params",
                     "lr",
@@ -281,6 +288,7 @@ class SingleDeviceAdaMuonWithAuxAdam(torch.optim.Optimizer):
                     "sign_stabilization",
                     "initial_lr",
                     "weight_decay_type",
+                    "log_muon_metrics",
                 }
             else:
                 group["lr"] = group.get("lr", 3e-4)
@@ -326,6 +334,11 @@ class SingleDeviceAdaMuonWithAuxAdam(torch.optim.Optimizer):
                             dtype=torch.float32,
                         )
 
+                    if group.get("log_muon_metrics", False):
+                        track_gradient_consistency(
+                            state, p.grad, state["momentum_buffer"]
+                        )
+
                     update = adamuon_update(
                         p.grad,
                         state["momentum_buffer"],
@@ -338,6 +351,9 @@ class SingleDeviceAdaMuonWithAuxAdam(torch.optim.Optimizer):
                         scale_factor=group["scale_factor"],
                         sign_stabilization=bool(group["sign_stabilization"]),
                     )
+
+                    if group.get("log_muon_metrics", False):
+                        track_update_ratio(state, p, update, group["lr"])
 
                     apply_weight_decay(
                         p,

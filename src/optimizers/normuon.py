@@ -4,8 +4,13 @@ from typing import Any, Dict, Optional, Tuple
 import torch
 
 from common.logger import get_logger
-from optimizers.muon import adam_update, zeropower_via_newtonschulz5
-from optimizers.optimizer_utils import apply_weight_decay
+from optimizers.optimizer_utils import (
+    adam_update,
+    apply_weight_decay,
+    track_gradient_consistency,
+    track_update_ratio,
+    zeropower_via_newtonschulz5,
+)
 
 logger = get_logger(__name__)
 
@@ -196,6 +201,7 @@ class SingleDeviceNorMuon(torch.optim.Optimizer):
         beta2: float = 0.95,
         eps: float = 1e-10,
         ns_steps: int = 5,
+        log_muon_metrics: bool = False,
     ):
         defaults = dict(
             lr=lr,
@@ -204,6 +210,7 @@ class SingleDeviceNorMuon(torch.optim.Optimizer):
             beta2=beta2,
             eps=eps,
             ns_steps=ns_steps,
+            log_muon_metrics=log_muon_metrics,
         )
         super().__init__(params, defaults)
 
@@ -232,6 +239,9 @@ class SingleDeviceNorMuon(torch.optim.Optimizer):
                         p.shape[0], device=p.device, dtype=p.dtype
                     )
 
+                if group.get("log_muon_metrics", False):
+                    track_gradient_consistency(state, p.grad, state["momentum_buffer"])
+
                 update = normuon_update(
                     p.grad,
                     state["momentum_buffer"],
@@ -241,6 +251,9 @@ class SingleDeviceNorMuon(torch.optim.Optimizer):
                     eps=group["eps"],
                     ns_steps=group["ns_steps"],
                 )
+
+                if group.get("log_muon_metrics", False):
+                    track_update_ratio(state, p, update, group["lr"])
 
                 apply_weight_decay(
                     p,
@@ -273,6 +286,7 @@ class SingleDeviceNorMuonWithAuxAdam(torch.optim.Optimizer):
                 group["eps"] = group.get("eps", 1e-10)
                 group["weight_decay"] = group.get("weight_decay", 0.0)
                 group["ns_steps"] = group.get("ns_steps", 5)
+                group["log_muon_metrics"] = group.get("log_muon_metrics", False)
                 assert set(group.keys()) == {
                     "params",
                     "lr",
@@ -284,6 +298,7 @@ class SingleDeviceNorMuonWithAuxAdam(torch.optim.Optimizer):
                     "ns_steps",
                     "initial_lr",
                     "weight_decay_type",
+                    "log_muon_metrics",
                 }
             else:
                 group["lr"] = group.get("lr", 3e-4)
@@ -327,6 +342,27 @@ class SingleDeviceNorMuonWithAuxAdam(torch.optim.Optimizer):
                             p.shape[0], device=p.device, dtype=p.dtype
                         )
 
+                    if group.get("log_muon_metrics", False):
+                        track_gradient_consistency(
+                            state, p.grad, state["momentum_buffer"]
+                        )
+
+                    if state["momentum_buffer"].norm() > 1e-6:
+                        flat_grad = p.grad.flatten()
+                        flat_mom = state["momentum_buffer"].flatten()
+                        dot_prod = torch.dot(flat_grad, flat_mom)
+                        grad_norm = flat_grad.norm()
+                        mom_norm = flat_mom.norm()
+
+                        if grad_norm > 1e-6 and mom_norm > 1e-6:
+                            state["grad_consistency"] = (
+                                dot_prod / (grad_norm * mom_norm)
+                            ).item()
+                        else:
+                            state["grad_consistency"] = 0.0
+                    else:
+                        state["grad_consistency"] = 0.0
+
                     update = normuon_update(
                         p.grad,
                         state["momentum_buffer"],
@@ -336,6 +372,9 @@ class SingleDeviceNorMuonWithAuxAdam(torch.optim.Optimizer):
                         eps=group["eps"],
                         ns_steps=group["ns_steps"],
                     )
+
+                    if group.get("log_muon_metrics", False):
+                        track_update_ratio(state, p, update, group["lr"])
 
                     apply_weight_decay(
                         p,

@@ -1,4 +1,5 @@
 """Muon-family optimizer creation helpers for WAN network trainer."""
+
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import torch
@@ -10,7 +11,14 @@ def create_muon_optimizer(
     optimizer_kwargs: Dict[str, Any],
     extract_params: Callable[[List[Any]], List[torch.nn.Parameter]],
     log_param_structure: Callable[
-        [str, str, List[Any], List[torch.nn.Parameter], List[torch.nn.Parameter], List[torch.nn.Parameter]],
+        [
+            str,
+            str,
+            List[Any],
+            List[torch.nn.Parameter],
+            List[torch.nn.Parameter],
+            List[torch.nn.Parameter],
+        ],
         None,
     ],
     logger: Any,
@@ -55,7 +63,9 @@ def create_muon_optimizer(
     # Use learning rate from args, with Muon group using higher LR as recommended
     muon_lr = optimizer_kwargs.get("muon_lr", 0.001)  # Conservative Muon LR for LoRA
     adam_lr = optimizer_kwargs.get("adam_lr", lr)  # Use specified LR for AdamW
-    weight_decay = optimizer_kwargs.get("weight_decay", 0.001)  # Lower weight decay for LoRA
+    weight_decay = optimizer_kwargs.get(
+        "weight_decay", 0.001
+    )  # Lower weight decay for LoRA
     betas = optimizer_kwargs.get("betas", (0.9, 0.95))
 
     # Muon-specific parameters based on theory
@@ -63,6 +73,7 @@ def create_muon_optimizer(
     ns_steps = optimizer_kwargs.get("ns_steps", 3)  # Fewer Newton-Schulz steps
     nesterov = optimizer_kwargs.get("nesterov", True)
     weight_decay_type = optimizer_kwargs.get("weight_decay_type", "default")
+    log_muon_metrics = optimizer_kwargs.get("log_muon_metrics", False)
 
     # Only include parameter groups that have parameters
     param_groups = []
@@ -79,6 +90,7 @@ def create_muon_optimizer(
                 nesterov=nesterov,
                 initial_lr=muon_lr,
                 weight_decay_type=weight_decay_type,
+                log_muon_metrics=log_muon_metrics,
             )
         )
 
@@ -120,7 +132,14 @@ def create_normuon_optimizer(
     optimizer_kwargs: Dict[str, Any],
     extract_params: Callable[[List[Any]], List[torch.nn.Parameter]],
     log_param_structure: Callable[
-        [str, str, List[Any], List[torch.nn.Parameter], List[torch.nn.Parameter], List[torch.nn.Parameter]],
+        [
+            str,
+            str,
+            List[Any],
+            List[torch.nn.Parameter],
+            List[torch.nn.Parameter],
+            List[torch.nn.Parameter],
+        ],
         None,
     ],
     logger: Any,
@@ -162,12 +181,18 @@ def create_normuon_optimizer(
 
     apply_normuon_config_overrides(args, optimizer_kwargs)
 
-    normuon_lr = optimizer_kwargs.get("normuon_lr", optimizer_kwargs.get("muon_lr", 0.001))
-    normuon_adam_lr = optimizer_kwargs.get("normuon_adam_lr", optimizer_kwargs.get("adam_lr", lr))
+    normuon_lr = optimizer_kwargs.get(
+        "normuon_lr", optimizer_kwargs.get("muon_lr", 0.001)
+    )
+    normuon_adam_lr = optimizer_kwargs.get(
+        "normuon_adam_lr", optimizer_kwargs.get("adam_lr", lr)
+    )
     weight_decay = optimizer_kwargs.get(
         "normuon_weight_decay", optimizer_kwargs.get("weight_decay", 0.001)
     )
-    betas_value = optimizer_kwargs.get("normuon_betas", optimizer_kwargs.get("betas", (0.9, 0.95)))
+    betas_value = optimizer_kwargs.get(
+        "normuon_betas", optimizer_kwargs.get("betas", (0.9, 0.95))
+    )
     if isinstance(betas_value, list):
         betas = tuple(betas_value)
     else:
@@ -177,11 +202,16 @@ def create_normuon_optimizer(
             f"NorMuon auxiliary Adam betas must be a length-2 sequence. Received: {betas_value}"
         )
     betas = tuple(betas)
-    momentum = optimizer_kwargs.get("normuon_momentum", optimizer_kwargs.get("momentum", 0.9))
+    momentum = optimizer_kwargs.get(
+        "normuon_momentum", optimizer_kwargs.get("momentum", 0.9)
+    )
     beta2 = optimizer_kwargs.get("normuon_beta2", 0.95)
     eps = optimizer_kwargs.get("normuon_eps", 1e-10)
-    ns_steps = optimizer_kwargs.get("normuon_ns_steps", optimizer_kwargs.get("ns_steps", 3))
+    ns_steps = optimizer_kwargs.get(
+        "normuon_ns_steps", optimizer_kwargs.get("ns_steps", 3)
+    )
     weight_decay_type = optimizer_kwargs.get("weight_decay_type", "default")
+    log_muon_metrics = optimizer_kwargs.get("log_muon_metrics", False)
 
     param_groups = []
 
@@ -198,6 +228,7 @@ def create_normuon_optimizer(
                 ns_steps=ns_steps,
                 initial_lr=normuon_lr,
                 weight_decay_type=weight_decay_type,
+                log_muon_metrics=log_muon_metrics,
             )
         )
 
@@ -240,7 +271,14 @@ def create_adamuon_optimizer(
     optimizer_kwargs: Dict[str, Any],
     extract_params: Callable[[List[Any]], List[torch.nn.Parameter]],
     log_param_structure: Callable[
-        [str, str, List[Any], List[torch.nn.Parameter], List[torch.nn.Parameter], List[torch.nn.Parameter]],
+        [
+            str,
+            str,
+            List[Any],
+            List[torch.nn.Parameter],
+            List[torch.nn.Parameter],
+            List[torch.nn.Parameter],
+        ],
         None,
     ],
     logger: Any,
@@ -281,12 +319,18 @@ def create_adamuon_optimizer(
 
     apply_adamuon_config_overrides(args, optimizer_kwargs)
 
-    adamuon_lr = optimizer_kwargs.get("adamuon_lr", optimizer_kwargs.get("muon_lr", 0.001))
-    adamuon_adam_lr = optimizer_kwargs.get("adamuon_adam_lr", optimizer_kwargs.get("adam_lr", lr))
+    adamuon_lr = optimizer_kwargs.get(
+        "adamuon_lr", optimizer_kwargs.get("muon_lr", 0.001)
+    )
+    adamuon_adam_lr = optimizer_kwargs.get(
+        "adamuon_adam_lr", optimizer_kwargs.get("adam_lr", lr)
+    )
     weight_decay = optimizer_kwargs.get(
         "adamuon_weight_decay", optimizer_kwargs.get("weight_decay", 0.001)
     )
-    betas_value = optimizer_kwargs.get("adamuon_betas", optimizer_kwargs.get("betas", (0.9, 0.95)))
+    betas_value = optimizer_kwargs.get(
+        "adamuon_betas", optimizer_kwargs.get("betas", (0.9, 0.95))
+    )
     if isinstance(betas_value, list):
         betas = tuple(betas_value)
     else:
@@ -297,14 +341,19 @@ def create_adamuon_optimizer(
         )
     betas = tuple(betas)
 
-    momentum = optimizer_kwargs.get("adamuon_momentum", optimizer_kwargs.get("momentum", 0.95))
+    momentum = optimizer_kwargs.get(
+        "adamuon_momentum", optimizer_kwargs.get("momentum", 0.95)
+    )
     beta2 = optimizer_kwargs.get("adamuon_beta2", 0.95)
     eps = optimizer_kwargs.get("adamuon_eps", 1e-8)
-    ns_steps = optimizer_kwargs.get("adamuon_ns_steps", optimizer_kwargs.get("ns_steps", 5))
+    ns_steps = optimizer_kwargs.get(
+        "adamuon_ns_steps", optimizer_kwargs.get("ns_steps", 5)
+    )
     scale_factor = optimizer_kwargs.get("adamuon_scale_factor", 0.2)
     nesterov = optimizer_kwargs.get("adamuon_nesterov", True)
     sign_stabilization = optimizer_kwargs.get("adamuon_sign_stabilization", True)
     weight_decay_type = optimizer_kwargs.get("weight_decay_type", "default")
+    log_muon_metrics = optimizer_kwargs.get("log_muon_metrics", False)
 
     param_groups = []
 
@@ -324,6 +373,7 @@ def create_adamuon_optimizer(
                 sign_stabilization=sign_stabilization,
                 initial_lr=adamuon_lr,
                 weight_decay_type=weight_decay_type,
+                log_muon_metrics=log_muon_metrics,
             )
         )
 
@@ -369,7 +419,14 @@ def create_muonclip_optimizer(
     optimizer_kwargs: Dict[str, Any],
     extract_params: Callable[[List[Any]], List[torch.nn.Parameter]],
     log_param_structure: Callable[
-        [str, str, List[Any], List[torch.nn.Parameter], List[torch.nn.Parameter], List[torch.nn.Parameter]],
+        [
+            str,
+            str,
+            List[Any],
+            List[torch.nn.Parameter],
+            List[torch.nn.Parameter],
+            List[torch.nn.Parameter],
+        ],
         None,
     ],
     logger: Any,
@@ -409,12 +466,18 @@ def create_muonclip_optimizer(
         )
 
     # MuonClip-specific parameters
-    muonclip_lr = optimizer_kwargs.get("muonclip_lr", optimizer_kwargs.get("muon_lr", 0.001))
-    muonclip_adam_lr = optimizer_kwargs.get("muonclip_adam_lr", optimizer_kwargs.get("adam_lr", lr))
+    muonclip_lr = optimizer_kwargs.get(
+        "muonclip_lr", optimizer_kwargs.get("muon_lr", 0.001)
+    )
+    muonclip_adam_lr = optimizer_kwargs.get(
+        "muonclip_adam_lr", optimizer_kwargs.get("adam_lr", lr)
+    )
     weight_decay = optimizer_kwargs.get(
         "muonclip_weight_decay", optimizer_kwargs.get("weight_decay", 0.001)
     )
-    betas_value = optimizer_kwargs.get("muonclip_betas", optimizer_kwargs.get("betas", (0.9, 0.95)))
+    betas_value = optimizer_kwargs.get(
+        "muonclip_betas", optimizer_kwargs.get("betas", (0.9, 0.95))
+    )
     if isinstance(betas_value, list):
         betas = tuple(betas_value)
     else:
@@ -425,11 +488,18 @@ def create_muonclip_optimizer(
         )
     betas = tuple(betas)
 
-    momentum = optimizer_kwargs.get("muonclip_momentum", optimizer_kwargs.get("momentum", 0.95))
+    momentum = optimizer_kwargs.get(
+        "muonclip_momentum", optimizer_kwargs.get("momentum", 0.95)
+    )
     tau = optimizer_kwargs.get("muonclip_tau", optimizer_kwargs.get("tau", 100.0))
-    ns_steps = optimizer_kwargs.get("muonclip_ns_steps", optimizer_kwargs.get("ns_steps", 5))
-    nesterov = optimizer_kwargs.get("muonclip_nesterov", optimizer_kwargs.get("nesterov", True))
+    ns_steps = optimizer_kwargs.get(
+        "muonclip_ns_steps", optimizer_kwargs.get("ns_steps", 5)
+    )
+    nesterov = optimizer_kwargs.get(
+        "muonclip_nesterov", optimizer_kwargs.get("nesterov", True)
+    )
     weight_decay_type = optimizer_kwargs.get("weight_decay_type", "default")
+    log_muon_metrics = optimizer_kwargs.get("log_muon_metrics", False)
 
     # Auto-detect attention parameters if requested
     auto_detect = optimizer_kwargs.get("muonclip_auto_detect_attention", True)
@@ -449,6 +519,7 @@ def create_muonclip_optimizer(
                 nesterov=nesterov,
                 initial_lr=muonclip_lr,
                 weight_decay_type=weight_decay_type,
+                log_muon_metrics=log_muon_metrics,
             )
         )
 
@@ -479,7 +550,9 @@ def create_muonclip_optimizer(
                 optimizer.register_attention_params(attention_params)
                 logger.info("QK-Clip attention stabilization enabled")
             else:
-                logger.info("No attention parameters detected - MuonClip will work as standard Muon")
+                logger.info(
+                    "No attention parameters detected - MuonClip will work as standard Muon"
+                )
         except Exception as e:
             logger.warning(
                 f"Failed to auto-detect attention parameters: {e}. MuonClip will work as standard Muon."
@@ -505,7 +578,14 @@ def create_manifoldmuon_optimizer(
     optimizer_kwargs: Dict[str, Any],
     extract_params: Callable[[List[Any]], List[torch.nn.Parameter]],
     log_param_structure: Callable[
-        [str, str, List[Any], List[torch.nn.Parameter], List[torch.nn.Parameter], List[torch.nn.Parameter]],
+        [
+            str,
+            str,
+            List[Any],
+            List[torch.nn.Parameter],
+            List[torch.nn.Parameter],
+            List[torch.nn.Parameter],
+        ],
         None,
     ],
     logger: Any,
@@ -573,6 +653,7 @@ def create_manifoldmuon_optimizer(
     dual_steps = optimizer_kwargs.get("manifoldmuon_dual_steps", 100)
     tolerance = optimizer_kwargs.get("manifoldmuon_tolerance", 1e-6)
     weight_decay_type = optimizer_kwargs.get("weight_decay_type", "default")
+    log_muon_metrics = optimizer_kwargs.get("log_muon_metrics", False)
 
     param_groups = []
 
@@ -589,6 +670,7 @@ def create_manifoldmuon_optimizer(
                 weight_decay=weight_decay,
                 initial_lr=manifoldmuon_lr,
                 weight_decay_type=weight_decay_type,
+                log_muon_metrics=log_muon_metrics,
             )
         )
 
@@ -641,8 +723,12 @@ def create_riemannion_optimizer(
 
     apply_riemannion_config_overrides(args, optimizer_kwargs)
 
-    riemannion_lr = optimizer_kwargs.get("riemannion_lr", optimizer_kwargs.get("muon_lr", 0.001))
-    riemannion_adam_lr = optimizer_kwargs.get("riemannion_adam_lr", optimizer_kwargs.get("adam_lr", lr))
+    riemannion_lr = optimizer_kwargs.get(
+        "riemannion_lr", optimizer_kwargs.get("muon_lr", 0.001)
+    )
+    riemannion_adam_lr = optimizer_kwargs.get(
+        "riemannion_adam_lr", optimizer_kwargs.get("adam_lr", lr)
+    )
     weight_decay = optimizer_kwargs.get(
         "riemannion_weight_decay", optimizer_kwargs.get("weight_decay", 0.001)
     )

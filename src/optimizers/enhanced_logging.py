@@ -5,7 +5,8 @@ internal state or adaptive learning rates, such as Prodigy and Automagic optimiz
 """
 
 import logging
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple
+
 import torch
 from torch.optim import Optimizer
 
@@ -27,6 +28,17 @@ class EnhancedOptimizerLogger:
             "Prodigy": self._log_prodigy_metrics,
             "Prodigy8bit": self._log_prodigy_metrics,
             "Automagic": self._log_automagic_metrics,
+            "AdaMuon": self._log_adamuon_metrics,
+            "Muon": self._log_muon_metrics,
+            "SingleDeviceAdaMuonWithAuxAdam": self._log_adamuon_metrics,
+            "SingleDeviceMuon": self._log_muon_metrics,
+            "MuonWithAuxAdam": self._log_muon_metrics,
+            "SingleDeviceMuonWithAuxAdam": self._log_muon_metrics,
+            "SingleDeviceMuonClip": self._log_muon_metrics,
+            "SingleDeviceMuonClipWithAuxAdam": self._log_muon_metrics,
+            "SingleDeviceNorMuon": self._log_muon_metrics,
+            "SingleDeviceNorMuonWithAuxAdam": self._log_muon_metrics,
+            "SingleDeviceManifoldMuonWithAuxAdam": self._log_muon_metrics,
         }
 
     def get_prodigy_d(self, optimizer: Optimizer) -> float:
@@ -162,6 +174,54 @@ class EnhancedOptimizerLogger:
         except Exception as e:
             logger.debug(f"Failed to log Automagic metrics: {e}")
         return metrics
+
+    def _log_muon_style_metrics(
+        self, optimizer: Optimizer, prefix: str = "muon"
+    ) -> Dict[str, float]:
+        """Shared logic for logging metrics for Muon-style optimizers.
+
+        Args:
+            optimizer: The optimizer instance
+            prefix: Prefix for specific metric keys (e.g., 'muon', 'adamuon')
+
+        Returns:
+            Dict containing the metrics
+        """
+        metrics = {}
+        try:
+            ratios = []
+            consistencies = []
+            for group in optimizer.param_groups:
+                for p in group["params"]:
+                    if p in optimizer.state:
+                        state = optimizer.state[p]
+                        if "update_ratio" in state:
+                            ratios.append(state["update_ratio"])
+                        if "grad_consistency" in state:
+                            consistencies.append(state["grad_consistency"])
+
+            if ratios:
+                avg_ratio = sum(ratios) / len(ratios)
+                metrics[f"train/{prefix}_update_ratio"] = avg_ratio
+                metrics["train/update_magnitude"] = avg_ratio
+                metrics[f"train/{prefix}_update_ratio_max"] = max(ratios)
+
+            if consistencies:
+                avg_cons = sum(consistencies) / len(consistencies)
+                metrics[f"train/{prefix}_grad_consistency"] = avg_cons
+                metrics["train/directional_coherence"] = avg_cons
+
+        except Exception as e:
+            logger.debug(f"Failed to log {prefix} metrics: {e}")
+        return metrics
+
+    def _log_adamuon_metrics(self, optimizer: Optimizer) -> Dict[str, float]:
+        """Log AdaMuon optimizer metrics."""
+        return self._log_muon_style_metrics(optimizer, prefix="adamuon")
+
+    def _log_muon_metrics(self, optimizer: Optimizer) -> Dict[str, float]:
+        """Log Muon optimizer metrics."""
+        return self._log_muon_style_metrics(optimizer, prefix="muon")
 
     def get_enhanced_metrics(self, optimizer: Optimizer) -> Dict[str, float]:
         """Get enhanced metrics for the given optimizer.

@@ -1,49 +1,12 @@
 import torch
 import torch.distributed as dist
-from optimizers.optimizer_utils import apply_weight_decay
-
-
-def zeropower_via_newtonschulz5(G, steps: int):
-    """
-    Newton-Schulz iteration to compute the zeroth power / orthogonalization of G. We opt to use a
-    quintic iteration whose coefficients are selected to maximize the slope at zero. For the purpose
-    of minimizing steps, it turns out to be empirically effective to keep increasing the slope at
-    zero even beyond the point where the iteration no longer converges all the way to one everywhere
-    on the interval. This iteration therefore does not produce UV^T but rather something like US'V^T
-    where S' is diagonal with S_{ii}' ~ Uniform(0.5, 1.5), which turns out not to hurt model
-    performance at all relative to UV^T, where USV^T = G is the SVD.
-    """
-    assert (
-        G.ndim >= 2
-    )  # batched Muon implementation by @scottjmaddox, and put into practice in the record by @YouJiacheng
-    a, b, c = (3.4445, -4.7750, 2.0315)
-    X = G.bfloat16()
-    if G.size(-2) > G.size(-1):
-        X = X.mT
-
-    # Ensure spectral norm is at most 1
-    X = X / (X.norm(dim=(-2, -1), keepdim=True) + 1e-7)
-    # Perform the NS iterations
-    for _ in range(steps):
-        A = X @ X.mT
-        B = (
-            b * A + c * A @ A
-        )  # quintic computation strategy adapted from suggestion by @jxbz, @leloykun, and @YouJiacheng
-        X = a * X + B @ X
-
-    if G.size(-2) > G.size(-1):
-        X = X.mT
-    return X
-
-
-def muon_update(grad, momentum, beta=0.95, ns_steps=5, nesterov=True):
-    momentum.lerp_(grad, 1 - beta)
-    update = grad.lerp_(momentum, beta) if nesterov else momentum
-    if update.ndim == 4:  # for the case of conv filters
-        update = update.view(len(update), -1)
-    update = zeropower_via_newtonschulz5(update, steps=ns_steps)
-    update *= max(1, grad.size(-2) / grad.size(-1)) ** 0.5
-    return update
+from optimizers.optimizer_utils import (
+    adam_update,
+    apply_weight_decay,
+    muon_update,
+    track_gradient_consistency,
+    track_update_ratio,
+)
 
 
 class Muon(torch.optim.Optimizer):
@@ -68,8 +31,15 @@ class Muon(torch.optim.Optimizer):
         momentum: The momentum. A value of 0.95 here is usually fine.
     """
 
-    def __init__(self, params, lr=0.02, weight_decay=0, momentum=0.95):
-        defaults = dict(lr=lr, weight_decay=weight_decay, momentum=momentum)
+    def __init__(
+        self, params, lr=0.02, weight_decay=0, momentum=0.95, log_muon_metrics=False
+    ):
+        defaults = dict(
+            lr=lr,
+            weight_decay=weight_decay,
+            momentum=momentum,
+            log_muon_metrics=log_muon_metrics,
+        )
         assert (
             isinstance(params, list)
             and len(params) >= 1
@@ -100,6 +70,12 @@ class Muon(torch.optim.Optimizer):
                     state = self.state[p]
                     if len(state) == 0:
                         state["momentum_buffer"] = torch.zeros_like(p)
+
+                    if group.get("log_muon_metrics", False):
+                        track_gradient_consistency(
+                            state, p.grad, state["momentum_buffer"]
+                        )
+
                     update = muon_update(
                         p.grad,
                         state["momentum_buffer"],
@@ -107,6 +83,9 @@ class Muon(torch.optim.Optimizer):
                         ns_steps=group.get("ns_steps", 5),
                         nesterov=group.get("nesterov", True),
                     )
+
+                    if group.get("log_muon_metrics", False):
+                        track_update_ratio(state, p, update, group["lr"])
 
                     apply_weight_decay(
                         p,
@@ -130,8 +109,15 @@ class SingleDeviceMuon(torch.optim.Optimizer):
     Muon variant for usage in non-distributed settings.
     """
 
-    def __init__(self, params, lr=0.02, weight_decay=0, momentum=0.95):
-        defaults = dict(lr=lr, weight_decay=weight_decay, momentum=momentum)
+    def __init__(
+        self, params, lr=0.02, weight_decay=0, momentum=0.95, log_muon_metrics=False
+    ):
+        defaults = dict(
+            lr=lr,
+            weight_decay=weight_decay,
+            momentum=momentum,
+            log_muon_metrics=log_muon_metrics,
+        )
         super().__init__(params, defaults)
 
     @torch.no_grad()
@@ -150,6 +136,10 @@ class SingleDeviceMuon(torch.optim.Optimizer):
                 state = self.state[p]
                 if len(state) == 0:
                     state["momentum_buffer"] = torch.zeros_like(p)
+
+                if group.get("log_muon_metrics", False):
+                    track_gradient_consistency(state, p.grad, state["momentum_buffer"])
+
                 update = muon_update(
                     p.grad,
                     state["momentum_buffer"],
@@ -157,6 +147,9 @@ class SingleDeviceMuon(torch.optim.Optimizer):
                     ns_steps=group.get("ns_steps", 5),
                     nesterov=group.get("nesterov", True),
                 )
+
+                if group.get("log_muon_metrics", False):
+                    track_update_ratio(state, p, update, group["lr"])
 
                 apply_weight_decay(
                     p,
@@ -169,14 +162,6 @@ class SingleDeviceMuon(torch.optim.Optimizer):
                 p.add_(update.reshape(p.shape), alpha=-group["lr"])
 
         return loss
-
-
-def adam_update(grad, buf1, buf2, step, betas, eps):
-    buf1.lerp_(grad, 1 - betas[0])
-    buf2.lerp_(grad.square(), 1 - betas[1])
-    buf1c = buf1 / (1 - betas[0] ** step)
-    buf2c = buf2 / (1 - betas[1] ** step)
-    return buf1c / (buf2c.sqrt() + eps)
 
 
 class MuonWithAuxAdam(torch.optim.Optimizer):
@@ -220,6 +205,7 @@ class MuonWithAuxAdam(torch.optim.Optimizer):
                 group["weight_decay"] = group.get("weight_decay", 0)
                 group["ns_steps"] = group.get("ns_steps", 5)
                 group["nesterov"] = group.get("nesterov", True)
+                group["log_muon_metrics"] = group.get("log_muon_metrics", False)
                 assert set(group.keys()) == set(
                     [
                         "params",
@@ -231,6 +217,7 @@ class MuonWithAuxAdam(torch.optim.Optimizer):
                         "nesterov",
                         "initial_lr",
                         "weight_decay_type",
+                        "log_muon_metrics",
                     ]
                 )
             else:
@@ -276,6 +263,12 @@ class MuonWithAuxAdam(torch.optim.Optimizer):
                         state = self.state[p]
                         if len(state) == 0:
                             state["momentum_buffer"] = torch.zeros_like(p)
+
+                        if group.get("log_muon_metrics", False):
+                            track_gradient_consistency(
+                                state, p.grad, state["momentum_buffer"]
+                            )
+
                         update = muon_update(
                             p.grad,
                             state["momentum_buffer"],
@@ -283,7 +276,11 @@ class MuonWithAuxAdam(torch.optim.Optimizer):
                             ns_steps=group.get("ns_steps", 5),
                             nesterov=group.get("nesterov", True),
                         )
-                        p.grad = update.reshape(p.shape)
+
+                        if group.get("log_muon_metrics", False):
+                            track_update_ratio(state, p, update, group["lr"])
+
+                        p.grad = update.reshape(p.shape).to(p.grad.dtype)
                         apply_weight_decay(
                             p,
                             p.grad,
@@ -306,7 +303,7 @@ class MuonWithAuxAdam(torch.optim.Optimizer):
                     if len(state) == 0:
                         state["exp_avg"] = torch.zeros_like(p)
                         state["exp_avg_sq"] = torch.zeros_like(p)
-                    state["step"] = 0
+                        state["step"] = 0
                     state["step"] += 1
                     update = adam_update(
                         p.grad,
@@ -345,6 +342,7 @@ class SingleDeviceMuonWithAuxAdam(torch.optim.Optimizer):
                 group["weight_decay"] = group.get("weight_decay", 0)
                 group["ns_steps"] = group.get("ns_steps", 5)
                 group["nesterov"] = group.get("nesterov", True)
+                group["log_muon_metrics"] = group.get("log_muon_metrics", False)
                 assert set(group.keys()) == set(
                     [
                         "params",
@@ -356,6 +354,7 @@ class SingleDeviceMuonWithAuxAdam(torch.optim.Optimizer):
                         "nesterov",
                         "initial_lr",
                         "weight_decay_type",
+                        "log_muon_metrics",
                     ]
                 )
             else:
@@ -395,6 +394,12 @@ class SingleDeviceMuonWithAuxAdam(torch.optim.Optimizer):
                     state = self.state[p]
                     if len(state) == 0:
                         state["momentum_buffer"] = torch.zeros_like(p)
+
+                    if group.get("log_muon_metrics", False):
+                        track_gradient_consistency(
+                            state, p.grad, state["momentum_buffer"]
+                        )
+
                     update = muon_update(
                         p.grad,
                         state["momentum_buffer"],
@@ -402,6 +407,9 @@ class SingleDeviceMuonWithAuxAdam(torch.optim.Optimizer):
                         ns_steps=group.get("ns_steps", 5),
                         nesterov=group.get("nesterov", True),
                     )
+
+                    if group.get("log_muon_metrics", False):
+                        track_update_ratio(state, p, update, group["lr"])
 
                     apply_weight_decay(
                         p,

@@ -170,6 +170,77 @@ class LoRAWeightStatsTracker:
 
         return histograms
 
+    def compute_spectral_stats(self, network: Any) -> Dict[str, float]:
+        """Compute spectral statistics (singular values) for LoRA matrices.
+
+        Returns:
+            Dict with mean/max spectral norms for down/up matrices
+        """
+        down_norms = []
+        up_norms = []
+
+        # Handle accelerate-wrapped models
+        if hasattr(network, "module"):
+            network = network.module
+
+        # Get all LoRA modules
+        lora_modules = []
+        if hasattr(network, "unet_loras"):
+            lora_modules.extend(network.unet_loras)
+        if hasattr(network, "text_encoder_loras"):
+            lora_modules.extend(network.text_encoder_loras)
+
+        for lora_module in lora_modules:
+            if hasattr(lora_module, "lora_down"):
+                down = lora_module.lora_down
+                up = lora_module.lora_up
+
+                if isinstance(down, torch.nn.ModuleList):
+                    # Split QKV case
+                    for d, u in zip(down, up):
+                        if hasattr(d, "weight") and hasattr(u, "weight"):
+                            # Compute spectral norm (largest singular value)
+                            # detach() and float() to ensure compatibility and no graph retention
+                            try:
+                                down_norms.append(
+                                    torch.linalg.norm(
+                                        d.weight.data.float(), ord=2
+                                    ).item()
+                                )
+                                up_norms.append(
+                                    torch.linalg.norm(
+                                        u.weight.data.float(), ord=2
+                                    ).item()
+                                )
+                            except Exception:
+                                pass
+                else:
+                    if hasattr(down, "weight") and hasattr(up, "weight"):
+                        try:
+                            down_norms.append(
+                                torch.linalg.norm(
+                                    down.weight.data.float(), ord=2
+                                ).item()
+                            )
+                            up_norms.append(
+                                torch.linalg.norm(up.weight.data.float(), ord=2).item()
+                            )
+                        except Exception:
+                            pass
+
+        stats = {}
+        if down_norms:
+            stats["lora_weights/spectral_norm_down_mean"] = sum(down_norms) / len(
+                down_norms
+            )
+            stats["lora_weights/spectral_norm_down_max"] = max(down_norms)
+
+        if up_norms:
+            stats["lora_weights/spectral_norm_up_mean"] = sum(up_norms) / len(up_norms)
+            stats["lora_weights/spectral_norm_up_max"] = max(up_norms)
+
+        return stats
+
     def get_scalar_metrics(self, network: Any) -> Dict[str, float]:
         """Get scalar metrics for standard logging.
 
@@ -209,6 +280,10 @@ class LoRAWeightStatsTracker:
                 metrics["lora_weights/std_change"] = (stats["std"] - initial["std"]) / (
                     initial["std"] + 1e-8
                 )
+
+            # Add spectral stats (always computed as they are important for Muon/AdaMuon)
+            spectral_stats = self.compute_spectral_stats(network)
+            metrics.update(spectral_stats)
 
         return metrics
 

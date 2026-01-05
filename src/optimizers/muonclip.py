@@ -47,60 +47,23 @@ See configs/examples/wan22_lora_muonclip.toml for a complete example.
 See src/optimizers/MUONCLIP_README.md for full documentation.
 """
 
-import torch
-import torch.distributed as dist
-from typing import Dict, List, Optional, Set, Union
-from optimizers.optimizer_utils import apply_weight_decay
-
 import logging
+
+from typing import Dict, List, Optional
+
+import torch
+
 from common.logger import get_logger
 
+from optimizers.optimizer_utils import (
+    adam_update,
+    apply_weight_decay,
+    muon_update,
+    track_gradient_consistency,
+    track_update_ratio,
+)
+
 logger = get_logger(__name__, level=logging.INFO)
-
-
-def zeropower_via_newtonschulz5(G, steps: int = 5):
-    """
-    Newton-Schulz iteration to compute the zeroth power / orthogonalization of G.
-
-    This is the same implementation as in muon.py for consistency.
-    """
-    assert G.ndim >= 2
-    a, b, c = (3.4445, -4.7750, 2.0315)
-    X = G.bfloat16()
-    if G.size(-2) > G.size(-1):
-        X = X.mT
-
-    # Ensure spectral norm is at most 1
-    X = X / (X.norm(dim=(-2, -1), keepdim=True) + 1e-7)
-    # Perform the NS iterations
-    for _ in range(steps):
-        A = X @ X.mT
-        B = b * A + c * A @ A
-        X = a * X + B @ X
-
-    if G.size(-2) > G.size(-1):
-        X = X.mT
-    return X
-
-
-def muon_update(grad, momentum, beta=0.95, ns_steps=5, nesterov=True):
-    """Standard Muon update with Newton-Schulz orthogonalization."""
-    momentum.lerp_(grad, 1 - beta)
-    update = grad.lerp_(momentum, beta) if nesterov else momentum
-    if update.ndim == 4:  # for the case of conv filters
-        update = update.view(len(update), -1)
-    update = zeropower_via_newtonschulz5(update, steps=ns_steps)
-    update *= max(1, grad.size(-2) / grad.size(-1)) ** 0.5
-    return update
-
-
-def adam_update(grad, buf1, buf2, step, betas, eps):
-    """Standard Adam update for non-Muon parameters."""
-    buf1.lerp_(grad, 1 - betas[0])
-    buf2.lerp_(grad.square(), 1 - betas[1])
-    buf1c = buf1 / (1 - betas[0] ** step)
-    buf2c = buf2 / (1 - betas[1] ** step)
-    return buf1c / (buf2c.sqrt() + eps)
 
 
 class QKClipState:
@@ -229,6 +192,7 @@ class SingleDeviceMuonClip(torch.optim.Optimizer):
         tau: float = 100.0,
         ns_steps: int = 5,
         nesterov: bool = True,
+        log_muon_metrics: bool = False,
     ):
         defaults = dict(
             lr=lr,
@@ -237,6 +201,7 @@ class SingleDeviceMuonClip(torch.optim.Optimizer):
             tau=tau,
             ns_steps=ns_steps,
             nesterov=nesterov,
+            log_muon_metrics=log_muon_metrics,
         )
         super().__init__(params, defaults)
 
@@ -293,6 +258,9 @@ class SingleDeviceMuonClip(torch.optim.Optimizer):
                 if len(state) == 0:
                     state["momentum_buffer"] = torch.zeros_like(p)
 
+                if group.get("log_muon_metrics", False):
+                    track_gradient_consistency(state, p.grad, state["momentum_buffer"])
+
                 # Compute Muon update
                 update = muon_update(
                     p.grad,
@@ -304,6 +272,9 @@ class SingleDeviceMuonClip(torch.optim.Optimizer):
 
                 # Apply QK-Clip scaling if this is an attention parameter
                 update = self.qk_clip.apply_qk_clip_scaling(p, update)
+
+                if group.get("log_muon_metrics", False):
+                    track_update_ratio(state, p, update, group["lr"])
 
                 # Apply weight decay and learning rate
                 apply_weight_decay(
@@ -343,6 +314,7 @@ class SingleDeviceMuonClipWithAuxAdam(torch.optim.Optimizer):
                 group["tau"] = group.get("tau", 100.0)
                 group["ns_steps"] = group.get("ns_steps", 5)
                 group["nesterov"] = group.get("nesterov", True)
+                group["log_muon_metrics"] = group.get("log_muon_metrics", False)
             else:
                 # AdamW defaults
                 group["lr"] = group.get("lr", 3e-4)
@@ -391,6 +363,11 @@ class SingleDeviceMuonClipWithAuxAdam(torch.optim.Optimizer):
                     if len(state) == 0:
                         state["momentum_buffer"] = torch.zeros_like(p)
 
+                    if group.get("log_muon_metrics", False):
+                        track_gradient_consistency(
+                            state, p.grad, state["momentum_buffer"]
+                        )
+
                     update = muon_update(
                         p.grad,
                         state["momentum_buffer"],
@@ -399,8 +376,10 @@ class SingleDeviceMuonClipWithAuxAdam(torch.optim.Optimizer):
                         nesterov=group["nesterov"],
                     )
 
-                    # Apply QK-Clip scaling
                     update = self.qk_clip.apply_qk_clip_scaling(p, update)
+
+                    if group.get("log_muon_metrics", False):
+                        track_update_ratio(state, p, update, group["lr"])
 
                     apply_weight_decay(
                         p,
