@@ -156,10 +156,10 @@ class MaskedTrainingManager:
 
             # Add temporal consistency loss for video
             if (
-                self.config.temporal_consistency_weight > 0.0 and masked_loss.dim() == 5
+                self.config.temporal_consistency_weight > 0.0 and model_pred.dim() == 5
             ):  # Video tensor
                 temporal_loss = self._compute_temporal_consistency_loss(
-                    masked_loss, processed_mask
+                    model_pred, processed_mask
                 )
                 masked_loss = (
                     masked_loss
@@ -240,33 +240,33 @@ class MaskedTrainingManager:
         return loss
 
     def _compute_temporal_consistency_loss(
-        self, masked_loss: torch.Tensor, mask: torch.Tensor
+        self, pred: torch.Tensor, mask: torch.Tensor
     ) -> torch.Tensor:
         """
         Compute temporal consistency loss for video masks.
 
         Args:
-            masked_loss: Loss tensor with shape (B, C, F, H, W)
+            pred: Prediction tensor with shape (B, C, F, H, W)
             mask: Mask tensor with shape (B, 1, F, H, W)
 
         Returns:
             Temporal consistency loss with same shape as input
         """
-        if masked_loss.dim() != 5:
-            return torch.zeros_like(masked_loss)
+        if pred.dim() != 5:
+            return torch.zeros_like(pred)
 
-        b, c, f, h, w = masked_loss.shape
+        b, c, f, h, w = pred.shape
 
         if f < 2:  # Need at least 2 frames
-            return torch.zeros_like(masked_loss)
+            return torch.zeros_like(pred)
 
-        consistency_loss = torch.zeros_like(masked_loss)
+        consistency_loss = torch.zeros_like(pred)
 
         if self.config.frame_consistency_mode == "adjacent":
             # Compute consistency between adjacent frames
             for t in range(f - 1):
-                frame_t = masked_loss[:, :, t]  # (B, C, H, W)
-                frame_t1 = masked_loss[:, :, t + 1]  # (B, C, H, W)
+                frame_t = pred[:, :, t]  # (B, C, H, W)
+                frame_t1 = pred[:, :, t + 1]  # (B, C, H, W)
                 mask_t = mask[:, :, t]  # (B, 1, H, W)
                 mask_t1 = mask[:, :, t + 1]  # (B, 1, H, W)
 
@@ -285,8 +285,8 @@ class MaskedTrainingManager:
             # Compute consistency between all frame pairs (more expensive)
             for t1 in range(f):
                 for t2 in range(t1 + 1, f):
-                    frame_t1 = masked_loss[:, :, t1]
-                    frame_t2 = masked_loss[:, :, t2]
+                    frame_t1 = pred[:, :, t1]
+                    frame_t2 = pred[:, :, t2]
                     mask_t1 = mask[:, :, t1]
                     mask_t2 = mask[:, :, t2]
 
