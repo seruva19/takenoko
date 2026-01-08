@@ -491,6 +491,17 @@ def create_arch_network(
     neuron_dropout: Optional[float] = None,
     **kwargs,
 ):
+    include_time_modules = kwargs.get("include_time_modules", False)
+    if isinstance(include_time_modules, str):
+        include_time_modules = include_time_modules.lower() in (
+            "true",
+            "1",
+            "yes",
+            "y",
+            "on",
+        )
+    include_time_modules = bool(include_time_modules)
+
     # add default exclude patterns
     exclude_patterns = kwargs.get("exclude_patterns", None)
     if exclude_patterns is None:
@@ -499,9 +510,10 @@ def create_arch_network(
         exclude_patterns = ast.literal_eval(exclude_patterns)
 
     # exclude if 'img_mod', 'txt_mod' or 'modulation' in the name
-    exclude_patterns.append(
-        r".*(patch_embedding|text_embedding|time_embedding|time_projection|norm|head).*"
-    )
+    excluded_parts = ["patch_embedding", "text_embedding", "norm", "head"]
+    if not include_time_modules:
+        excluded_parts.extend(["time_embedding", "time_projection"])
+    exclude_patterns.append(r".*(" + "|".join(excluded_parts) + r").*")
 
     kwargs["exclude_patterns"] = exclude_patterns
 
@@ -563,11 +575,33 @@ def create_network(
 
     # regular expression for module selection: exclude and include
     exclude_patterns = kwargs.get("exclude_patterns", None)
-    if exclude_patterns is not None and isinstance(exclude_patterns, str):
+    if exclude_patterns is not None and isinstance(exclude_patterns, str):      
         exclude_patterns = ast.literal_eval(exclude_patterns)
     include_patterns = kwargs.get("include_patterns", None)
-    if include_patterns is not None and isinstance(include_patterns, str):
+    if include_patterns is not None and isinstance(include_patterns, str):      
         include_patterns = ast.literal_eval(include_patterns)
+    extra_exclude_patterns = kwargs.get("extra_exclude_patterns", None)
+    if extra_exclude_patterns is not None and isinstance(extra_exclude_patterns, str):
+        extra_exclude_patterns = ast.literal_eval(extra_exclude_patterns)
+    extra_include_patterns = kwargs.get("extra_include_patterns", None)
+    if extra_include_patterns is not None and isinstance(extra_include_patterns, str):
+        extra_include_patterns = ast.literal_eval(extra_include_patterns)
+
+    include_time_modules = kwargs.get("include_time_modules", False)
+    if isinstance(include_time_modules, str):
+        include_time_modules = include_time_modules.lower() in (
+            "true",
+            "1",
+            "yes",
+            "y",
+            "on",
+        )
+    if include_time_modules:
+        if extra_include_patterns is None:
+            extra_include_patterns = []
+        for pattern in ("^time_embedding\\.", "^time_projection\\."):
+            if pattern not in extra_include_patterns:
+                extra_include_patterns.append(pattern)
 
     # Parse GGPO parameters (may arrive as strings via network_args)
     ggpo_sigma = kwargs.get("ggpo_sigma", None)
@@ -596,6 +630,8 @@ def create_network(
         conv_alpha=conv_alpha,
         exclude_patterns=exclude_patterns,
         include_patterns=include_patterns,
+        extra_exclude_patterns=extra_exclude_patterns,
+        extra_include_patterns=extra_include_patterns,
         verbose=verbose,
         ggpo_sigma=cast(Optional[float], ggpo_sigma),
         ggpo_beta=cast(Optional[float], ggpo_beta),
@@ -641,6 +677,8 @@ class LoRANetwork(torch.nn.Module):
         modules_alpha: Optional[Dict[str, int]] = None,
         exclude_patterns: Optional[List[str]] = None,
         include_patterns: Optional[List[str]] = None,
+        extra_exclude_patterns: Optional[List[str]] = None,
+        extra_include_patterns: Optional[List[str]] = None,
         verbose: Optional[bool] = False,
         # LoRA-GGPO parameters
         ggpo_sigma: Optional[float] = None,
@@ -708,6 +746,17 @@ class LoRANetwork(torch.nn.Module):
                     continue
                 include_re_patterns.append(re_pattern)
 
+        def compile_patterns(patterns: Optional[List[str]]) -> List[re.Pattern]:
+            compiled = []
+            if patterns is None:
+                return compiled
+            for pattern in patterns:
+                try:
+                    compiled.append(re.compile(pattern))
+                except re.error as e:
+                    logger.error(f"Invalid pattern '{pattern}': {e}")
+            return compiled
+
         # create module instances
         def create_modules(
             is_unet: bool,
@@ -716,9 +765,13 @@ class LoRANetwork(torch.nn.Module):
             target_replace_mods: Optional[List[str]] = None,
             filter: Optional[str] = None,
             default_dim: Optional[int] = None,
+            include_res: Optional[List[re.Pattern]] = None,
+            exclude_res: Optional[List[re.Pattern]] = None,
         ) -> List[LoRAModule]:
             loras = []
             skipped = []
+            include_res = include_res if include_res is not None else include_re_patterns
+            exclude_res = exclude_res if exclude_res is not None else exclude_re_patterns
             for name, module in root_module.named_modules():
                 if (
                     target_replace_mods is None
@@ -740,12 +793,12 @@ class LoRANetwork(torch.nn.Module):
 
                             # exclude/include filter
                             excluded = False
-                            for pattern in exclude_re_patterns:
+                            for pattern in exclude_res:
                                 if pattern.match(original_name):
                                     excluded = True
                                     break
                             included = False
-                            for pattern in include_re_patterns:
+                            for pattern in include_res:
                                 if pattern.match(original_name):
                                     included = True
                                     break
@@ -828,12 +881,36 @@ class LoRANetwork(torch.nn.Module):
             True, prefix, unet, target_replace_modules
         )
 
+        extra_skipped = []
+        if extra_include_patterns:
+            extra_include_res = compile_patterns(extra_include_patterns)
+            extra_exclude_res = compile_patterns(extra_exclude_patterns)
+            extra_loras, extra_skipped = create_modules(
+                True,
+                prefix,
+                unet,
+                None,
+                include_res=extra_include_res,
+                exclude_res=extra_exclude_res,
+            )
+            existing_names = {lora.lora_name for lora in self.unet_loras}
+            deduped = []
+            for lora in extra_loras:
+                if lora.lora_name in existing_names:
+                    if verbose:
+                        logger.info(f"skip duplicate: {lora.lora_name}")
+                    continue
+                deduped.append(lora)
+                existing_names.add(lora.lora_name)
+            if deduped:
+                self.unet_loras.extend(deduped)
+
         logger.info(f"create LoRA for U-Net/DiT: {len(self.unet_loras)} modules.")
         if verbose:
             for lora in self.unet_loras:
                 logger.info(f"\t{lora.lora_name:50} {lora.lora_dim}, {lora.alpha}")
 
-        skipped = skipped_un
+        skipped = skipped_un + extra_skipped
         if verbose and len(skipped) > 0:  # type: ignore
             logger.warning(
                 f"because dim (rank) is 0, {len(skipped)} LoRA modules are skipped"  # type: ignore
@@ -1310,6 +1387,38 @@ def create_network_from_weights(
 
     module_class = LoRAInfModule if for_inference else LoRAModule
 
+    extra_include_patterns = kwargs.get("extra_include_patterns", None)
+    if extra_include_patterns is not None and isinstance(extra_include_patterns, str):
+        extra_include_patterns = ast.literal_eval(extra_include_patterns)
+    extra_exclude_patterns = kwargs.get("extra_exclude_patterns", None)
+    if extra_exclude_patterns is not None and isinstance(extra_exclude_patterns, str):
+        extra_exclude_patterns = ast.literal_eval(extra_exclude_patterns)
+
+    include_time_modules = kwargs.get("include_time_modules", False)
+    if isinstance(include_time_modules, str):
+        include_time_modules = include_time_modules.lower() in (
+            "true",
+            "1",
+            "yes",
+            "y",
+            "on",
+        )
+    include_time_modules = bool(include_time_modules)
+
+    if not extra_include_patterns:
+        extra_include_patterns = []
+    if include_time_modules:
+        for pattern in ("^time_embedding\\.", "^time_projection\\."):
+            if pattern not in extra_include_patterns:
+                extra_include_patterns.append(pattern)
+    else:
+        for lora_name in modules_dim.keys():
+            if "time_embedding" in lora_name or "time_projection" in lora_name:
+                for pattern in ("^time_embedding\\.", "^time_projection\\."):
+                    if pattern not in extra_include_patterns:
+                        extra_include_patterns.append(pattern)
+                break
+
     network = LoRANetwork(
         target_replace_modules,
         "lora_unet",
@@ -1319,5 +1428,7 @@ def create_network_from_weights(
         modules_dim=modules_dim,
         modules_alpha=modules_alpha,
         module_class=module_class,
+        extra_exclude_patterns=extra_exclude_patterns,
+        extra_include_patterns=extra_include_patterns,
     )
     return network
