@@ -607,10 +607,22 @@ network_alpha = 32
 # scale_weight_norms = 1.0 
 
 # network weights to merge into the model before training
-# base_weights = "path/to/base1.safetensors" 
+# base_weights = "path/to/base1.safetensors"
 
 # multiplier for base weights
 # base_weights_multiplier = 1.0 
+
+# frozen LoRA weights to apply during training only (not merged into the model)
+# Accepts a single path or a list of paths. These LoRAs are applied to the model
+# but never included in the optimizer or saved into the target LoRA.
+# Requires: network_module compatible with LoRA weights (e.g., networks.lora_wan).
+# frozen_network_weights = "path/to/frozen_lora.safetensors"
+# frozen_network_weights = ["path/to/frozen_lora1.safetensors", "path/to/frozen_lora2.safetensors"]
+
+# per-weight multiplier(s) for frozen_network_weights (float or list of floats)
+# If a list is provided, it aligns by index with frozen_network_weights.
+# frozen_network_weights_multiplier = 1.0
+# frozen_network_weights_multiplier = [1.0, 0.75]
 
 # use lycoris for inference
 # lycoris = true 

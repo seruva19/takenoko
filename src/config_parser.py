@@ -466,6 +466,22 @@ def create_args_from_config(
     args.scale_weight_norms = config.get("scale_weight_norms", None)
     args.base_weights = config.get("base_weights")
     args.base_weights_multiplier = config.get("base_weights_multiplier", 1.0)
+    args.frozen_network_weights = config.get("frozen_network_weights")
+    args.frozen_network_weights_multiplier = config.get(
+        "frozen_network_weights_multiplier", 1.0
+    )
+    if args.frozen_network_weights is not None:
+        if isinstance(args.frozen_network_weights, str):
+            args.frozen_network_weights = [args.frozen_network_weights]
+        elif not isinstance(args.frozen_network_weights, list):
+            logger.warning(
+                "frozen_network_weights must be a string or list; ignoring invalid value."
+            )
+            args.frozen_network_weights = None
+        if args.frozen_network_weights is not None:
+            logger.info(
+                "Frozen LoRA weights enabled for training-only use; they will not be merged or saved."
+            )
 
     # Reward LoRA settings (prefixed with reward_*)
     args.enable_reward_lora = config.get("enable_reward_lora", False)

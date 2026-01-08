@@ -655,6 +655,8 @@ class ModelManager:
             info = network.load_weights(args.network_weights)
             logger.info(f"load network weights from {args.network_weights}: {info}")
 
+        self._apply_frozen_networks(args, transformer, network_module, net_kwargs)
+
         if args.gradient_checkpointing:
             transformer.enable_gradient_checkpointing(
                 args.gradient_checkpointing_cpu_offload
@@ -662,6 +664,83 @@ class ModelManager:
             network.enable_gradient_checkpointing()  # may have no effect
 
         return network
+
+    def _apply_frozen_networks(
+        self,
+        args: argparse.Namespace,
+        transformer: WanModel,
+        network_module: Any,
+        net_kwargs: dict,
+    ) -> None:
+        frozen_weights = getattr(args, "frozen_network_weights", None)
+        if not frozen_weights:
+            return
+
+        if isinstance(frozen_weights, str):
+            frozen_weights = [frozen_weights]
+
+        multipliers = getattr(args, "frozen_network_weights_multiplier", 1.0)
+        if isinstance(multipliers, str):
+            try:
+                multipliers = float(multipliers)
+            except Exception:
+                logger.warning(
+                    "frozen_network_weights_multiplier is invalid; defaulting to 1.0."
+                )
+                multipliers = 1.0
+
+        if not hasattr(self, "frozen_networks"):
+            self.frozen_networks = []
+
+        for i, weight_path in enumerate(frozen_weights):
+            if isinstance(multipliers, list):
+                if i < len(multipliers):
+                    multiplier = float(multipliers[i])
+                else:
+                    logger.warning(
+                        "frozen_network_weights_multiplier list shorter than weights; using 1.0."
+                    )
+                    multiplier = 1.0
+            else:
+                multiplier = float(multipliers)
+
+            logger.info(
+                f"applying frozen LoRA: {weight_path} with multiplier {multiplier}"
+            )
+            weights_sd = load_file(weight_path)
+            try:
+                module = network_module.create_arch_network_from_weights(
+                    multiplier,
+                    weights_sd,
+                    unet=transformer,
+                    for_inference=True,
+                    **net_kwargs,
+                )
+            except TypeError:
+                module = network_module.create_arch_network_from_weights(
+                    multiplier,
+                    weights_sd,
+                    unet=transformer,
+                    for_inference=True,
+                )
+
+            module.apply_to(None, transformer, apply_text_encoder=False, apply_unet=True)
+            for param in module.parameters():
+                param.requires_grad = False
+            module.eval()
+            self.frozen_networks.append(module)
+            if getattr(args, "verbose_network", False):
+                frozen_names = []
+                for lora in getattr(module, "unet_loras", []):
+                    frozen_names.append(lora.lora_name)
+                if frozen_names:
+                    logger.info(
+                        "frozen LoRA modules:\n  "
+                        + "\n  ".join(sorted(frozen_names))
+                    )
+        logger.info(
+            f"frozen LoRA modules applied: {len(self.frozen_networks)} (training-only)"
+        )
 
     def handle_model_specific_args(self, args: argparse.Namespace) -> None:
         """Handle model-specific argument processing and validation."""
