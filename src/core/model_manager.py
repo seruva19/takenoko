@@ -587,7 +587,6 @@ class ModelManager:
                         transformer,
                         neuron_dropout=args.network_dropout,
                         control_config=control_config,
-                        verbose=getattr(args, "verbose_network", False),
                         **net_kwargs,
                     )
                 else:
@@ -599,7 +598,6 @@ class ModelManager:
                         None,
                         transformer,
                         neuron_dropout=args.network_dropout,
-                        verbose=getattr(args, "verbose_network", False),
                         **net_kwargs,
                     )
             else:

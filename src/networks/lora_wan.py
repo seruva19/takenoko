@@ -802,10 +802,25 @@ class LoRANetwork(torch.nn.Module):
                                 if pattern.match(original_name):
                                     included = True
                                     break
-                            if excluded and not included:
-                                if verbose:
-                                    logger.info(f"exclude: {original_name}")
-                                continue
+
+                            # If include patterns are specified, treat as whitelist
+                            if include_res:
+                                # Skip if not included (unless explicitly checking all modules)
+                                if not included:
+                                    if verbose:
+                                        logger.info(f"not in include patterns: {original_name}")
+                                    continue
+                                # Even if included, still skip if excluded
+                                if excluded:
+                                    if verbose:
+                                        logger.info(f"exclude (overrides include): {original_name}")
+                                    continue
+                            else:
+                                # No include patterns: just skip excluded modules
+                                if excluded:
+                                    if verbose:
+                                        logger.info(f"exclude: {original_name}")
+                                    continue
 
                             # filter by name (not used in the current implementation)
                             if filter is not None and not filter in lora_name:

@@ -462,7 +462,6 @@ def create_args_from_config(
     args.training_comment = config.get("training_comment", "trained with Takenoko")
     args.dim_from_weights = config.get("dim_from_weights", False)
     args.lycoris = config.get("lycoris", False)
-    args.verbose_network = config.get("verbose_network", False)
     args.scale_weight_norms = config.get("scale_weight_norms", None)
     args.base_weights = config.get("base_weights")
     args.base_weights_multiplier = config.get("base_weights_multiplier", 1.0)

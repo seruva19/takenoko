@@ -600,9 +600,6 @@ network_alpha = 32
 # automatically determine dim (rank) from network_weights
 # dim_from_weights = true 
 
-# show detailed information about trainable LoRA parameters and network structure
-# verbose_network = true 
-
 # scale the weight of each key pair to help prevent overtraing via exploding gradients. (1 is a good starting point)
 # scale_weight_norms = 1.0 
 
