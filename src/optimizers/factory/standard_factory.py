@@ -17,6 +17,25 @@ def create_adamw_optimizer(
     return optimizer_class, optimizer
 
 
+def create_stochastic_adamw_optimizer(
+    trainable_params: List[Any],
+    lr: float,
+    optimizer_kwargs: Dict[str, Any],
+    logger: Any,
+) -> Tuple[Any, torch.optim.Optimizer]:
+    logger.info(f"using StochasticAdamW optimizer | {optimizer_kwargs}")
+    from optimizers.stochastic_adamw import StochasticAdamW
+    
+    optimizer_class = StochasticAdamW
+    
+    # Extract specific kwargs for StochasticAdamW if mixed with general ones, 
+    # though usually they are passed directly.
+    # We ensure defaults are respected if keys are missing.
+    
+    optimizer = optimizer_class(trainable_params, lr=lr, **optimizer_kwargs)
+    return optimizer_class, optimizer
+
+
 def create_adafactor_optimizer(
     args: Any,
     trainable_params: List[Any],

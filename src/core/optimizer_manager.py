@@ -208,6 +208,18 @@ class OptimizerManager:
                 logger,
             )
 
+        elif optimizer_type == "StochasticAdamW".lower():
+            from optimizers.factory.standard_factory import (
+                create_stochastic_adamw_optimizer,
+            )
+
+            optimizer_class, optimizer = create_stochastic_adamw_optimizer(
+                trainable_params,
+                lr,
+                optimizer_kwargs,
+                logger,
+            )
+
         elif is_q_galore_optimizer_type(optimizer_type):
             from optimizers.factory.q_galore_factory import (
                 create_q_galore_adamw8bit_optimizer,

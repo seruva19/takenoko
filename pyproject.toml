@@ -50,7 +50,7 @@ dependencies = [
   "torch-optimi>=0.3.0",
   "torch-optimizer==0.3.0",
   "torch>=2.6.0,<2.7.0",
-  "torchao==0.13.0",
+  "torchao==0.15.0",
   "torchmetrics>=1.7.4",
   "torchvision>=0.21.0,<0.22.0",
   "tqdm==4.67.1",
