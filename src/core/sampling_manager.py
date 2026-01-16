@@ -32,6 +32,53 @@ from sampling.bfm_sampling import (
     setup_bfm_sampling,
 )
 
+try:
+    import tensorboardX.utils
+
+    def _prepare_video_patched(V):
+        import numpy as np
+
+        b, t, c, h, w = V.shape
+
+        if V.dtype == np.uint8:
+            V = np.float32(V) / 255.0
+
+        def is_power2(num):
+            return num != 0 and ((num & (num - 1)) == 0)
+
+        # pad to nearest power of 2, all at once
+        if not is_power2(V.shape[0]):
+            len_addition = int(2 ** V.shape[0].bit_length() - V.shape[0])
+            V = np.concatenate(
+                (V, np.zeros(shape=(len_addition, t, c, h, w))), axis=0
+            )
+
+        n_rows = 2 ** ((b.bit_length() - 1) // 2)
+        n_cols = V.shape[0] // n_rows
+
+        # FIX: using positional args or 'shape' instead of 'newshape' for numpy 2.0 compat
+        V = np.reshape(V, (n_rows, n_cols, t, c, h, w))
+        V = np.transpose(V, axes=(2, 0, 4, 1, 5, 3))
+        V = np.reshape(V, (t, n_rows * h, n_cols * w, c))
+
+        return V
+
+
+    # Apply the monkeypatch to utils
+    tensorboardX.utils._prepare_video = _prepare_video_patched
+    
+    # Also patch summary which imports it directly
+    try:
+        import tensorboardX.summary
+        tensorboardX.summary._prepare_video = _prepare_video_patched
+    except ImportError:
+        pass
+
+    logger = get_logger(__name__, level=logging.INFO)
+    logger.info("Monkeypatched tensorboardX.utils._prepare_video and tensorboardX.summary._prepare_video for Numpy 2.0 compatibility")
+except ImportError:
+    pass
+
 logger = get_logger(__name__, level=logging.INFO)
 
 
