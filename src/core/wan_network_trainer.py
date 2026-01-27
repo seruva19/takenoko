@@ -1588,6 +1588,21 @@ class WanNetworkTrainer:
                 except Exception as exc:
                     logger.warning(f"LayerSync setup failed: {exc}")
                     layer_sync_helper = None
+            internal_guidance_helper = None
+            if getattr(args, "enable_internal_guidance", False):
+                try:
+                    from enhancements.internal_guidance.internal_guidance_helper import (
+                        InternalGuidanceHelper,
+                    )
+
+                    logger.info(
+                        "Internal Guidance is enabled. Setting up the helper module."
+                    )
+                    internal_guidance_helper = InternalGuidanceHelper(args)
+                    internal_guidance_helper.setup_hooks()
+                except Exception as exc:
+                    logger.warning(f"Internal Guidance setup failed: {exc}")
+                    internal_guidance_helper = None
             if semfeat_helper is not None:
                 try:
                     semfeat_helper.setup_hooks()
@@ -1688,6 +1703,7 @@ class WanNetworkTrainer:
                 sara_helper=sara_helper,
                 layer_sync_helper=layer_sync_helper,
                 crepa_helper=crepa_helper,
+                internal_guidance_helper=internal_guidance_helper,
                 haste_helper=haste_helper,
                 contrastive_attention_helper=contrastive_attention_helper,
                 dual_model_manager=dual_model_manager,
@@ -1701,6 +1717,11 @@ class WanNetworkTrainer:
             reg_helper.remove_hooks()
         if "layer_sync_helper" in locals() and layer_sync_helper is not None:
             layer_sync_helper.remove_hooks()
+        if (
+            "internal_guidance_helper" in locals()
+            and internal_guidance_helper is not None
+        ):
+            internal_guidance_helper.remove_hooks()
         if "haste_helper" in locals() and haste_helper is not None:
             from enhancements.haste.integration import remove_haste_helper
 

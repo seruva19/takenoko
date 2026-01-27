@@ -257,6 +257,9 @@ class TrainingCore:
         # EqM transport helper (experimental)
         self.eqm_training_helper: Optional[EqMTrainingHelper] = None
 
+        # Internal Guidance helper (set in run_training_loop when enabled)
+        self.internal_guidance_helper: Optional[Any] = None
+
         # Initialize temporal consistency enhancement
         self.temporal_consistency_integration = None
 
@@ -820,6 +823,26 @@ class TrainingCore:
                 except Exception:
                     pass
 
+            return_internal_guidance = bool(
+                getattr(args, "enable_internal_guidance", False)
+            )
+            internal_guidance_target_block = None
+            if return_internal_guidance:
+                internal_guidance_target_block = int(
+                    getattr(args, "internal_guidance_target_block", 0) or 0
+                )
+                dispersive_target = getattr(args, "dispersive_loss_target_block", None)
+                if (
+                    dispersive_target is not None
+                    and int(dispersive_target) != int(internal_guidance_target_block)
+                    and getattr(args, "enable_dispersive_loss", False)
+                ):
+                    logger.warning(
+                        "Internal Guidance target block (%s) differs from dispersive_loss_target_block (%s).",
+                        internal_guidance_target_block,
+                        dispersive_target,
+                    )
+
             model_pred = model(
                 model_input,
                 t=timesteps,
@@ -837,23 +860,29 @@ class TrainingCore:
                 return_intermediate=bool(
                     getattr(args, "enable_dispersive_loss", False)
                 ),
+                internal_guidance_target_block=internal_guidance_target_block,
+                return_internal_guidance=return_internal_guidance,
                 reg_cls_token=reg_cls_token,
                 segment_idx=bfm_segment_idx,
                 bfm_semfeat_tokens=bfm_semfeat_tokens,
             )
         # Unpack optional intermediate
         intermediate_z: Optional[torch.Tensor] = None
+        internal_guidance_pred: Optional[torch.Tensor] = None
+        internal_guidance_shift: Optional[torch.Tensor] = None
         reg_cls_pred: Optional[torch.Tensor] = None
         if isinstance(model_pred, tuple):
-            if len(model_pred) == 2:
-                model_pred, second = model_pred  # type: ignore
-                if torch.is_tensor(second) and second.dim() == 2:
-                    reg_cls_pred = second
-                else:
-                    intermediate_z = second
-            elif len(model_pred) == 3:
-                model_pred, intermediate_z, reg_cls_pred = model_pred  # type: ignore
+            parts = list(model_pred)
+            model_pred = parts.pop(0)
+            if getattr(args, "enable_dispersive_loss", False) and parts:
+                intermediate_z = parts.pop(0)
+            if getattr(args, "enable_internal_guidance", False) and parts:
+                internal_guidance_pred = parts.pop(0)
+            if parts:
+                reg_cls_pred = parts.pop(0)
         model_pred = torch.stack(model_pred, dim=0)  # list to tensor
+        if internal_guidance_pred is not None:
+            internal_guidance_pred = torch.stack(internal_guidance_pred, dim=0)
 
         if model_pred.grad_fn is None:
             print(
@@ -936,13 +965,71 @@ class TrainingCore:
                 device=accelerator.device, dtype=network_dtype
             )
 
+        if return_internal_guidance and self.internal_guidance_helper is not None:
+            ig_model_kwargs = {
+                "t": timesteps,
+                "context": context,
+                "clip_fea": None,
+                "seq_len": seq_len,
+                "y": None,
+                "force_keep_mask": force_keep_mask,
+                "controlnet_states": control_states,
+                "controlnet_weight": getattr(args, "controlnet_weight", 1.0),
+                "controlnet_stride": int(getattr(args, "controlnet_stride", 1)),
+                "dispersive_loss_target_block": None,
+                "return_intermediate": False,
+                "internal_guidance_target_block": internal_guidance_target_block,
+                "return_internal_guidance": True,
+                "reg_cls_token": reg_cls_token,
+                "segment_idx": bfm_segment_idx,
+                "bfm_semfeat_tokens": bfm_semfeat_tokens,
+            }
+            internal_guidance_shift = self.internal_guidance_helper.compute_shift(
+                args=args,
+                model=model,
+                model_input=model_input,
+                model_kwargs=ig_model_kwargs,
+                network_dtype=network_dtype,
+                ema_context=self._weight_ema_eval_context,
+                weight_ema=self.weight_ema,
+                logger=logger,
+            )
+
         if rcm_mode:
             if reg_cls_pred is not None:
-                return model_pred, target, intermediate_z, rcm_result, reg_cls_pred
-            return model_pred, target, intermediate_z, rcm_result
+                return (
+                    model_pred,
+                    target,
+                    intermediate_z,
+                    internal_guidance_pred,
+                    internal_guidance_shift,
+                    rcm_result,
+                    reg_cls_pred,
+                )
+            return (
+                model_pred,
+                target,
+                intermediate_z,
+                internal_guidance_pred,
+                internal_guidance_shift,
+                rcm_result,
+            )
         if reg_cls_pred is not None:
-            return model_pred, target, intermediate_z, reg_cls_pred
-        return model_pred, target, intermediate_z
+            return (
+                model_pred,
+                target,
+                intermediate_z,
+                internal_guidance_pred,
+                internal_guidance_shift,
+                reg_cls_pred,
+            )
+        return (
+            model_pred,
+            target,
+            intermediate_z,
+            internal_guidance_pred,
+            internal_guidance_shift,
+        )
 
     def run_training_loop(
         self,
@@ -983,6 +1070,7 @@ class TrainingCore:
         sara_helper: Optional[Any] = None,
         layer_sync_helper: Optional[Any] = None,
         crepa_helper: Optional[Any] = None,
+        internal_guidance_helper: Optional[Any] = None,
         haste_helper: Optional[Any] = None,
         contrastive_attention_helper: Optional[Any] = None,
         controlnet: Optional[Any] = None,
@@ -992,6 +1080,7 @@ class TrainingCore:
 
         # Store noise scheduler reference for call_dit
         self.noise_scheduler = noise_scheduler
+        self.internal_guidance_helper = internal_guidance_helper
 
         transition_cfg = getattr(args, "transition_training", None)
         if transition_cfg and getattr(transition_cfg, "enabled", False):
@@ -1695,12 +1784,25 @@ class TrainingCore:
 
                             # Unpack model result
                             reg_cls_pred = None
-                            if len(model_result) == 4:
-                                model_pred, target, intermediate_z, reg_cls_pred = (
-                                    model_result
-                                )
+                            internal_guidance_pred = None
+                            internal_guidance_shift = None
+                            if len(model_result) == 6:
+                                (
+                                    model_pred,
+                                    target,
+                                    intermediate_z,
+                                    internal_guidance_pred,
+                                    internal_guidance_shift,
+                                    reg_cls_pred,
+                                ) = model_result
                             else:
-                                model_pred, target, intermediate_z = model_result
+                                (
+                                    model_pred,
+                                    target,
+                                    intermediate_z,
+                                    internal_guidance_pred,
+                                    internal_guidance_shift,
+                                ) = model_result
 
                         transition_loss_context = {"transition_training_enabled": False}
                         per_sample_transition_loss = None
@@ -1844,6 +1946,8 @@ class TrainingCore:
                                 target=target,
                                 weighting=weighting,
                                 intermediate_z=intermediate_z,
+                                internal_guidance_pred=internal_guidance_pred,
+                                internal_guidance_shift=internal_guidance_shift,
                                 vae=vae,
                                 control_signal_processor=control_signal_processor,
                                 repa_helper=(
@@ -1857,6 +1961,7 @@ class TrainingCore:
                                 sara_helper=sara_helper,
                                 layer_sync_helper=layer_sync_helper,
                                 crepa_helper=crepa_helper,
+                                internal_guidance_helper=internal_guidance_helper,
                                 haste_helper=haste_helper,
                                 contrastive_attention_helper=contrastive_attention_helper,
                                 raft=getattr(self, "raft", None),

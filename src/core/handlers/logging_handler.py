@@ -159,6 +159,10 @@ def collect_and_log_training_metrics(
         logs["layersync_similarity"] = float(
             loss_components.layer_sync_similarity.item()
         )
+    if getattr(loss_components, "internal_guidance_loss", None) is not None:
+        logs["loss/internal_guidance"] = float(
+            loss_components.internal_guidance_loss.item()
+        )
     if loss_components.repa_loss is not None:
         logs["loss/repa"] = float(loss_components.repa_loss.item())
     if getattr(loss_components, "bfm_semfeat_loss", None) is not None:

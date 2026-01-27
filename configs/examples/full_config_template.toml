@@ -1520,6 +1520,32 @@ cdc_min_bucket_size = 16
 cdc_force_recache = false
 
 # =============================================================================
+# ⚠️ INTERNAL GUIDANCE (IG) SETTINGS
+# =============================================================================
+# Enable Internal Guidance auxiliary supervision (training-only, default off).
+enable_internal_guidance = false
+
+# Internal Guidance mode:
+# - "shift": use a shifted target objective during training.
+# - "aux": auxiliary loss only (no target shift).
+internal_guidance_mode = "shift"
+
+# Guidance strength w used to shift the final target (> 0 when enabled).
+internal_guidance_weight = 0.5
+
+# Weight for the intermediate objective loss (>= 0).
+internal_guidance_intermediate_weight = 1.0
+
+# Transformer block index (0-based) to compute the intermediate prediction.
+internal_guidance_target_block = 8
+
+# Loss type for IG auxiliary supervision:
+# - "l2": Mean squared error
+# - "sml1": Smooth L1 with beta=0.05
+# - "l1": Mean absolute error
+internal_guidance_loss_type = "l2"
+
+# =============================================================================
 # ⚠️ REPA (REPRESENTATIONAL ALIGNMENT) SETTINGS
 # =============================================================================
 

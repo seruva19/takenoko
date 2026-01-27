@@ -88,6 +88,8 @@ class LossComponents:
         The LayerSync self-alignment projection loss, if enabled.
     layer_sync_similarity: Optional[torch.Tensor]
         The LayerSync mean cosine similarity between source and target blocks.
+    internal_guidance_loss: Optional[torch.Tensor]
+        The Internal Guidance auxiliary supervision loss, if enabled.
     repa_loss: Optional[torch.Tensor]
         The REPA alignment loss, if enabled.
     reg_align_loss: Optional[torch.Tensor]
@@ -156,6 +158,7 @@ class LossComponents:
     optical_flow_loss: Optional[torch.Tensor] = None
     layer_sync_loss: Optional[torch.Tensor] = None
     layer_sync_similarity: Optional[torch.Tensor] = None
+    internal_guidance_loss: Optional[torch.Tensor] = None
     repa_loss: Optional[torch.Tensor] = None
     reg_align_loss: Optional[torch.Tensor] = None
     reg_cls_loss: Optional[torch.Tensor] = None
@@ -452,6 +455,8 @@ class TrainingLossComputer:
         weighting: Optional[torch.Tensor],
         batch: Dict[str, Any],
         intermediate_z: Optional[torch.Tensor],
+        internal_guidance_pred: Optional[torch.Tensor] = None,
+        internal_guidance_shift: Optional[torch.Tensor] = None,
         vae: Optional[Any] = None,
         transformer: Optional[Any] = None,
         network: Optional[Any] = None,
@@ -465,6 +470,7 @@ class TrainingLossComputer:
         sara_helper: Optional[Any] = None,
         layer_sync_helper: Optional[Any] = None,
         crepa_helper: Optional[Any] = None,
+        internal_guidance_helper: Optional[Any] = None,
         haste_helper: Optional[Any] = None,
         contrastive_attention_helper: Optional[Any] = None,
         raft: Optional[Any] = None,
@@ -522,6 +528,17 @@ class TrainingLossComputer:
             except Exception as exc:
                 logger.warning(
                     "BFM segment objective computation failed: %s", exc
+                )
+
+        base_target = target
+        if str(getattr(args, "internal_guidance_mode", "aux")).lower() == "shift":
+            if internal_guidance_shift is not None:
+                base_target = target + internal_guidance_shift.to(
+                    device=target.device, dtype=target.dtype
+                )
+            elif getattr(args, "enable_internal_guidance", False):
+                logger.warning(
+                    "Internal Guidance shift mode enabled but shift is missing; using base target."
                 )
 
         # ---- Contrastive Flow Matching (Enhanced with DeltaFM improvements) ----
@@ -607,7 +624,7 @@ class TrainingLossComputer:
 
                 contrastive_result = compute_enhanced_contrastive_loss(
                     model_pred=model_pred.to(network_dtype),
-                    target=target,
+                    target=base_target,
                     negative_target=negative_target,
                     labels=labels,
                     null_class_idx=getattr(
@@ -642,7 +659,7 @@ class TrainingLossComputer:
 
                 loss_fm = conditional_loss_with_pseudo_huber(
                     model_pred.to(network_dtype),
-                    target,
+                    base_target,
                     loss_type=args.loss_type,
                     huber_c=args.pseudo_huber_c,
                     current_step=current_step,
@@ -691,7 +708,7 @@ class TrainingLossComputer:
 
             loss = conditional_loss_with_pseudo_huber(
                 model_pred.to(network_dtype),
-                target,
+                base_target,
                 loss_type=args.loss_type,
                 huber_c=args.pseudo_huber_c,
                 current_step=current_step,
@@ -1054,6 +1071,40 @@ class TrainingLossComputer:
                 dispersive_loss_value = dispersive_val.detach()
             except Exception as e:
                 logger.warning(f"Dispersive loss computation failed: {e}")
+
+        # ---- Optional Internal Guidance Loss ----
+        internal_guidance_loss_value: Optional[torch.Tensor] = None
+        if (
+            getattr(args, "enable_internal_guidance", False)
+            and internal_guidance_pred is not None
+        ):
+            ig_mode = str(getattr(args, "internal_guidance_mode", "aux")).lower()
+            if ig_mode == "shift":
+                ig_weight = float(
+                    getattr(args, "internal_guidance_intermediate_weight", 1.0)
+                )
+            else:
+                ig_weight = float(getattr(args, "internal_guidance_weight", 0.0))
+            if ig_weight > 0.0:
+                try:
+                    if internal_guidance_helper is None:
+                        logger.warning(
+                            "Internal Guidance enabled but helper is missing; skipping IG loss."
+                        )
+                    else:
+                        ig_loss = internal_guidance_helper.compute_loss(
+                            internal_guidance_pred.to(network_dtype),
+                            target.to(network_dtype),
+                            loss_type=getattr(
+                                args, "internal_guidance_loss_type", "sml1"
+                            ),
+                        )
+                        loss = loss + ig_weight * ig_loss
+                        internal_guidance_loss_value = ig_loss.detach()
+                except Exception as e:
+                    logger.warning(
+                        f"Internal Guidance loss computation failed: {e}"
+                    )
 
         # ---- Optional REG Loss ----
         reg_align_loss_value: Optional[torch.Tensor] = None
@@ -1660,6 +1711,7 @@ class TrainingLossComputer:
             optical_flow_loss=optical_flow_loss_value,
             layer_sync_loss=layer_sync_loss_value,
             layer_sync_similarity=layer_sync_similarity_value,
+            internal_guidance_loss=internal_guidance_loss_value,
             repa_loss=repa_loss_value,
             reg_align_loss=reg_align_loss_value,
             reg_cls_loss=reg_cls_loss_value,

@@ -1349,6 +1349,8 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
         controlnet_stride: int = 1,
         dispersive_loss_target_block: int | None = None,
         return_intermediate: bool = False,
+        internal_guidance_target_block: int | None = None,
+        return_internal_guidance: bool = False,
         reg_cls_token: torch.Tensor | None = None,
         segment_idx: torch.Tensor | None = None,
         bfm_semfeat_tokens: torch.Tensor | None = None,
@@ -1718,6 +1720,12 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
         target_block_idx = resolve_dispersive_target_block(
             len(self.blocks), dispersive_loss_target_block
         )  # type: ignore[arg-type]
+        internal_guidance_tokens = None
+        ig_target_block_idx = (
+            int(internal_guidance_target_block)
+            if return_internal_guidance and internal_guidance_target_block is not None
+            else None
+        )
 
         # Track input device for consistency check when CPU offloading is enabled
         input_device = x.device
@@ -1871,6 +1879,16 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
                     ):
                         # x shape is (B, L, C). Keep as-is for downstream flattening.
                         intermediate_z = x
+                    if (
+                        return_internal_guidance
+                        and ig_target_block_idx is not None
+                        and block_idx == ig_target_block_idx
+                        and internal_guidance_tokens is None
+                    ):
+                        ig_x = x
+                        if reg_extra_tokens:
+                            ig_x = ig_x[:, reg_extra_tokens:, :]
+                        internal_guidance_tokens = self.head(ig_x, e)
 
                 # ═══════════════════════════════════════════════════════════════════════════════
                 # TREAD ROUTING END: Reconstruct full tensors at configured layer index
@@ -1901,6 +1919,12 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
             x = x.reshape(1, T, (H * W) // (P * P), P * P, -1)  # type: ignore
             x = local_merge(x, H, W, P)
             x = x.reshape(1, T * H * W, -1)  # type: ignore
+            if internal_guidance_tokens is not None:
+                ig = internal_guidance_tokens.reshape(
+                    1, T, (H * W) // (P * P), P * P, -1
+                )
+                ig = local_merge(ig, H, W, P)
+                internal_guidance_tokens = ig.reshape(1, T * H * W, -1)
 
         # Final cleanup of all TREAD routing state
         tread_state.cleanup_all()
@@ -1908,12 +1932,27 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
         # unpatchify
         x = self.unpatchify(x, grid_sizes)
         outputs = [u.float() for u in x]
-        if return_intermediate:
+        internal_guidance_outputs = None
+        if internal_guidance_tokens is not None:
+            internal_guidance_outputs = self.unpatchify(
+                internal_guidance_tokens, grid_sizes
+            )
+            internal_guidance_outputs = [
+                u.float() for u in internal_guidance_outputs
+            ]
+        if (
+            return_intermediate
+            or return_internal_guidance
+            or reg_cls_pred is not None
+        ):
+            parts = [outputs]
+            if return_intermediate:
+                parts.append(intermediate_z)
+            if return_internal_guidance:
+                parts.append(internal_guidance_outputs)
             if reg_cls_pred is not None:
-                return outputs, intermediate_z, reg_cls_pred
-            return outputs, intermediate_z
-        if reg_cls_pred is not None:
-            return outputs, reg_cls_pred
+                parts.append(reg_cls_pred)
+            return tuple(parts)
         return outputs
 
     def unpatchify(self, x, grid_sizes):

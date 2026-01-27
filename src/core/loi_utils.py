@@ -71,15 +71,25 @@ def run_loi_extra_backward(
         return None
     reg_cls_pred_loi = None
     intermediate_z_loi = None
-    if len(model_result) == 4:
+    internal_guidance_pred_loi = None
+    internal_guidance_shift_loi = None
+    if len(model_result) == 6:
         (
             model_pred_loi,
             target_loi,
             intermediate_z_loi,
+            internal_guidance_pred_loi,
+            internal_guidance_shift_loi,
             reg_cls_pred_loi,
         ) = model_result
     else:
-        model_pred_loi, target_loi, intermediate_z_loi = model_result
+        (
+            model_pred_loi,
+            target_loi,
+            intermediate_z_loi,
+            internal_guidance_pred_loi,
+            internal_guidance_shift_loi,
+        ) = model_result
 
     weighting_loi = compute_loss_weighting_for_sd3(
         args.weighting_scheme,
@@ -109,6 +119,8 @@ def run_loi_extra_backward(
         target=target_loi,
         weighting=weighting_loi,
         intermediate_z=intermediate_z_loi,
+        internal_guidance_pred=internal_guidance_pred_loi,
+        internal_guidance_shift=internal_guidance_shift_loi,
         vae=vae,
         control_signal_processor=control_signal_processor,
         repa_helper=(repa_helper if sara_helper is None else None),
@@ -120,6 +132,7 @@ def run_loi_extra_backward(
         sara_helper=sara_helper,
         layer_sync_helper=layer_sync_helper,
         crepa_helper=crepa_helper,
+        internal_guidance_helper=getattr(training_core, "internal_guidance_helper", None),
         haste_helper=haste_helper,
         contrastive_attention_helper=contrastive_attention_helper,
         raft=getattr(training_core, "raft", None),

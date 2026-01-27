@@ -812,10 +812,25 @@ class WanFinetuneTrainer:
                     applied=multiplier_applied,
                 )
             reg_cls_pred = None
-            if len(model_result) == 4:
-                model_pred, target, intermediate_z, reg_cls_pred = model_result
+            internal_guidance_pred = None
+            internal_guidance_shift = None
+            if len(model_result) == 6:
+                (
+                    model_pred,
+                    target,
+                    intermediate_z,
+                    internal_guidance_pred,
+                    internal_guidance_shift,
+                    reg_cls_pred,
+                ) = model_result
             else:
-                model_pred, target, intermediate_z = model_result
+                (
+                    model_pred,
+                    target,
+                    intermediate_z,
+                    internal_guidance_pred,
+                    internal_guidance_shift,
+                ) = model_result
 
         # Loss computation with weighting (reuse centralized loss computer)
         weighting = None
@@ -847,6 +862,8 @@ class WanFinetuneTrainer:
             weighting=weighting,
             batch=batch,
             intermediate_z=intermediate_z,
+            internal_guidance_pred=internal_guidance_pred,
+            internal_guidance_shift=internal_guidance_shift,
             vae=vae,
             transformer=transformer,
             network=transformer,
@@ -860,6 +877,7 @@ class WanFinetuneTrainer:
             sara_helper=sara_helper,
             layer_sync_helper=layer_sync_helper,
             crepa_helper=crepa_helper,
+            internal_guidance_helper=internal_guidance_helper,
             haste_helper=haste_helper,
             contrastive_attention_helper=contrastive_attention_helper,
             raft=None,
@@ -1767,6 +1785,19 @@ class WanFinetuneTrainer:
             except Exception as exc:
                 logger.warning(f"LayerSync setup failed: {exc}")
                 layer_sync_helper = None
+        internal_guidance_helper = None
+        if getattr(args, "enable_internal_guidance", False):
+            try:
+                from enhancements.internal_guidance.internal_guidance_helper import (
+                    InternalGuidanceHelper,
+                )
+
+                logger.info("Internal Guidance is enabled. Setting up the helper module.")
+                internal_guidance_helper = InternalGuidanceHelper(args)
+                internal_guidance_helper.setup_hooks()
+            except Exception as exc:
+                logger.warning(f"Internal Guidance setup failed: {exc}")
+                internal_guidance_helper = None
 
         # Initialize REPA/iREPA helper if enabled
         repa_helper = None
@@ -2562,6 +2593,11 @@ class WanFinetuneTrainer:
             reg_helper.remove_hooks()
         if "layer_sync_helper" in locals() and layer_sync_helper is not None:
             layer_sync_helper.remove_hooks()
+        if (
+            "internal_guidance_helper" in locals()
+            and internal_guidance_helper is not None
+        ):
+            internal_guidance_helper.remove_hooks()
         if "haste_helper" in locals() and haste_helper is not None:
             from enhancements.haste.integration import remove_haste_helper
 
