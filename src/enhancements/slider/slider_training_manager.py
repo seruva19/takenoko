@@ -170,6 +170,7 @@ class SliderTrainingManager:
                 sara_helper=kwargs.get("sara_helper"),
                 layer_sync_helper=kwargs.get("layer_sync_helper"),
                 crepa_helper=kwargs.get("crepa_helper"),
+                self_transcendence_helper=kwargs.get("self_transcendence_helper"),
                 haste_helper=kwargs.get("haste_helper"),
                 contrastive_attention_helper=kwargs.get(
                     "contrastive_attention_helper"
@@ -179,6 +180,7 @@ class SliderTrainingManager:
                 adaptive_manager=kwargs.get("adaptive_manager"),
                 transition_loss_context=kwargs.get("transition_loss_context"),
                 global_step=kwargs.get("global_step"),
+                current_epoch=kwargs.get("current_epoch"),
             )
 
         # Slider training - compute guided loss
@@ -235,6 +237,7 @@ class SliderTrainingManager:
                 sara_helper=kwargs.get("sara_helper"),
                 layer_sync_helper=kwargs.get("layer_sync_helper"),
                 crepa_helper=kwargs.get("crepa_helper"),
+                self_transcendence_helper=kwargs.get("self_transcendence_helper"),
                 haste_helper=kwargs.get("haste_helper"),
                 contrastive_attention_helper=kwargs.get(
                     "contrastive_attention_helper"
@@ -243,6 +246,7 @@ class SliderTrainingManager:
                 warp_fn=kwargs.get("warp_fn"),
                 adaptive_manager=kwargs.get("adaptive_manager"),
                 global_step=kwargs.get("global_step"),
+                current_epoch=kwargs.get("current_epoch"),
             )
 
     def get_config_dict(self) -> Dict[str, Any]:

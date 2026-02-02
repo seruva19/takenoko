@@ -1546,6 +1546,53 @@ internal_guidance_target_block = 8
 internal_guidance_loss_type = "l2"
 
 # =============================================================================
+# ⚠️ SELF-TRANSCENDENCE SETTINGS
+# =============================================================================
+
+# Enable Self-Transcendence (training-only; uses internal feature guidance, no inference changes).
+enable_self_transcendence = false
+
+# Stage-1 VAE alignment loss weight (L2 between shallow features and VAE latents).
+# Set to 0.0 to skip VAE alignment (stage-2 can still run).
+self_transcendence_vae_loss_weight = 1.0
+
+# Stage-2 self-guided feature loss weight (L2 alignment to CFG-guided deep features).
+# Common starting points: 0.5 for SiT, 0.1 for LightningDiT.
+self_transcendence_guidance_loss_weight = 0.5
+
+# Feature-space CFG guidance scale for the self-guided representation.
+# Common starting points: 30.0 for SiT, 10.0 for LightningDiT.
+self_transcendence_guidance_scale = 30.0
+
+# Guided layer index (1-based). Use -1 to auto-select half the transformer depth.
+self_transcendence_guided_layer = -1
+
+# Guiding layer index (1-based). Use -1 to auto-select two-thirds of the transformer depth.
+self_transcendence_guiding_layer = -1
+
+# Epoch schedule (preferred): warmup uses VAE alignment only; self-guided loss runs
+# for guidance_epochs afterward and is then disabled.
+self_transcendence_warmup_epochs = 40
+
+# Number of epochs to apply self-guided loss after warmup.
+self_transcendence_guidance_epochs = 20
+
+# Optional schedule override in steps (use when max_train_epochs is unset).
+# If either *_steps > 0, the step schedule takes precedence over epochs.
+self_transcendence_warmup_steps = 0
+
+# Optional schedule override in steps (use when max_train_epochs is unset).
+self_transcendence_guidance_steps = 0
+
+# MLP expansion ratio for the lightweight projection heads (>= 1).
+self_transcendence_mlp_multiplier = 2
+
+# Unconditional feature mode for CFG guidance in feature space:
+# - "zero": use zeroed context embeddings.
+# - "batch_null": use batch["t5_uncond"] if provided, else fall back to zeros.
+self_transcendence_uncond_mode = "zero"
+
+# =============================================================================
 # ⚠️ REPA (REPRESENTATIONAL ALIGNMENT) SETTINGS
 # =============================================================================
 

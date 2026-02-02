@@ -141,6 +141,7 @@ class SliderIntegration:
                 sara_helper=kwargs.get("sara_helper"),
                 layer_sync_helper=kwargs.get("layer_sync_helper"),
                 crepa_helper=kwargs.get("crepa_helper"),
+                self_transcendence_helper=kwargs.get("self_transcendence_helper"),
                 haste_helper=kwargs.get("haste_helper"),
                 contrastive_attention_helper=kwargs.get(
                     "contrastive_attention_helper"
@@ -151,6 +152,7 @@ class SliderIntegration:
                 transition_loss_context=kwargs.get("transition_loss_context"),
                 noise_scheduler=noise_scheduler,
                 global_step=kwargs.get("global_step"),
+                current_epoch=kwargs.get("current_epoch"),
             )
 
     def is_enabled(self) -> bool:

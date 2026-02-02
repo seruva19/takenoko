@@ -90,6 +90,8 @@ class LossComponents:
         The LayerSync mean cosine similarity between source and target blocks.
     internal_guidance_loss: Optional[torch.Tensor]
         The Internal Guidance auxiliary supervision loss, if enabled.
+    self_transcendence_loss: Optional[torch.Tensor]
+        The Self-Transcendence alignment loss, if enabled.
     repa_loss: Optional[torch.Tensor]
         The REPA alignment loss, if enabled.
     reg_align_loss: Optional[torch.Tensor]
@@ -159,6 +161,7 @@ class LossComponents:
     layer_sync_loss: Optional[torch.Tensor] = None
     layer_sync_similarity: Optional[torch.Tensor] = None
     internal_guidance_loss: Optional[torch.Tensor] = None
+    self_transcendence_loss: Optional[torch.Tensor] = None
     repa_loss: Optional[torch.Tensor] = None
     reg_align_loss: Optional[torch.Tensor] = None
     reg_cls_loss: Optional[torch.Tensor] = None
@@ -471,6 +474,9 @@ class TrainingLossComputer:
         layer_sync_helper: Optional[Any] = None,
         crepa_helper: Optional[Any] = None,
         internal_guidance_helper: Optional[Any] = None,
+        self_transcendence_helper: Optional[Any] = None,
+        global_step: Optional[int] = None,
+        current_epoch: Optional[Any] = None,
         haste_helper: Optional[Any] = None,
         contrastive_attention_helper: Optional[Any] = None,
         raft: Optional[Any] = None,
@@ -478,7 +484,6 @@ class TrainingLossComputer:
         adaptive_manager: Optional[Any] = None,
         transition_loss_context: Optional[Dict[str, Any]] = None,
         noise_scheduler: Optional[Any] = None,
-        global_step: Optional[int] = None,
     ) -> LossComponents:
         """Compute the full training loss and its components.
 
@@ -1106,6 +1111,32 @@ class TrainingLossComputer:
                         f"Internal Guidance loss computation failed: {e}"
                     )
 
+        # ---- Optional Self-Transcendence Loss ----
+        self_transcendence_loss_value: Optional[torch.Tensor] = None
+        if (
+            getattr(args, "enable_self_transcendence", False)
+            and self_transcendence_helper is not None
+        ):
+            try:
+                st_loss = self_transcendence_helper.compute_loss(
+                    accelerator=accelerator,
+                    latents=latents,
+                    noisy_model_input=noisy_model_input,
+                    timesteps=timesteps,
+                    network_dtype=network_dtype,
+                    batch=batch,
+                    global_step=global_step,
+                    current_epoch=current_epoch,
+                )
+                if st_loss is not None:
+                    loss = loss + st_loss
+                    self_transcendence_loss_value = st_loss.detach()
+            except Exception as e:
+                logger.warning(
+                    "Self-Transcendence loss computation failed: %s",
+                    e,
+                )
+
         # ---- Optional REG Loss ----
         reg_align_loss_value: Optional[torch.Tensor] = None
         reg_cls_loss_value: Optional[torch.Tensor] = None
@@ -1712,6 +1743,7 @@ class TrainingLossComputer:
             layer_sync_loss=layer_sync_loss_value,
             layer_sync_similarity=layer_sync_similarity_value,
             internal_guidance_loss=internal_guidance_loss_value,
+            self_transcendence_loss=self_transcendence_loss_value,
             repa_loss=repa_loss_value,
             reg_align_loss=reg_align_loss_value,
             reg_cls_loss=reg_cls_loss_value,

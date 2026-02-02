@@ -903,6 +903,29 @@ class WanNetworkTrainer:
                 logger.warning(f"BFM conditioning setup failed: {exc}")
                 bfm_conditioning_helper = None
 
+        self_transcendence_helper = None
+        if getattr(args, "enable_self_transcendence", False):
+            try:
+                from enhancements.self_transcendence.self_transcendence_helper import (
+                    SelfTranscendenceHelper,
+                )
+
+                logger.info(
+                    "Self-Transcendence is enabled. Initializing helper module."
+                )
+                self_transcendence_helper = SelfTranscendenceHelper(
+                    transformer, args, self.config
+                )
+                st_params = self_transcendence_helper.get_trainable_params()
+                if st_params:
+                    trainable_params.append(
+                        {"params": st_params, "lr": args.learning_rate}
+                    )
+                    lr_descriptions.append("self_transcendence_mlp")
+            except Exception as exc:
+                logger.warning(f"Self-Transcendence setup failed: {exc}")
+                self_transcendence_helper = None
+
         (
             semantic_conditioning_helper,
             semantic_alignment_helper,
@@ -1603,6 +1626,17 @@ class WanNetworkTrainer:
                 except Exception as exc:
                     logger.warning(f"Internal Guidance setup failed: {exc}")
                     internal_guidance_helper = None
+            if self_transcendence_helper is not None:
+                try:
+                    self_transcendence_helper.setup_hooks()
+                    self_transcendence_helper = accelerator.prepare(
+                        self_transcendence_helper
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        f"Self-Transcendence hook setup failed: {exc}"
+                    )
+                    self_transcendence_helper = None
             if semfeat_helper is not None:
                 try:
                     semfeat_helper.setup_hooks()
@@ -1704,6 +1738,7 @@ class WanNetworkTrainer:
                 layer_sync_helper=layer_sync_helper,
                 crepa_helper=crepa_helper,
                 internal_guidance_helper=internal_guidance_helper,
+                self_transcendence_helper=self_transcendence_helper,
                 haste_helper=haste_helper,
                 contrastive_attention_helper=contrastive_attention_helper,
                 dual_model_manager=dual_model_manager,
@@ -1722,6 +1757,11 @@ class WanNetworkTrainer:
             and internal_guidance_helper is not None
         ):
             internal_guidance_helper.remove_hooks()
+        if (
+            "self_transcendence_helper" in locals()
+            and self_transcendence_helper is not None
+        ):
+            self_transcendence_helper.remove_hooks()
         if "haste_helper" in locals() and haste_helper is not None:
             from enhancements.haste.integration import remove_haste_helper
 

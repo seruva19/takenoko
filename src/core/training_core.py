@@ -259,6 +259,8 @@ class TrainingCore:
 
         # Internal Guidance helper (set in run_training_loop when enabled)
         self.internal_guidance_helper: Optional[Any] = None
+        # Self-Transcendence helper (set in run_training_loop when enabled)
+        self.self_transcendence_helper: Optional[Any] = None
 
         # Initialize temporal consistency enhancement
         self.temporal_consistency_integration = None
@@ -1071,6 +1073,7 @@ class TrainingCore:
         layer_sync_helper: Optional[Any] = None,
         crepa_helper: Optional[Any] = None,
         internal_guidance_helper: Optional[Any] = None,
+        self_transcendence_helper: Optional[Any] = None,
         haste_helper: Optional[Any] = None,
         contrastive_attention_helper: Optional[Any] = None,
         controlnet: Optional[Any] = None,
@@ -1081,6 +1084,7 @@ class TrainingCore:
         # Store noise scheduler reference for call_dit
         self.noise_scheduler = noise_scheduler
         self.internal_guidance_helper = internal_guidance_helper
+        self.self_transcendence_helper = self_transcendence_helper
 
         transition_cfg = getattr(args, "transition_training", None)
         if transition_cfg and getattr(transition_cfg, "enabled", False):
@@ -1962,6 +1966,7 @@ class TrainingCore:
                                 layer_sync_helper=layer_sync_helper,
                                 crepa_helper=crepa_helper,
                                 internal_guidance_helper=internal_guidance_helper,
+                                self_transcendence_helper=self.self_transcendence_helper,
                                 haste_helper=haste_helper,
                                 contrastive_attention_helper=contrastive_attention_helper,
                                 raft=getattr(self, "raft", None),
@@ -1969,6 +1974,7 @@ class TrainingCore:
                                 adaptive_manager=self.adaptive_manager,
                                 transition_loss_context=transition_loss_context,
                                 global_step=global_step,
+                                current_epoch=current_epoch,
                             )
 
                             self.semanticgen_state.apply_losses(
