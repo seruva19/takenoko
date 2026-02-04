@@ -114,6 +114,12 @@ class LossComponents:
         The contrastive attention diversity loss, if enabled.
     contrastive_attn_consistency_loss: Optional[torch.Tensor]
         The contrastive attention consistency loss, if enabled.
+    contrastive_attn_subject_overlap_loss: Optional[torch.Tensor]
+        Cross-attention subject-mask overlap loss, if enabled.
+    contrastive_attn_subject_entropy_loss: Optional[torch.Tensor]
+        Cross-attention subject-mask entropy loss, if enabled.
+    contrastive_attn_subject_temporal_loss: Optional[torch.Tensor]
+        Cross-attention subject-mask EMA consistency loss, if enabled.
     sara_loss: Optional[torch.Tensor]
         The SARA loss component, if enabled.
     wanvideo_cfm_loss: Optional[torch.Tensor]
@@ -173,6 +179,9 @@ class LossComponents:
     contrastive_attn_loss: Optional[torch.Tensor] = None
     contrastive_attn_diversity_loss: Optional[torch.Tensor] = None
     contrastive_attn_consistency_loss: Optional[torch.Tensor] = None
+    contrastive_attn_subject_overlap_loss: Optional[torch.Tensor] = None
+    contrastive_attn_subject_entropy_loss: Optional[torch.Tensor] = None
+    contrastive_attn_subject_temporal_loss: Optional[torch.Tensor] = None
     sara_loss: Optional[torch.Tensor] = None
     wanvideo_cfm_loss: Optional[torch.Tensor] = None
     memflow_guidance_loss: Optional[torch.Tensor] = None
@@ -1315,6 +1324,9 @@ class TrainingLossComputer:
         contrastive_attn_loss_value: Optional[torch.Tensor] = None
         contrastive_attn_diversity_value: Optional[torch.Tensor] = None
         contrastive_attn_consistency_value: Optional[torch.Tensor] = None
+        contrastive_attn_subject_overlap_value: Optional[torch.Tensor] = None
+        contrastive_attn_subject_entropy_value: Optional[torch.Tensor] = None
+        contrastive_attn_subject_temporal_value: Optional[torch.Tensor] = None
         if (
             contrastive_attention_helper is not None
             and getattr(args, "enable_contrastive_attention", False)
@@ -1329,6 +1341,11 @@ class TrainingLossComputer:
                         concept_ids
                     )
                 )
+                (
+                    subject_overlap_loss,
+                    subject_entropy_loss,
+                    subject_temporal_loss,
+                ) = contrastive_attention_helper.compute_subject_mask_losses(concept_ids)
                 contrastive_loss = contrastive_attention_helper.compute_loss(
                     concept_ids
                 )
@@ -1357,6 +1374,30 @@ class TrainingLossComputer:
                     loss = loss + consistency_loss * consistency_weight
                     contrastive_attn_consistency_value = (
                         consistency_loss * consistency_weight
+                    ).detach()
+                overlap_weight = float(
+                    getattr(args, "contrastive_attention_subject_overlap_weight", 0.0)
+                )
+                if subject_overlap_loss is not None and overlap_weight > 0:
+                    loss = loss + subject_overlap_loss * overlap_weight
+                    contrastive_attn_subject_overlap_value = (
+                        subject_overlap_loss * overlap_weight
+                    ).detach()
+                entropy_weight = float(
+                    getattr(args, "contrastive_attention_subject_entropy_weight", 0.0)
+                )
+                if subject_entropy_loss is not None and entropy_weight > 0:
+                    loss = loss + subject_entropy_loss * entropy_weight
+                    contrastive_attn_subject_entropy_value = (
+                        subject_entropy_loss * entropy_weight
+                    ).detach()
+                temporal_weight = float(
+                    getattr(args, "contrastive_attention_subject_temporal_weight", 0.0)
+                )
+                if subject_temporal_loss is not None and temporal_weight > 0:
+                    loss = loss + subject_temporal_loss * temporal_weight
+                    contrastive_attn_subject_temporal_value = (
+                        subject_temporal_loss * temporal_weight
                     ).detach()
             except Exception as e:
                 logger.warning(
@@ -1755,6 +1796,9 @@ class TrainingLossComputer:
             contrastive_attn_loss=contrastive_attn_loss_value,
             contrastive_attn_diversity_loss=contrastive_attn_diversity_value,
             contrastive_attn_consistency_loss=contrastive_attn_consistency_value,
+            contrastive_attn_subject_overlap_loss=contrastive_attn_subject_overlap_value,
+            contrastive_attn_subject_entropy_loss=contrastive_attn_subject_entropy_value,
+            contrastive_attn_subject_temporal_loss=contrastive_attn_subject_temporal_value,
             sara_loss=sara_loss_value,
             wanvideo_cfm_loss=wanvideo_cfm_loss_value,
             bfm_semfeat_loss=bfm_semfeat_loss_value,

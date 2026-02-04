@@ -342,12 +342,56 @@ def parse_contrastive_attention_config(config: Dict[str, Any], args: Any) -> Non
             "contrastive_attention_latent_update_interval must be > 0, got "
             f"{args.contrastive_attention_latent_update_interval}"
         )
+    args.enable_contrastive_attention_subject_masks = bool(
+        config.get("enable_contrastive_attention_subject_masks", False)
+    )
+    args.contrastive_attention_subject_overlap_weight = float(
+        config.get("contrastive_attention_subject_overlap_weight", 0.0)
+    )
+    if args.contrastive_attention_subject_overlap_weight < 0:
+        raise ValueError(
+            "contrastive_attention_subject_overlap_weight must be >= 0, got "
+            f"{args.contrastive_attention_subject_overlap_weight}"
+        )
+    args.contrastive_attention_subject_entropy_weight = float(
+        config.get("contrastive_attention_subject_entropy_weight", 0.0)
+    )
+    if args.contrastive_attention_subject_entropy_weight < 0:
+        raise ValueError(
+            "contrastive_attention_subject_entropy_weight must be >= 0, got "
+            f"{args.contrastive_attention_subject_entropy_weight}"
+        )
+    args.contrastive_attention_subject_temporal_weight = float(
+        config.get("contrastive_attention_subject_temporal_weight", 0.0)
+    )
+    if args.contrastive_attention_subject_temporal_weight < 0:
+        raise ValueError(
+            "contrastive_attention_subject_temporal_weight must be >= 0, got "
+            f"{args.contrastive_attention_subject_temporal_weight}"
+        )
+    args.contrastive_attention_subject_mask_ema_decay = float(
+        config.get("contrastive_attention_subject_mask_ema_decay", 0.9)
+    )
+    if not 0.0 <= args.contrastive_attention_subject_mask_ema_decay <= 1.0:
+        raise ValueError(
+            "contrastive_attention_subject_mask_ema_decay must be in [0, 1], got "
+            f"{args.contrastive_attention_subject_mask_ema_decay}"
+        )
+    args.contrastive_attention_subject_mask_min_token_count = int(
+        config.get("contrastive_attention_subject_mask_min_token_count", 1)
+    )
+    if args.contrastive_attention_subject_mask_min_token_count <= 0:
+        raise ValueError(
+            "contrastive_attention_subject_mask_min_token_count must be > 0, got "
+            f"{args.contrastive_attention_subject_mask_min_token_count}"
+        )
 
     if args.enable_contrastive_attention:
         logger.info(
-            "Contrastive attention enabled (layers %d-%d, weight=%.3f, temp=%.3f).",
+            "Contrastive attention enabled (layers %d-%d, weight=%.3f, temp=%.3f, subject_masks=%s).",
             args.contrastive_attention_layer_start,
             args.contrastive_attention_layer_end,
             args.contrastive_attention_weight,
             args.contrastive_attention_temperature,
+            args.enable_contrastive_attention_subject_masks,
         )

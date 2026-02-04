@@ -203,6 +203,18 @@ def collect_and_log_training_metrics(
         logs["loss/contrastive_attn_consistency"] = float(
             loss_components.contrastive_attn_consistency_loss.item()
         )
+    if getattr(loss_components, "contrastive_attn_subject_overlap_loss", None) is not None:
+        logs["loss/contrastive_attn_subject_overlap"] = float(
+            loss_components.contrastive_attn_subject_overlap_loss.item()
+        )
+    if getattr(loss_components, "contrastive_attn_subject_entropy_loss", None) is not None:
+        logs["loss/contrastive_attn_subject_entropy"] = float(
+            loss_components.contrastive_attn_subject_entropy_loss.item()
+        )
+    if getattr(loss_components, "contrastive_attn_subject_temporal_loss", None) is not None:
+        logs["loss/contrastive_attn_subject_temporal"] = float(
+            loss_components.contrastive_attn_subject_temporal_loss.item()
+        )
     if getattr(loss_components, "crepa_loss", None) is not None:
         logs["loss/crepa"] = float(loss_components.crepa_loss.item())
         logs["crepa_loss"] = float(loss_components.crepa_loss.item())

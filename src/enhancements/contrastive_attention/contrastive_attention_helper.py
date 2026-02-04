@@ -26,6 +26,12 @@ class ContrastiveAttentionHelper:
         )
         self.interval = int(getattr(args, "contrastive_attention_interval", 1))
         self.weight = float(getattr(args, "contrastive_attention_weight", 0.0))
+        self.diversity_weight = float(
+            getattr(args, "contrastive_attention_diversity_weight", 0.0)
+        )
+        self.consistency_weight = float(
+            getattr(args, "contrastive_attention_consistency_weight", 0.0)
+        )
         self.layer_agg = str(getattr(args, "contrastive_attention_layer_agg", "mean"))
         self.weight_ramp_start = int(
             getattr(args, "contrastive_attention_weight_ramp_start", 0)
@@ -55,6 +61,7 @@ class ContrastiveAttentionHelper:
         self._hooks: list[Any] = []
         self._attn_summaries: Dict[int, torch.Tensor] = {}
         self._attn_summaries_raw: Dict[int, torch.Tensor] = {}
+        self._query_concept_maps: Dict[int, torch.Tensor] = {}
         self._summary_counts: Dict[int, int] = {}
         self._active_step = False
         self._warned_capture = False
@@ -64,6 +71,26 @@ class ContrastiveAttentionHelper:
         self._consistency_decay = float(
             getattr(args, "contrastive_attention_consistency_decay", 0.9)
         )
+        self.enable_subject_masks = bool(
+            getattr(args, "enable_contrastive_attention_subject_masks", False)
+        )
+        self.subject_overlap_weight = float(
+            getattr(args, "contrastive_attention_subject_overlap_weight", 0.0)
+        )
+        self.subject_entropy_weight = float(
+            getattr(args, "contrastive_attention_subject_entropy_weight", 0.0)
+        )
+        self.subject_temporal_weight = float(
+            getattr(args, "contrastive_attention_subject_temporal_weight", 0.0)
+        )
+        self.subject_mask_ema_decay = float(
+            getattr(args, "contrastive_attention_subject_mask_ema_decay", 0.9)
+        )
+        self.subject_mask_min_token_count = int(
+            getattr(args, "contrastive_attention_subject_mask_min_token_count", 1)
+        )
+        self._subject_mask_ema: Dict[int, torch.Tensor] = {}
+        self._concept_order: list[int] = []
 
     def setup_hooks(self) -> None:
         if not self.enabled:
@@ -104,22 +131,28 @@ class ContrastiveAttentionHelper:
         self._hooks = []
         self._attn_summaries = {}
         self._attn_summaries_raw = {}
+        self._query_concept_maps = {}
         self._summary_counts = {}
+        self._concept_order = []
 
     def begin_step(self, global_step: int) -> None:
         if not self.enabled or self.interval <= 0:
             self._active_step = False
             self._attn_summaries = {}
             self._attn_summaries_raw = {}
+            self._query_concept_maps = {}
             self._summary_counts = {}
             self._concept_ids = None
+            self._concept_order = []
             return
         self._active_step = (global_step % self.interval) == 0
         if not self._active_step:
             self._attn_summaries = {}
             self._attn_summaries_raw = {}
+            self._query_concept_maps = {}
             self._summary_counts = {}
             self._concept_ids = None
+            self._concept_order = []
 
     def set_concept_ids(self, concept_ids: Optional[torch.Tensor]) -> None:
         if concept_ids is None:
@@ -132,7 +165,16 @@ class ContrastiveAttentionHelper:
 
     def _capture_attention(self, layer_idx: int, attn_module: Any):
         def hook(_module: Any, inputs: tuple[Any, ...], _output: Any) -> None:
-            if not self._active_step or self.weight <= 0.0:
+            if not self._active_step:
+                return
+            if (
+                self.weight <= 0.0
+                and self.diversity_weight <= 0.0
+                and self.consistency_weight <= 0.0
+                and self.subject_overlap_weight <= 0.0
+                and self.subject_entropy_weight <= 0.0
+                and self.subject_temporal_weight <= 0.0
+            ):
                 return
             try:
                 result = self._compute_attention_summary(attn_module, inputs)
@@ -146,14 +188,19 @@ class ContrastiveAttentionHelper:
                     self._warned_capture = True
                 return
             if result is not None:
-                summary, raw_summary = result
-                self._record_summary(layer_idx, summary, raw_summary)
+                summary, raw_summary, query_concept_map = result
+                self._record_summary(
+                    layer_idx,
+                    summary,
+                    raw_summary,
+                    query_concept_map=query_concept_map,
+                )
 
         return hook
 
     def _compute_attention_summary(
         self, attn_module: Any, inputs: tuple[Any, ...]
-    ) -> Optional[tuple[torch.Tensor, torch.Tensor]]:
+    ) -> Optional[tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]]]:
         if len(inputs) < 2:
             return None
         x = inputs[0]
@@ -206,12 +253,17 @@ class ContrastiveAttentionHelper:
 
         probs = torch.softmax(scores, dim=-1)
         raw_summary = probs.mean(dim=2).mean(dim=1)
+        query_concept_map = self._compute_query_concept_map(probs)
         if self.spatial_focus and self.focus_tokens and self.token_indices_by_concept:
             probs = self._apply_token_focus_on_probs(
                 probs, self._concept_ids, renorm=self.focus_renorm
             )
-            return self._weighted_query_summary(probs, self._concept_ids), raw_summary
-        return raw_summary, raw_summary
+            return (
+                self._weighted_query_summary(probs, self._concept_ids),
+                raw_summary,
+                query_concept_map,
+            )
+        return raw_summary, raw_summary, query_concept_map
 
     def compute_loss(
         self, concept_ids: Optional[torch.Tensor]
@@ -236,7 +288,9 @@ class ContrastiveAttentionHelper:
             raw_attn = attn
         self._attn_summaries = {}
         self._attn_summaries_raw = {}
+        self._query_concept_maps = {}
         self._summary_counts = {}
+        self._concept_order = []
 
         if not torch.is_tensor(concept_ids):
             concept_ids = torch.tensor(
@@ -358,11 +412,18 @@ class ContrastiveAttentionHelper:
         return base * factor
 
     def _record_summary(
-        self, layer_idx: int, summary: torch.Tensor, raw_summary: torch.Tensor
+        self,
+        layer_idx: int,
+        summary: torch.Tensor,
+        raw_summary: torch.Tensor,
+        *,
+        query_concept_map: Optional[torch.Tensor],
     ) -> None:
         if layer_idx not in self._attn_summaries:
             self._attn_summaries[layer_idx] = summary
             self._attn_summaries_raw[layer_idx] = raw_summary
+            if query_concept_map is not None:
+                self._query_concept_maps[layer_idx] = query_concept_map
             self._summary_counts[layer_idx] = 1
             return
         count = self._summary_counts.get(layer_idx, 1)
@@ -374,7 +435,118 @@ class ContrastiveAttentionHelper:
         self._attn_summaries_raw[layer_idx] = (
             (prev_raw * count + raw_summary) / float(count + 1)
         )
+        if query_concept_map is not None:
+            prev_query_map = self._query_concept_maps.get(layer_idx)
+            if (
+                prev_query_map is not None
+                and prev_query_map.shape == query_concept_map.shape
+            ):
+                self._query_concept_maps[layer_idx] = (
+                    prev_query_map * count + query_concept_map
+                ) / float(count + 1)
+            else:
+                self._query_concept_maps[layer_idx] = query_concept_map
         self._summary_counts[layer_idx] = count + 1
+
+    def _compute_query_concept_map(self, probs: torch.Tensor) -> Optional[torch.Tensor]:
+        if not self.enable_subject_masks or not self.token_indices_by_concept:
+            return None
+        concept_order = sorted(int(k) for k in self.token_indices_by_concept.keys())
+        if not concept_order:
+            return None
+        avg_probs = probs.mean(dim=1)
+        concept_maps: list[torch.Tensor] = []
+        for concept_id in concept_order:
+            indices = self.token_indices_by_concept.get(concept_id, [])
+            valid = [i for i in indices if 0 <= i < avg_probs.size(-1)]
+            if len(valid) < self.subject_mask_min_token_count:
+                concept_maps.append(
+                    torch.zeros(
+                        avg_probs.size(0),
+                        avg_probs.size(1),
+                        device=avg_probs.device,
+                        dtype=avg_probs.dtype,
+                    )
+                )
+                continue
+            concept_maps.append(avg_probs[:, :, valid].sum(dim=-1))
+        if not concept_maps:
+            return None
+        stacked = torch.stack(concept_maps, dim=-1)
+        denom = stacked.sum(dim=-1, keepdim=True).clamp(min=1e-8)
+        self._concept_order = concept_order
+        return stacked / denom
+
+    def compute_subject_mask_losses(
+        self, concept_ids: Optional[torch.Tensor]
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        zero = torch.tensor(0.0, device=self.device)
+        if (
+            not self.enabled
+            or not self._active_step
+            or not self.enable_subject_masks
+            or not self._query_concept_maps
+            or not self._concept_order
+        ):
+            return zero, zero, zero
+        if concept_ids is None:
+            return zero, zero, zero
+
+        query_maps = [v for _, v in sorted(self._query_concept_maps.items())]
+        query_map = torch.stack(query_maps, dim=0).mean(dim=0)  # [B, Q, C]
+        labels = (
+            concept_ids.to(query_map.device).long()
+            if torch.is_tensor(concept_ids)
+            else torch.tensor(concept_ids, device=query_map.device, dtype=torch.long)
+        )
+        valid = labels >= 0
+        if valid.sum() < 1:
+            return zero, zero, zero
+        query_map = query_map[valid]
+        labels = labels[valid]
+
+        overlap_losses: list[torch.Tensor] = []
+        entropy_losses: list[torch.Tensor] = []
+        temporal_losses: list[torch.Tensor] = []
+        eps = 1e-8
+        concept_index_map = {
+            concept_id: idx for idx, concept_id in enumerate(self._concept_order)
+        }
+
+        for i in range(query_map.size(0)):
+            concept_id = int(labels[i].item())
+            concept_idx = concept_index_map.get(concept_id)
+            if concept_idx is None:
+                continue
+            probs = query_map[i]
+            target = probs[:, concept_idx]
+            non_target = probs.sum(dim=-1) - target
+            overlap_losses.append((target * non_target).mean())
+            entropy_losses.append(
+                -(probs * (probs + eps).log()).sum(dim=-1).mean()
+            )
+
+            target_dist = target / target.sum().clamp(min=eps)
+            ema = self._subject_mask_ema.get(concept_id)
+            if ema is not None and ema.shape == target_dist.shape:
+                temporal_losses.append(F.mse_loss(target_dist, ema))
+            decay = max(0.0, min(self.subject_mask_ema_decay, 0.999))
+            self._subject_mask_ema[concept_id] = (
+                target_dist.detach()
+                if ema is None or ema.shape != target_dist.shape
+                else ema * decay + target_dist.detach() * (1.0 - decay)
+            )
+
+        overlap_loss = (
+            torch.stack(overlap_losses).mean() if overlap_losses else zero.clone()
+        )
+        entropy_loss = (
+            torch.stack(entropy_losses).mean() if entropy_losses else zero.clone()
+        )
+        temporal_loss = (
+            torch.stack(temporal_losses).mean() if temporal_losses else zero.clone()
+        )
+        return overlap_loss, entropy_loss, temporal_loss
 
     def _apply_token_focus_on_probs(
         self,

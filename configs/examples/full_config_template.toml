@@ -2188,6 +2188,26 @@ contrastive_attention_consistency_weight = 0.0
 # EMA decay for consistency loss (0..1). Higher = slower updates.
 contrastive_attention_consistency_decay = 0.9
 
+# Enable FreeFuse-inspired subject-mask auxiliary losses from cross-attention
+# query-token maps. Requires concept token index mapping.
+enable_contrastive_attention_subject_masks = false
+
+# Weight for per-query target/non-target overlap minimization (>= 0).
+contrastive_attention_subject_overlap_weight = 0.05
+
+# Weight for per-query concept assignment entropy minimization (>= 0).
+contrastive_attention_subject_entropy_weight = 0.01
+
+# Weight for EMA consistency of subject query masks across steps (>= 0).
+contrastive_attention_subject_temporal_weight = 0.02
+
+# EMA decay for subject query-mask consistency loss (0..1).
+contrastive_attention_subject_mask_ema_decay = 0.9
+
+# Minimum valid token count per concept in contrastive_attention_token_indices.
+# Concepts with fewer valid indices contribute zero map mass.
+contrastive_attention_subject_mask_min_token_count = 1
+
 # Optional weight ramp schedule for contrastive attention loss.
 # Set ramp_end > ramp_start to enable ramping.
 contrastive_attention_weight_ramp_start = 0
