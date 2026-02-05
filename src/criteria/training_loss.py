@@ -156,6 +156,8 @@ class LossComponents:
         Rotation component of the physics-guided motion loss.
     physics_motion_scaling_loss: Optional[torch.Tensor]
         Scaling component of the physics-guided motion loss.
+    video_consistency_distance_loss: Optional[torch.Tensor]
+        Video Consistency Distance (VCD) auxiliary loss, if enabled.
     """
 
     total_loss: torch.Tensor
@@ -200,6 +202,7 @@ class LossComponents:
     physics_motion_translation_loss: Optional[torch.Tensor] = None
     physics_motion_rotation_loss: Optional[torch.Tensor] = None
     physics_motion_scaling_loss: Optional[torch.Tensor] = None
+    video_consistency_distance_loss: Optional[torch.Tensor] = None
 
 
 class TrainingLossComputer:
@@ -218,6 +221,25 @@ class TrainingLossComputer:
         # Add masked training manager (initialized later with args)
         self._masked_training_manager: Optional[MaskedTrainingManager] = None
         self._cached_blank_prompt_embeds: Dict[torch.device, torch.Tensor] = {}
+        self._vcd_loss_helper: Optional[Any] = None
+
+    def _get_vcd_loss_helper(self, args: Any, device: torch.device) -> Optional[Any]:
+        if not getattr(args, "enable_video_consistency_distance", False):
+            return None
+        if self._vcd_loss_helper is None:
+            from enhancements.video_consistency_distance.loss import (
+                VideoConsistencyDistanceLoss,
+            )
+
+            self._vcd_loss_helper = VideoConsistencyDistanceLoss.from_args(
+                args, device=device
+            )
+        else:
+            try:
+                self._vcd_loss_helper.to(device)
+            except Exception:
+                pass
+        return self._vcd_loss_helper
 
     # ---- Internal helpers ----
     def _compute_seq_len(self, latents: torch.Tensor) -> int:
@@ -1450,6 +1472,66 @@ class TrainingLossComputer:
                 logger.warning(f"LayerSync loss computation failed: {e}")
 
         # ---- Optional Optical Flow Loss (RAFT) ----
+        video_consistency_distance_loss_value: Optional[torch.Tensor] = None
+        if (
+            getattr(args, "enable_video_consistency_distance", False)
+            and float(getattr(args, "vcd_loss_weight", 0.0)) > 0.0
+        ):
+            try:
+                if vae is None:
+                    raise ValueError("VAE must be provided for VCD loss")
+                if model_pred.dim() != 5:
+                    raise ValueError(
+                        "VCD loss requires video tensors (B, C, F, H, W)"
+                    )
+
+                vcd_helper = self._get_vcd_loss_helper(args, accelerator.device)
+                if vcd_helper is None:
+                    raise RuntimeError("VCD helper was not initialized")
+
+                pred_latents = model_pred.to(network_dtype)
+                decoded = vae.decode(
+                    pred_latents / getattr(vae, "scaling_factor", 1.0)
+                )
+                pred_frames = (
+                    torch.stack(decoded, dim=0)
+                    if isinstance(decoded, list)
+                    else decoded
+                )
+
+                if pred_frames.dim() != 5:
+                    raise ValueError(
+                        f"Expected VCD pred_frames shape (B, T, C, H, W), got {pred_frames.shape}"
+                    )
+
+                conditioning_source = str(
+                    getattr(args, "vcd_conditioning_source", "batch_first_frame")
+                ).lower()
+                conditioning_frame: Optional[torch.Tensor] = None
+                if conditioning_source == "batch_first_frame":
+                    clean_pixels = batch.get("pixels")
+                    if isinstance(clean_pixels, list):
+                        clean_pixels = torch.stack(clean_pixels, dim=0)
+                    if torch.is_tensor(clean_pixels):
+                        if clean_pixels.dim() == 5:
+                            conditioning_frame = clean_pixels[:, :, 0, :, :]
+                        elif clean_pixels.dim() == 4:
+                            conditioning_frame = clean_pixels
+                if conditioning_frame is None:
+                    conditioning_frame = pred_frames[:, 0, :, :, :]
+
+                step_value = int(global_step) if global_step is not None else 0
+                vcd_loss_val = vcd_helper.compute(
+                    pred_frames=pred_frames,
+                    conditioning_frame=conditioning_frame,
+                    step=step_value,
+                )
+                if vcd_loss_val is not None:
+                    loss = loss + float(getattr(args, "vcd_loss_weight", 0.0)) * vcd_loss_val
+                    video_consistency_distance_loss_value = vcd_loss_val.detach()
+            except Exception as e:
+                logger.warning(f"VCD loss computation failed: {e}")
+
         optical_flow_loss_value: Optional[torch.Tensor] = None
         if (
             hasattr(args, "enable_optical_flow_loss")
@@ -1813,6 +1895,7 @@ class TrainingLossComputer:
             physics_motion_translation_loss=physics_motion_translation_value,
             physics_motion_rotation_loss=physics_motion_rotation_value,
             physics_motion_scaling_loss=physics_motion_scaling_value,
+            video_consistency_distance_loss=video_consistency_distance_loss_value,
         )
 
     @torch.no_grad()

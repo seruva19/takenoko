@@ -161,9 +161,82 @@ class RewardTrainingCore:
         weight_dtype = network_dtype
         reward_fn_name = getattr(args, "reward_fn", "HPSReward")
         reward_fn_kwargs = getattr(args, "reward_fn_kwargs", None)
+        if str(reward_fn_name).lower() == "vcdreward" and not reward_fn_kwargs:
+            vcd_kwargs = {
+                "loss_scale": float(getattr(args, "reward_vcd_loss_scale", 1.0)),
+                "use_amplitude": bool(
+                    getattr(args, "reward_vcd_use_amplitude", True)
+                ),
+                "use_phase": bool(getattr(args, "reward_vcd_use_phase", True)),
+                "amplitude_weight": float(
+                    getattr(args, "reward_vcd_amplitude_weight", 1.0)
+                ),
+                "phase_weight": float(
+                    getattr(args, "reward_vcd_phase_weight", 1.0)
+                ),
+                "num_sampled_frames": int(
+                    getattr(args, "reward_vcd_num_sampled_frames", 4)
+                ),
+                "random_frame_sampling": bool(
+                    getattr(args, "reward_vcd_random_frame_sampling", True)
+                ),
+                "use_temporal_weight": bool(
+                    getattr(args, "reward_vcd_use_temporal_weight", True)
+                ),
+                "feature_layers": list(
+                    getattr(
+                        args,
+                        "reward_vcd_feature_layers",
+                        [1, 6, 11, 20, 29],
+                    )
+                ),
+                "feature_resolution": int(
+                    getattr(args, "reward_vcd_feature_resolution", 224)
+                ),
+                "max_coeffs": int(getattr(args, "reward_vcd_max_coeffs", 16384)),
+                "random_coeff_sampling": bool(
+                    getattr(args, "reward_vcd_random_coeff_sampling", True)
+                ),
+                "use_pretrained_vgg": bool(
+                    getattr(args, "reward_vcd_use_pretrained_vgg", True)
+                ),
+                "conditioning_source": str(
+                    getattr(
+                        args,
+                        "reward_vcd_conditioning_source",
+                        "first_generated_frame",
+                    )
+                ),
+                "detach_conditioning_frame": bool(
+                    getattr(args, "reward_vcd_detach_conditioning_frame", True)
+                ),
+                "assume_neg_one_to_one": bool(
+                    getattr(args, "reward_vcd_assume_neg_one_to_one", False)
+                ),
+            }
+            reward_fn_kwargs = json.dumps(vcd_kwargs)
         reward_fn = _parse_reward_fn(
             device, weight_dtype, reward_fn_name, reward_fn_kwargs
         )
+
+        if (
+            str(reward_fn_name).lower() == "vcdreward"
+            and bool(getattr(args, "reward_vcd_force_min_decoded_frames", True))
+        ):
+            required_frames = max(
+                2,
+                int(getattr(args, "reward_vcd_min_decoded_frames", 2)),
+                int(getattr(args, "reward_vcd_num_sampled_frames", 4)) + 1,
+            )
+            if num_decoded_latents < required_frames:
+                logger.warning(
+                    "VCDReward requires at least %d decoded latent frames; overriding "
+                    "reward_num_decoded_latents from %d to %d.",
+                    required_frames,
+                    num_decoded_latents,
+                    required_frames,
+                )
+                num_decoded_latents = required_frames
 
         # Trainer loop size
         max_steps = int(getattr(args, "max_train_steps", 10000))
@@ -175,6 +248,11 @@ class RewardTrainingCore:
             self.config["vae_stride"][1],
         )
         lat_f = 1 if video_len == 1 else (video_len - 1) // vae_stride_t + 1
+        if str(reward_fn_name).lower() == "vcdreward" and lat_f < 2:
+            raise ValueError(
+                "VCDReward requires at least 2 latent frames. Increase "
+                "reward_video_length (or reward_num_frames) so temporal length > 1."
+            )
         lat_h, lat_w = height // vae_stride_hw, width // vae_stride_hw
         in_channels = getattr(transformer, "in_dim", 16)
 

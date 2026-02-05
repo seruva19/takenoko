@@ -26,6 +26,10 @@ from configs.glance_config import apply_glance_config
 from configs.physics_guided_motion_loss import apply_physics_guided_motion_config
 from configs.self_transcendence_config import apply_self_transcendence_config
 from configs.mixflow_config import apply_mixflow_config
+from configs.reward_vcd_config import apply_reward_vcd_config
+from configs.video_consistency_distance import (
+    apply_video_consistency_distance_config,
+)
 
 
 def create_args_from_config(
@@ -547,6 +551,7 @@ def create_args_from_config(
     args.reward_stop_latent_model_input_gradient = config.get(
         "reward_stop_latent_model_input_gradient", False
     )
+    args = apply_reward_vcd_config(args, config, logger)
 
     from polylora.config import apply_polylora_to_args
     from enhancements.error_recycling.config import apply_error_recycling_config
@@ -1339,6 +1344,9 @@ def create_args_from_config(
     # Optical Flow Loss (RAFT-based) settings
     args.enable_optical_flow_loss = config.get("enable_optical_flow_loss", False)
     args.lambda_optical_flow = config.get("lambda_optical_flow", 0.0)
+
+    # Video Consistency Distance (VCD) loss settings
+    args = apply_video_consistency_distance_config(args, config, logger)
 
     # HASTE (Holistic Alignment with Stage-wise Termination) settings
     from enhancements.haste.config_parser import parse_haste_config

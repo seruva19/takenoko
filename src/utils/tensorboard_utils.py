@@ -55,6 +55,7 @@ def get_default_metric_descriptions() -> Dict[str, str]:
         "train/dop_loss": "Differential Output Preservation loss; maintains base model behavior (lower is better).",
         "train/dispersive_loss": "InfoNCE-style dispersive loss for representation diversity (lower is better).",
         "train/optical_flow_loss": "Temporal consistency loss using optical flow (lower is better).",
+        "loss/vcd": "Video Consistency Distance (frequency-domain amplitude+phase Wasserstein) auxiliary loss (lower is better).",
         "train/layer_sync_loss": "LayerSync self-alignment loss between transformer blocks (lower is better).",
         "layersync_similarity": "Mean cosine similarity between LayerSync source/target blocks (higher is better).",
         "layersync_loss": "LayerSync self-alignment loss between transformer blocks (lower is better).",

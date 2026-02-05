@@ -25,6 +25,112 @@ class BaseReward(ABC):
         pass
 
 
+class VCDReward(BaseReward):
+    """Video Consistency Distance reward for reward-LoRA training.
+
+    This reward follows the paper-style frequency-domain consistency objective:
+    lower VCD is better, so reward is defined as `-VCD`, and loss minimizes VCD.
+    """
+
+    def __init__(
+        self,
+        device="cpu",
+        dtype=torch.float16,  # kept for API compatibility
+        loss_scale: float = 1.0,
+        use_amplitude: bool = True,
+        use_phase: bool = True,
+        amplitude_weight: float = 1.0,
+        phase_weight: float = 1.0,
+        num_sampled_frames: int = 4,
+        random_frame_sampling: bool = True,
+        use_temporal_weight: bool = True,
+        feature_layers=None,
+        feature_resolution: int = 224,
+        max_coeffs: int = 16384,
+        random_coeff_sampling: bool = True,
+        use_pretrained_vgg: bool = True,
+        conditioning_source: str = "first_generated_frame",
+        detach_conditioning_frame: bool = True,
+        assume_neg_one_to_one: bool = False,
+        **_: object,
+    ):
+        from enhancements.video_consistency_distance.loss import (
+            VideoConsistencyDistanceLoss,
+            VideoConsistencyDistanceLossConfig,
+        )
+
+        self.device = torch.device(device)
+        self.dtype = dtype
+        self.loss_scale = float(loss_scale)
+        if self.loss_scale <= 0:
+            raise ValueError(f"loss_scale must be > 0, got {self.loss_scale}")
+
+        self.conditioning_source = str(conditioning_source).lower()
+        if self.conditioning_source not in {
+            "first_generated_frame",
+            "provided_first_frame",
+        }:
+            raise ValueError(
+                "conditioning_source must be 'first_generated_frame' or "
+                f"'provided_first_frame', got '{self.conditioning_source}'."
+            )
+
+        cfg = VideoConsistencyDistanceLossConfig(
+            use_amplitude=bool(use_amplitude),
+            use_phase=bool(use_phase),
+            amplitude_weight=float(amplitude_weight),
+            phase_weight=float(phase_weight),
+            num_sampled_frames=int(num_sampled_frames),
+            random_frame_sampling=bool(random_frame_sampling),
+            use_temporal_weight=bool(use_temporal_weight),
+            start_step=0,
+            end_step=None,
+            warmup_steps=0,
+            apply_every_n_steps=1,
+            feature_layers=tuple(
+                feature_layers
+                if feature_layers is not None
+                else [1, 6, 11, 20, 29]
+            ),
+            feature_resolution=int(feature_resolution),
+            max_coeffs=int(max_coeffs),
+            random_coeff_sampling=bool(random_coeff_sampling),
+            use_pretrained_vgg=bool(use_pretrained_vgg),
+            detach_conditioning_frame=bool(detach_conditioning_frame),
+            assume_neg_one_to_one=bool(assume_neg_one_to_one),
+        )
+        self.vcd = VideoConsistencyDistanceLoss(cfg, device=self.device)
+
+    def __call__(
+        self, batch_frames: torch.Tensor, batch_prompt: Optional[list[str]] = None
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        if batch_frames.dim() != 5:
+            raise ValueError(
+                f"VCDReward expects [B, C, T, H, W], got {batch_frames.shape}"
+            )
+
+        # [B, C, T, H, W] -> [B, T, C, H, W]
+        frames_btchw = rearrange(batch_frames, "b c t h w -> b t c h w")
+        if self.conditioning_source == "first_generated_frame":
+            conditioning_frame = frames_btchw[:, 0, :, :, :]
+        else:
+            # Placeholder mode for future external conditioning-frame injection.
+            conditioning_frame = frames_btchw[:, 0, :, :, :]
+
+        vcd_loss = self.vcd.compute(
+            pred_frames=frames_btchw,
+            conditioning_frame=conditioning_frame,
+            step=0,
+        )
+        if vcd_loss is None:
+            zero = batch_frames.new_zeros(())
+            return zero, zero
+
+        loss = vcd_loss * self.loss_scale
+        reward = -vcd_loss.detach()
+        return loss, reward
+
+
 class AestheticReward(BaseReward):
     """Aesthetic Predictor [V2](https://github.com/christophschuhmann/improved-aesthetic-predictor)
     and [V2.5](https://github.com/discus0434/aesthetic-predictor-v2-5) reward model.

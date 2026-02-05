@@ -2769,10 +2769,73 @@ reward_num_decoded_latents = 1
 reward_validation_steps = 10000
 
 # Reward function to use for reward training
+# Options include "HPSReward", "AestheticReward", "PickScoreReward", "MPSReward", "VCDReward"
 reward_fn = "HPSReward"
 
 # JSON string
+# Example for VCDReward: reward_fn_kwargs = "{}" (or leave as-is; VCDReward ignores unknown keys)
 reward_fn_kwargs = '{"version":"v2.1"}'
+
+# VCD reward parameters (used when reward_fn = "VCDReward")
+# Implements Video Consistency Distance over generated frames.
+
+# Overall multiplier applied to the VCD reward loss term (>0).
+reward_vcd_loss_scale = 1.0
+
+# Include amplitude-domain Wasserstein term (global appearance consistency).
+reward_vcd_use_amplitude = true
+
+# Include phase-domain Wasserstein term (local structural consistency).
+reward_vcd_use_phase = true
+
+# Relative amplitude term weight (>=0).
+reward_vcd_amplitude_weight = 1.0
+
+# Relative phase term weight (>=0).
+reward_vcd_phase_weight = 1.0
+
+# Number of generated frames sampled for VCD (must be >=1, excludes conditioning frame).
+reward_vcd_num_sampled_frames = 4
+
+# Random frame sampling for VCD. false uses earliest frames.
+reward_vcd_random_frame_sampling = true
+
+# Apply temporal weighting (N-i+1)/N to sampled frames.
+reward_vcd_use_temporal_weight = true
+
+# VGG19 feature layers for VCD extraction.
+# Accepts names (relu1_1..relu5_1) or integer indices.
+reward_vcd_feature_layers = ["relu1_1", "relu2_1", "relu3_1", "relu4_1", "relu5_1"]
+
+# Resize generated frames before VGG feature extraction.
+reward_vcd_feature_resolution = 224
+
+# Maximum FFT coefficients per layer used in Wasserstein computation (0 = all).
+reward_vcd_max_coeffs = 16384
+
+# Randomly sample coefficients when max_coeffs truncates full set.
+reward_vcd_random_coeff_sampling = true
+
+# Use pretrained VGG19 ImageNet weights for reward features.
+reward_vcd_use_pretrained_vgg = true
+
+# Conditioning source for VCD reward:
+# - "first_generated_frame": use generated frame 0 as conditioning image
+# - "provided_first_frame": reserved for future conditioning-frame injection
+reward_vcd_conditioning_source = "first_generated_frame"
+
+# Detach conditioning frame branch to avoid optimization collapse.
+reward_vcd_detach_conditioning_frame = true
+
+# Convert decoded frames from [-1,1] to [0,1] before VCD.
+# For reward path decoded frames are already [0,1], so default is false.
+reward_vcd_assume_neg_one_to_one = false
+
+# Ensure reward training decodes enough temporal frames for VCD.
+reward_vcd_force_min_decoded_frames = true
+
+# Minimum decoded frames when reward_fn = "VCDReward" (must be >=2).
+reward_vcd_min_decoded_frames = 2
 
 # Enable backprop for reward training
 reward_backprop = true
@@ -3897,6 +3960,85 @@ enable_optical_flow_loss = false
 
 # Weight for the optical flow loss term (set >0 to enable)
 lambda_optical_flow = 0.01
+
+# =============================================================================
+# ⚠️ VIDEO CONSISTENCY DISTANCE (VCD) LOSS SETTINGS
+# =============================================================================
+
+# Enable Video Consistency Distance auxiliary loss (default: false).
+# VCD is a training-only temporal consistency regularizer for I2V-style behavior.
+# It compares the conditioning frame against generated frames in frequency space
+# using amplitude and phase Wasserstein distances over shallow VGG19 features.
+enable_video_consistency_distance = false
+
+# Weight applied to the VCD loss term (>= 0). Typical range: 0.001 to 0.05.
+# Set to 0.0 to keep the feature enabled but inactive.
+vcd_loss_weight = 0.0
+
+# Include amplitude-domain distance (global appearance attributes).
+vcd_use_amplitude = true
+
+# Include phase-domain distance (local structure and details).
+vcd_use_phase = true
+
+# Relative contribution for amplitude distance (>= 0).
+vcd_amplitude_weight = 1.0
+
+# Relative contribution for phase distance (>= 0).
+vcd_phase_weight = 1.0
+
+# Number of generated frames sampled per step for VCD computation (>= 1).
+# Higher values improve coverage but increase training cost.
+vcd_num_sampled_frames = 1
+
+# Randomly sample generated frame indices each step.
+# false uses deterministic earliest frames after conditioning.
+vcd_random_frame_sampling = true
+
+# Apply the paper's temporal weighting term (N - i + 1) / N.
+# Helps discourage over-constraining late frames into still-image behavior.
+vcd_use_temporal_weight = true
+
+# First global step at which VCD is applied.
+vcd_start_step = 0
+
+# Optional last step for VCD (null = no end step).
+# vcd_end_step = 20000
+
+# Warmup steps for gradually ramping in VCD after vcd_start_step.
+vcd_warmup_steps = 0
+
+# Apply VCD every N steps (>= 1) for compute control.
+vcd_apply_every_n_steps = 1
+
+# VGG19 feature layers used for VCD feature extraction.
+# Accepts layer names (relu1_1..relu5_1) or integer feature indices.
+vcd_feature_layers = ["relu1_1", "relu2_1", "relu3_1", "relu4_1", "relu5_1"]
+
+# Resize frames before feature extraction (pixels). Lower values reduce cost.
+vcd_feature_resolution = 224
+
+# Max flattened FFT coefficients used per layer per sample (0 = use all).
+# Caps memory/compute for high-resolution feature maps.
+vcd_max_coeffs = 16384
+
+# Randomly subsample coefficients when vcd_max_coeffs truncates the full set.
+vcd_random_coeff_sampling = true
+
+# Use ImageNet-pretrained VGG19 weights for feature extraction.
+# If unavailable at runtime, Takenoko falls back to untrained VGG with a warning.
+vcd_use_pretrained_vgg = true
+
+# Conditioning frame source:
+# - "batch_first_frame": first frame from training batch pixels (preferred for I2V)
+# - "pred_first_frame": first decoded predicted frame
+vcd_conditioning_source = "batch_first_frame"
+
+# Detach conditioning-frame features from gradient graph for stability/perf.
+vcd_detach_conditioning_frame = true
+
+# Convert inputs from [-1, 1] to [0, 1] before VGG/FFT.
+vcd_assume_neg_one_to_one = true
 
 # =============================================================================
 # ⚠️ MASKED TRAINING SETTINGS
