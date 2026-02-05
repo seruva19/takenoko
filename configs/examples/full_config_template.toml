@@ -1107,6 +1107,50 @@ use_explicit_video_loss_reduction = false
 enable_custom_loss_target = false
 
 # =============================================================================
+# ⚠️ MIXFLOW SETTINGS
+# =============================================================================
+
+# Enable MixFlow slowed interpolation mixture.
+# When enabled, model input x_t is replaced by x_mt sampled at a slowed timestep mt
+# while keeping supervision target unchanged for flow-matching objective.
+# Default: false (safe/off).
+enable_mixflow = false
+
+# Slowed interpolation range coefficient gamma in [0.0, 1.0].
+# mt is sampled as: mt = t + U(0, 1) * gamma * (1 - t_norm), where t_norm is
+# the normalized timestep in [0, 1]. Larger gamma increases slowdown strength.
+# Recommended start: 0.4.
+# Dependency: only used when enable_mixflow=true.
+mixflow_gamma = 0.4
+
+# Optional Beta-style timestep resampling for closer MixFlow parity.
+# When true, MixFlow remaps training timesteps with t = 1 - sqrt(u), u~U(0,1)
+# before slowed interpolation is computed. This can change timestep distribution.
+# Default: false (preserves existing timestep sampling behavior).
+# Dependency: only used when enable_mixflow=true.
+mixflow_beta_t_sampling = false
+
+# Optional MixFlow parity transform after Beta timestep mapping:
+# t <- shift * t / (1 + (shift - 1) * t), where t is normalized in [0, 1].
+# This mirrors the appendix code path in the reference implementation.
+# Default: false (disabled to preserve existing behavior).
+# Dependency: requires enable_mixflow=true and mixflow_beta_t_sampling=true.
+mixflow_time_dist_shift_enabled = false
+
+# Positive shift factor for optional MixFlow time distribution transform.
+# 1.0 means no-op; values > 1.0 bias toward larger normalized timesteps.
+# Valid range: > 0.0
+# Dependency: only used when mixflow_time_dist_shift_enabled=true.
+mixflow_time_dist_shift = 1.0
+
+# Optional info logging cadence for MixFlow stats.
+# 0 disables periodic MixFlow logs.
+# Positive value N logs approx every N global steps (main process only).
+# Dependency: only used when enable_mixflow=true.
+# Example: mixflow_log_every_n_steps = 100
+mixflow_log_every_n_steps = 0
+
+# =============================================================================
 # ⚠️ DISPERSIVE LOSS SETTINGS
 # =============================================================================
 

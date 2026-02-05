@@ -25,6 +25,7 @@ from configs.internal_guidance_config import apply_internal_guidance_config
 from configs.glance_config import apply_glance_config
 from configs.physics_guided_motion_loss import apply_physics_guided_motion_config
 from configs.self_transcendence_config import apply_self_transcendence_config
+from configs.mixflow_config import apply_mixflow_config
 
 
 def create_args_from_config(
@@ -464,6 +465,7 @@ def create_args_from_config(
     apply_relora_config(args, config, logger)
     apply_internal_guidance_config(args, config, logger)
     apply_self_transcendence_config(args, config, logger)
+    apply_mixflow_config(args, config, logger)
     args.training_comment = config.get("training_comment", "trained with Takenoko")
     args.dim_from_weights = config.get("dim_from_weights", False)
     args.lycoris = config.get("lycoris", False)

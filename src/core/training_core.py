@@ -60,6 +60,10 @@ from enhancements.temporal_pyramid.training_integration import (
 from enhancements.temporal_pyramid.stagewise_targets import (
     create_temporal_pyramid_stagewise_target_helper,
 )
+from enhancements.mixflow.training_integration import (
+    apply_mixflow_slowed_interpolation,
+    maybe_apply_mixflow_beta_t_sampling,
+)
 
 from enhancements.slider.slider_integration import compute_slider_loss_if_enabled
 import utils.fluxflow_augmentation as fluxflow_augmentation
@@ -300,6 +304,7 @@ class TrainingCore:
 
         # Error recycling helper (optional, training-only)
         self.error_recycling_helper: Optional[ErrorRecyclingHelper] = None
+        self._last_mixflow_stats: Optional[Dict[str, float]] = None
 
         # Weight EMA tracking (initialized when enabled)
         self.weight_ema: Optional[ExponentialMovingAverage] = None
@@ -763,6 +768,50 @@ class TrainingCore:
         noisy_model_input = noisy_model_input.to(
             device=accelerator.device, dtype=network_dtype
         )
+        self._last_mixflow_stats = None
+        if getattr(args, "enable_mixflow", False):
+            try:
+                timesteps, mixflow_beta_stats = maybe_apply_mixflow_beta_t_sampling(
+                    args=args,
+                    noise_scheduler=self.noise_scheduler,
+                    timesteps=timesteps,
+                )
+                noisy_model_input, mixflow_stats = apply_mixflow_slowed_interpolation(
+                    args=args,
+                    noise_scheduler=self.noise_scheduler,
+                    timesteps=timesteps,
+                    latents=perturbed_latents_for_target.to(
+                        device=accelerator.device, dtype=network_dtype
+                    ),
+                    noise=noise.to(device=accelerator.device, dtype=network_dtype),
+                    noisy_model_input=noisy_model_input,
+                )
+                if mixflow_beta_stats is not None:
+                    if mixflow_stats is None:
+                        mixflow_stats = {}
+                    mixflow_stats.update(mixflow_beta_stats)
+                self._last_mixflow_stats = mixflow_stats
+                log_every = int(getattr(args, "mixflow_log_every_n_steps", 0))
+                if (
+                    mixflow_stats is not None
+                    and log_every > 0
+                    and global_step is not None
+                    and global_step % log_every == 0
+                    and accelerator.is_main_process
+                ):
+                    logger.info(
+                        "MixFlow stats step=%d: t_mean=%.4f mt_mean=%.4f delta=%.4f t_orig=%.4f t_beta=%.4f t_final=%.4f",
+                        global_step,
+                        mixflow_stats.get("mixflow/t_mean", 0.0),
+                        mixflow_stats.get("mixflow/mt_mean", 0.0),
+                        mixflow_stats.get("mixflow/mean_delta", 0.0),
+                        mixflow_stats.get("mixflow/t_original_mean", 0.0),
+                        mixflow_stats.get("mixflow/t_beta_mean", 0.0),
+                        mixflow_stats.get("mixflow/t_final_mean", 0.0),
+                    )
+            except Exception as exc:
+                if accelerator.is_main_process:
+                    logger.warning("MixFlow interpolation failed, using base input: %s", exc)
 
         # Prepare model input with control signal if control LoRA is enabled
         if hasattr(args, "enable_control_lora") and args.enable_control_lora:
