@@ -637,6 +637,7 @@ class WanFinetuneTrainer:
         batch: Dict[str, torch.Tensor],
         text_encoder: Optional[torch.nn.Module] = None,
         repa_helper: Optional[Any] = None,
+        moalign_helper: Optional[Any] = None,
         semfeat_helper: Optional[Any] = None,
         reg_helper: Optional[Any] = None,
         sara_helper: Optional[Any] = None,
@@ -873,6 +874,7 @@ class WanFinetuneTrainer:
             network=transformer,
             control_signal_processor=None,
             repa_helper=repa_helper if sara_helper is None else None,
+            moalign_helper=moalign_helper,
             semfeat_helper=semfeat_helper,
             bfm_conditioning_helper=bfm_conditioning_helper,
             reg_helper=reg_helper,
@@ -1186,6 +1188,7 @@ class WanFinetuneTrainer:
             getattr(args, "enable_control_lora", False)
             or getattr(args, "sara_enabled", False)
             or getattr(args, "enable_repa", False)
+            or getattr(args, "enable_moalign", False)
             or getattr(args, "enable_semanticgen_lora", False)
             or getattr(args, "semantic_align_enabled", False)
         )
@@ -1249,6 +1252,7 @@ class WanFinetuneTrainer:
                 getattr(args, "enable_control_lora", False)
                 or getattr(args, "sara_enabled", False)
                 or getattr(args, "enable_repa", False)
+                or getattr(args, "enable_moalign", False)
                 or getattr(args, "load_val_pixels", False)
             )
 
@@ -1355,6 +1359,23 @@ class WanFinetuneTrainer:
             except Exception as exc:
                 logger.warning(f"BFM SemFeat setup failed: {exc}")
                 semfeat_helper = None
+
+        moalign_helper = None
+        if getattr(args, "enable_moalign", False):
+            try:
+                from enhancements.moalign.moalign_helper import MoAlignHelper
+
+                logger.info("MOALIGN is enabled. Initializing helper module.")
+                moalign_helper = MoAlignHelper(transformer, args)
+                moalign_params = moalign_helper.get_trainable_params()
+                if moalign_params:
+                    params_to_optimize.append(
+                        {"params": moalign_params, "lr": args.learning_rate}
+                    )
+                    param_names.append("moalign_projection")
+            except Exception as exc:
+                logger.warning(f"MOALIGN setup failed: {exc}")
+                moalign_helper = None
 
         bfm_conditioning_helper = None
         if getattr(args, "bfm_semfeat_conditioning_enabled", False) or getattr(
@@ -1766,6 +1787,15 @@ class WanFinetuneTrainer:
         if analysis_frequency > 0:
             # Initialize weight dynamics analysis baseline
             self.weight_analyzer.initialize_baseline_statistics(training_model)
+
+        if moalign_helper is not None:
+            try:
+                logger.info("MOALIGN is enabled. Setting up the helper module.")
+                moalign_helper.setup_hooks()
+                moalign_helper = accelerator.prepare(moalign_helper)
+            except Exception as exc:
+                logger.warning(f"MOALIGN hook setup failed: {exc}")
+                moalign_helper = None
 
         # Initialize CREPA helper if enabled
         if crepa_helper is not None:
@@ -2205,6 +2235,7 @@ class WanFinetuneTrainer:
                         batch,
                         text_encoder,
                         repa_helper=repa_helper,
+                        moalign_helper=moalign_helper,
                         semfeat_helper=semfeat_helper,
                         reg_helper=reg_helper,
                         sara_helper=None,
@@ -2644,6 +2675,8 @@ class WanFinetuneTrainer:
         # Close progress bar
         if "repa_helper" in locals() and repa_helper is not None:
             repa_helper.remove_hooks()
+        if "moalign_helper" in locals() and moalign_helper is not None:
+            moalign_helper.remove_hooks()
         if "reg_helper" in locals() and reg_helper is not None:
             reg_helper.remove_hooks()
         if "layer_sync_helper" in locals() and layer_sync_helper is not None:

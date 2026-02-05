@@ -9,6 +9,7 @@ from enhancements.blockwise_flow_matching.config import (
 from enhancements.equivdm_noise.config import parse_equivdm_noise_config
 from enhancements.immiscible_noise.config import parse_immiscible_noise_config
 from enhancements.catlvdm.config import parse_catlvdm_config
+from enhancements.moalign.config import parse_moalign_config
 from enhancements.temporal_pyramid.config import parse_temporal_pyramid_config
 from densedpo.config import parse_densedpo_config
 from memory.config import parse_memory_optimization_config
@@ -1604,6 +1605,9 @@ def create_args_from_config(
     args.sara_log_detailed_metrics = bool(
         config.get("sara_log_detailed_metrics", False)
     )
+
+    # MOALIGN (Motion-Centric Representation Alignment) settings
+    parse_moalign_config(config, args, logger)
 
     # Sprint configuration (parsed by Sprint module)
     try:

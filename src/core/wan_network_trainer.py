@@ -480,6 +480,7 @@ class WanNetworkTrainer:
             getattr(args, "enable_control_lora", False)
             or getattr(args, "sara_enabled", False)
             or getattr(args, "enable_repa", False)
+            or getattr(args, "enable_moalign", False)
             or getattr(args, "enable_semanticgen_lora", False)
             or getattr(args, "semantic_align_enabled", False)
         )
@@ -549,6 +550,7 @@ class WanNetworkTrainer:
                 getattr(args, "enable_control_lora", False)
                 or getattr(args, "sara_enabled", False)
                 or getattr(args, "enable_repa", False)
+                or getattr(args, "enable_moalign", False)
                 or getattr(args, "load_val_pixels", False)
             )
 
@@ -909,6 +911,23 @@ class WanNetworkTrainer:
             except Exception as exc:
                 logger.warning(f"BFM SemFeat setup failed: {exc}")
                 semfeat_helper = None
+
+        moalign_helper = None
+        if getattr(args, "enable_moalign", False):
+            try:
+                from enhancements.moalign.moalign_helper import MoAlignHelper
+
+                logger.info("MOALIGN is enabled. Initializing helper module.")
+                moalign_helper = MoAlignHelper(transformer, args)
+                moalign_params = moalign_helper.get_trainable_params()
+                if moalign_params:
+                    trainable_params.append(
+                        {"params": moalign_params, "lr": args.learning_rate}
+                    )
+                    lr_descriptions.append("moalign_projection")
+            except Exception as exc:
+                logger.warning(f"MOALIGN setup failed: {exc}")
+                moalign_helper = None
 
         bfm_conditioning_helper = None
         if getattr(args, "bfm_semfeat_conditioning_enabled", False) or getattr(
@@ -1559,6 +1578,14 @@ class WanNetworkTrainer:
             layer_sync_helper = None
             haste_helper = None
             contrastive_attention_helper = None
+            if moalign_helper is not None:
+                try:
+                    logger.info("MOALIGN is enabled. Setting up the helper module.")
+                    moalign_helper.setup_hooks()
+                    moalign_helper = accelerator.prepare(moalign_helper)
+                except Exception as exc:
+                    logger.warning(f"MOALIGN hook setup failed: {exc}")
+                    moalign_helper = None
             if crepa_helper is not None:
                 try:
                     logger.info("CREPA is enabled. Setting up the helper module.")
@@ -1758,6 +1785,7 @@ class WanNetworkTrainer:
                 is_main_process=is_main_process,
                 val_epoch_step_sync=val_epoch_step_sync,
                 repa_helper=repa_helper if sara_helper is None else None,
+                moalign_helper=moalign_helper,
                 semfeat_helper=semfeat_helper,
                 reg_helper=reg_helper,
                 sara_helper=sara_helper,
@@ -1774,6 +1802,8 @@ class WanNetworkTrainer:
             sara_helper.remove_hooks()
         if "repa_helper" in locals() and repa_helper is not None:
             repa_helper.remove_hooks()
+        if "moalign_helper" in locals() and moalign_helper is not None:
+            moalign_helper.remove_hooks()
         if "reg_helper" in locals() and reg_helper is not None:
             reg_helper.remove_hooks()
         if "layer_sync_helper" in locals() and layer_sync_helper is not None:

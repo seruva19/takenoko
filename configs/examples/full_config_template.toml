@@ -1822,6 +1822,141 @@ crepa_drop_vae_encoder = false
 crepa_normalize_by_frames = true
 
 # =============================================================================
+# ⚠️ MOALIGN (MOTION-CENTRIC RELATIONAL ALIGNMENT) SETTINGS
+# =============================================================================
+#
+# - Requires video pixel batches (handled automatically when enable_moalign=true).
+# - Mutually exclusive with REPA/SARA paths in parser validation:
+#   enable_repa=false, enable_irepa=false, sara_enabled=false.
+
+# Enable MOALIGN auxiliary loss (default: false for behavior preservation).
+enable_moalign = false
+
+# Visual encoder used as the motion-teacher backbone.
+# Uses the same naming convention as REPA encoder manager.
+moalign_encoder_name = "dinov2-vit-b"
+
+# Transformer block index (0-based) whose hidden states are aligned.
+# Paper setup uses block 18 for CogVideoX.
+moalign_alignment_depth = 18
+
+# Optional multi-layer alignment depths (0-based).
+# - If set, overrides moalign_alignment_depth.
+# - Use this to match paper-style multi-layer alignment more closely.
+# Example: moalign_alignment_depths = [12, 18, 24]
+# moalign_alignment_depths = [18]
+
+# Global MOALIGN loss weight lambda (must be > 0 when enabled).
+moalign_loss_lambda = 0.5
+
+# Temporal weighting temperature tau for inter-frame relational loss (must be > 0).
+# Lower values emphasize nearby frames; higher values flatten temporal weighting.
+moalign_temporal_tau = 10.0
+
+# Hidden width of MOALIGN projection heads (must be > 0).
+moalign_projection_hidden_dim = 256
+
+# Output embedding dimension for alignment space (must be > 0).
+moalign_projection_out_dim = 64
+
+# Maximum token count used for relation-matrix computation after alignment/interpolation.
+# Higher values preserve more detail but increase memory/compute quadratically.
+moalign_max_tokens = 256
+
+# Motion target construction mode:
+# - "delta": frame-to-frame encoder token differences (motion-centric default)
+# - "encoder": raw encoder tokens (ablation-style fallback)
+moalign_motion_target_mode = "delta"
+
+# Relative weights for MOALIGN components (must be >= 0).
+# Total MOALIGN term = lambda * (spatial_weight * L_spatial + temporal_weight * L_temporal)
+moalign_spatial_weight = 1.0
+
+# Temporal weight for MOALIGN
+moalign_temporal_weight = 1.0
+
+# If token grids differ between diffusion and teacher features:
+# - true: interpolate token grids to preserve spatial correspondence
+# - false: truncate to common token count
+moalign_spatial_align = true
+
+# Input resolution for encoder preprocessing (must be > 0).
+moalign_input_resolution = 256
+
+# Detach teacher-side motion targets after projection.
+# - false: train MOALIGN target projector jointly (recommended default for this adaptation)
+# - true: keep target projector fully frozen
+moalign_detach_targets = false
+
+# =============================================================================
+# ⚠️ MOALIGN STAGE-1 TEACHER SETTINGS
+# =============================================================================
+#
+# Stage-1 trains a motion teacher (projector + flow head) with optical-flow supervision.
+# This is an optional pretraining step before LoRA Stage-2 alignment.
+
+# Route training action to Stage-1 teacher pipeline (default: false).
+# When true, `--train` dispatches Stage-1 trainer and exits after checkpoint save.
+enable_moalign_stage1_training = false
+
+# Use frozen Stage-1 projector as MOALIGN teacher target in Stage-2 training.
+# Requires moalign_stage1_checkpoint to point to a valid Stage-1 checkpoint.
+moalign_use_stage1_teacher = false
+
+# Checkpoint path for Stage-1 teacher.
+# - During Stage-1 training: empty string means auto path under output_dir.
+# - During Stage-2 teacher usage: must be a valid existing checkpoint path.
+moalign_stage1_checkpoint = ""
+
+# Stage-1 training epochs (> 0).
+moalign_stage1_num_epochs = 1
+
+# Stage-1 max optimizer steps (> 0). Training stops at whichever comes first:
+# epoch budget or max steps.
+moalign_stage1_max_steps = 2000
+
+# Stage-1 optimizer learning rate (> 0).
+moalign_stage1_learning_rate = 0.0001
+
+# Stage-1 AdamW weight decay (>= 0).
+moalign_stage1_weight_decay = 0.0
+
+# Stage-1 dataset batch size (> 0). This overrides runtime batch size for the Stage-1 action.
+moalign_stage1_batch_size = 1
+
+# Stage-1 dataloader workers (>= 0).
+moalign_stage1_num_workers = 0
+
+# Logging interval in optimizer steps (> 0).
+moalign_stage1_log_interval = 20
+
+# Intermediate checkpoint interval in optimizer steps (>= 0).
+# Set to 0 to disable intermediate checkpoints.
+moalign_stage1_save_interval = 500
+
+# Gradient clipping norm for Stage-1 (>= 0).
+# Set to 0 to disable clipping.
+moalign_stage1_grad_clip_norm = 1.0
+
+# Optional token-energy regularization weight for Stage-1 (>= 0).
+# Paper-faithful setting is 0.0 (flow-supervision only).
+moalign_stage1_token_reg_weight = 0.0
+
+# Optical-flow target source for Stage-1:
+# - "cache": require batch["optical_flow"] from cached flow tensors
+# - "raft": always compute flow online with RAFT
+# - "auto": use cache when present, otherwise RAFT fallback (recommended)
+moalign_stage1_flow_source = "auto"
+
+# If flow_source="auto", allow RAFT fallback when no cached flow is available.
+moalign_stage1_allow_raft_fallback = true
+
+# RAFT variant used when online flow is needed:
+# - "raft_small": lower VRAM, faster
+# - "raft_large": higher quality, heavier
+moalign_stage1_raft_model = "raft_small"
+
+# =============================================================================
 # ⚠️ ERROR RECYCLING SETTINGS
 # =============================================================================
 # Enable Error-Recycling Fine-Tuning. Default: false.

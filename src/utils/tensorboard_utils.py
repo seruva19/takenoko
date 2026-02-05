@@ -59,6 +59,7 @@ def get_default_metric_descriptions() -> Dict[str, str]:
         "train/layer_sync_loss": "LayerSync self-alignment loss between transformer blocks (lower is better).",
         "layersync_similarity": "Mean cosine similarity between LayerSync source/target blocks (higher is better).",
         "layersync_loss": "LayerSync self-alignment loss between transformer blocks (lower is better).",
+        "loss/moalign": "MOALIGN motion-centric relational alignment loss (weighted, lower is better).",
         "train/repa_loss": "REPA alignment loss for visual quality (lower is better).",
         "loss/bfm_semfeat": "BFM SemFeat alignment loss (weighted, lower is better).",
         "bfm_semfeat_similarity": "SemFeat cosine similarity between diffusion and encoder features (higher is better).",

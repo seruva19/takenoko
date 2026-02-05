@@ -59,6 +59,13 @@ try:
 except ImportError:  # pragma: no cover - optional dependency tree
     dispatch_rcm_pipeline = None
 
+try:
+    from distillation.moalign_stage1_bridge import (  # type: ignore
+        dispatch_moalign_stage1_pipeline,
+    )
+except ImportError:  # pragma: no cover - optional dependency tree
+    dispatch_moalign_stage1_pipeline = None
+
 import accelerate
 from utils.memory_utils import configure_cuda_from_config
 from common.vram_estimator import (
@@ -1048,9 +1055,26 @@ class UnifiedTrainer:
                     )
                     return False
                 logger.info(
-                    "?? RCM pipeline enabled via config – dispatching distillation runner"
+                    "RCM pipeline enabled via config - dispatching distillation runner"
                 )
                 return dispatch_rcm_pipeline(
+                    args=self.args,
+                    raw_config=self.config,
+                    raw_config_content=self.config_content,
+                    config_path=self.config_path,
+                )
+
+            # Route to MOALIGN Stage-1 teacher training if enabled via config.
+            if bool(getattr(self.args, "enable_moalign_stage1_training", False)):
+                if dispatch_moalign_stage1_pipeline is None:
+                    logger.error(
+                        "MOALIGN Stage-1 pipeline requested but distillation.moalign_stage1_bridge is unavailable"
+                    )
+                    return False
+                logger.info(
+                    "MOALIGN Stage-1 pipeline enabled via config - dispatching Stage-1 trainer"
+                )
+                return dispatch_moalign_stage1_pipeline(
                     args=self.args,
                     raw_config=self.config,
                     raw_config_content=self.config_content,
@@ -1153,9 +1177,7 @@ def main():
         action="store_true",
         help="Run text encoder output caching and exit",
     )
-    parser.add_argument(
-        "--train", action="store_true", help="Run training and exit"
-    )
+    parser.add_argument("--train", action="store_true", help="Run training and exit")
     parser.add_argument(
         "--all",
         action="store_true",

@@ -169,6 +169,8 @@ def collect_and_log_training_metrics(
         logs["loss/self_transcendence"] = float(
             loss_components.self_transcendence_loss.item()
         )
+    if getattr(loss_components, "moalign_loss", None) is not None:
+        logs["loss/moalign"] = float(loss_components.moalign_loss.item())
     if loss_components.repa_loss is not None:
         logs["loss/repa"] = float(loss_components.repa_loss.item())
     if getattr(loss_components, "bfm_semfeat_loss", None) is not None:

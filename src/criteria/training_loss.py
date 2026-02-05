@@ -92,6 +92,8 @@ class LossComponents:
         The Internal Guidance auxiliary supervision loss, if enabled.
     self_transcendence_loss: Optional[torch.Tensor]
         The Self-Transcendence alignment loss, if enabled.
+    moalign_loss: Optional[torch.Tensor]
+        The MOALIGN motion-centric relational alignment loss, if enabled.
     repa_loss: Optional[torch.Tensor]
         The REPA alignment loss, if enabled.
     reg_align_loss: Optional[torch.Tensor]
@@ -170,6 +172,7 @@ class LossComponents:
     layer_sync_similarity: Optional[torch.Tensor] = None
     internal_guidance_loss: Optional[torch.Tensor] = None
     self_transcendence_loss: Optional[torch.Tensor] = None
+    moalign_loss: Optional[torch.Tensor] = None
     repa_loss: Optional[torch.Tensor] = None
     reg_align_loss: Optional[torch.Tensor] = None
     reg_cls_loss: Optional[torch.Tensor] = None
@@ -496,6 +499,7 @@ class TrainingLossComputer:
         network: Optional[Any] = None,
         control_signal_processor: Optional[Any] = None,
         repa_helper: Optional[Any] = None,
+        moalign_helper: Optional[Any] = None,
         semfeat_helper: Optional[Any] = None,
         bfm_conditioning_helper: Optional[Any] = None,
         reg_helper: Optional[Any] = None,
@@ -1201,8 +1205,9 @@ class TrainingLossComputer:
             except Exception as e:
                 logger.warning(f"REG class-token loss computation failed: {e}")
 
-        # ---- Optional SARA or REPA Loss ----
+        # ---- Optional SARA, MOALIGN, or REPA Loss ----
         sara_loss_value: Optional[torch.Tensor] = None
+        moalign_loss_value: Optional[torch.Tensor] = None
         repa_loss_value: Optional[torch.Tensor] = None
         if sara_helper is not None:
             try:
@@ -1222,6 +1227,35 @@ class TrainingLossComputer:
                     )
             except Exception as e:
                 logger.warning(f"SARA loss computation failed: {e}")
+        elif moalign_helper is not None:
+            try:
+                if "pixels" in batch:
+                    clean_pixels = torch.stack(
+                        batch["pixels"], dim=0
+                    )  # (B, C, F, H, W) or (B, C, H, W)
+
+                    if clean_pixels.dim() == 5:
+                        lat_f = latents.shape[2]
+                        pt = self.config.patch_size[0]
+                        target_f = max(1, lat_f // pt)
+                        pix_f = clean_pixels.shape[2]
+                        if pix_f > target_f:
+                            indices = (
+                                torch.linspace(0, pix_f - 1, target_f)
+                                .long()
+                                .to(clean_pixels.device)
+                            )
+                            clean_pixels = clean_pixels.index_select(2, indices)
+
+                    moalign_val = moalign_helper.get_moalign_loss(clean_pixels, vae)
+                    loss = loss + moalign_val
+                    moalign_loss_value = moalign_val.detach()
+                else:
+                    logger.warning(
+                        "MOALIGN enabled, but no 'pixels' found in batch. Skipping MOALIGN loss."
+                    )
+            except Exception as e:
+                logger.warning(f"MOALIGN loss computation failed: {e}")
         elif repa_helper is not None:
             try:
                 if "pixels" in batch:
@@ -1867,6 +1901,7 @@ class TrainingLossComputer:
             layer_sync_similarity=layer_sync_similarity_value,
             internal_guidance_loss=internal_guidance_loss_value,
             self_transcendence_loss=self_transcendence_loss_value,
+            moalign_loss=moalign_loss_value,
             repa_loss=repa_loss_value,
             reg_align_loss=reg_align_loss_value,
             reg_cls_loss=reg_cls_loss_value,
