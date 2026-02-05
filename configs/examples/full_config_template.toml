@@ -3520,6 +3520,62 @@ equivdm_flow_stride_check = false
 equivdm_flow_expected_stride = -1
 
 # =============================================================================
+# ⚠️ IMMISCIBLE DIFFUSION 
+# =============================================================================
+# Enable Immiscible Diffusion noise assignment for LoRA training.
+# When enabled, each sample draws K Gaussian noise candidates and keeps the
+# nearest candidate to the sample latent (per-sample KNN in latent space).
+# This changes only training-time noise selection and does not alter inference.
+# Default is false to preserve baseline behavior.
+enable_immiscible_diffusion = false
+
+# Assignment strategy:
+# - "knn": per-sample KNN over K random candidates (fastest, robust default)
+# - "linear_assignment": one noise per sample with global batch matching (Hungarian/greedy)
+# - "linear_assignment_candidates": global matching over a larger pooled noise set
+#   with pool size = batch_size * immiscible_assignment_pool_factor
+# Default: "knn".
+immiscible_mode = "knn"
+
+# Number of Gaussian candidate noises (K) sampled per training sample.
+# Used by mode "knn" and as fallback when enabled.
+# Valid range: int >= 1.
+# Higher values increase compute/memory but can strengthen immiscibility.
+# Practical ranges:
+# - 4 to 8 for low-overhead runs
+# - 16+ for stronger assignment at higher cost
+# Default: 4.
+immiscible_candidate_count = 4
+
+# Candidate pool multiplier used only by mode "linear_assignment_candidates".
+# Pool size = batch_size * immiscible_assignment_pool_factor.
+# Valid range: int >= 1.
+# Recommended: 2 for moderate cost, 4+ for more aggressive matching.
+# Default: 2.
+immiscible_assignment_pool_factor = 2
+
+# Compute dtype for KNN distance calculations.
+# Also used for pairwise assignment distance matrices in linear-assignment modes.
+# Valid options:
+# - "float32": safest numerically, highest compute cost
+# - "float16": faster/lighter on GPU, may reduce distance precision
+# - "bfloat16": balanced precision/speed when supported
+# This only affects distance computation, not model parameter dtype.
+# Default: "float32".
+immiscible_distance_dtype = "float32"
+
+# If true, linear-assignment modes try SciPy Hungarian matching first.
+# If SciPy is unavailable or fails, helper falls back to greedy matching.
+# Ignored for mode "knn".
+immiscible_use_scipy = true
+
+# Fallback path when selected mode fails:
+# - "knn": revert to KNN candidate selection
+# - "random": revert to iid Gaussian noise (baseline behavior)
+# Default: "knn".
+immiscible_fallback_mode = "knn"
+
+# =============================================================================
 # ⚠️ CAT-LVDM CORRUPTION-AWARE TRAINING SETTINGS
 # =============================================================================
 # Enable CAT-LVDM structured corruption on conditioning embeddings (training-only).

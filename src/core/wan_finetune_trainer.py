@@ -683,6 +683,8 @@ class WanFinetuneTrainer:
         # Generate noise (device/dtype conversion later)
         if self.training_core.equivdm_noise_helper is not None:
             noise = self.training_core.equivdm_noise_helper.sample_noise(latents, batch)
+        elif self.training_core.immiscible_noise_helper is not None:
+            noise = self.training_core.immiscible_noise_helper.sample_noise(latents)
         else:
             noise = torch.randn_like(latents)
 
@@ -1111,6 +1113,12 @@ class WanFinetuneTrainer:
             self.training_core.initialize_equivdm_consistent_noise(args)
         except Exception as e:
             logger.warning(f"Failed to initialize EquiVDM noise helper: {e}")
+
+        # Initialize Immiscible Diffusion noise if available
+        try:
+            self.training_core.initialize_immiscible_noise(args)
+        except Exception as e:
+            logger.warning(f"Failed to initialize Immiscible Diffusion helper: {e}")
 
         # Initialize differential guidance enhancement if available
         try:

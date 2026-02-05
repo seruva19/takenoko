@@ -7,6 +7,7 @@ from enhancements.blockwise_flow_matching.config import (
     parse_blockwise_flow_matching_config,
 )
 from enhancements.equivdm_noise.config import parse_equivdm_noise_config
+from enhancements.immiscible_noise.config import parse_immiscible_noise_config
 from enhancements.catlvdm.config import parse_catlvdm_config
 from enhancements.temporal_pyramid.config import parse_temporal_pyramid_config
 from densedpo.config import parse_densedpo_config
@@ -1133,6 +1134,9 @@ def create_args_from_config(
 
     # EquiVDM consistent noise settings (training-only)
     parse_equivdm_noise_config(config, args)
+
+    # Immiscible Diffusion KNN noise assignment (training-only)
+    parse_immiscible_noise_config(config, args)
 
     # CAT-LVDM corruption-aware conditioning (training-only)
     parse_catlvdm_config(config, args)

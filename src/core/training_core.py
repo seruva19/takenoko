@@ -27,6 +27,9 @@ from enhancements.temporal_consistency.training_integration import (
 from enhancements.equivdm_noise.training_integration import (
     EquiVDMConsistentNoiseHelper,
 )
+from enhancements.immiscible_noise.training_integration import (
+    ImmiscibleNoiseHelper,
+)
 from enhancements.catlvdm.training_integration import (
     create_catlvdm_corruption_helper,
 )
@@ -267,6 +270,8 @@ class TrainingCore:
 
         # EquiVDM consistent noise helper (optional, training-only)
         self.equivdm_noise_helper: Optional[EquiVDMConsistentNoiseHelper] = None
+        # Immiscible Diffusion helper (optional, training-only)
+        self.immiscible_noise_helper: Optional[ImmiscibleNoiseHelper] = None
         # Temporal pyramid helper (optional, training-only)
         self.temporal_pyramid_helper = None
         # Temporal pyramid stagewise target helper (optional, training-only)
@@ -404,6 +409,26 @@ class TrainingCore:
                 exc,
             )
             self.equivdm_noise_helper = None
+
+    def initialize_immiscible_noise(self, args: argparse.Namespace) -> None:
+        """Initialize Immiscible Diffusion noise helper if enabled."""
+        if bool(getattr(args, "enable_equivdm_consistent_noise", False)) and bool(
+            getattr(args, "enable_immiscible_diffusion", False)
+        ):
+            logger.warning(
+                "Both EquiVDM and Immiscible Diffusion are enabled. "
+                "Prioritizing EquiVDM noise sampling and disabling Immiscible Diffusion."
+            )
+            self.immiscible_noise_helper = None
+            return
+        try:
+            self.immiscible_noise_helper = ImmiscibleNoiseHelper.create_from_args(args)
+        except Exception as exc:
+            logger.warning(
+                "Failed to initialize Immiscible Diffusion helper: %s",
+                exc,
+            )
+            self.immiscible_noise_helper = None
 
     def initialize_temporal_pyramid(self, args: argparse.Namespace) -> None:
         """Initialize temporal pyramid helper if enabled."""
@@ -1370,6 +1395,8 @@ class TrainingCore:
                     # Sample noise that we'll add to the latents
                     if self.equivdm_noise_helper is not None:
                         noise = self.equivdm_noise_helper.sample_noise(latents, batch)
+                    elif self.immiscible_noise_helper is not None:
+                        noise = self.immiscible_noise_helper.sample_noise(latents)
                     else:
                         noise = torch.randn_like(latents)
                     if self.temporal_pyramid_helper is not None:

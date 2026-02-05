@@ -181,6 +181,12 @@ class WanNetworkTrainer:
         except Exception as e:
             logger.warning(f"Failed to initialize EquiVDM noise helper: {e}")
 
+        # Initialize Immiscible Diffusion noise if available
+        try:
+            self.training_core.initialize_immiscible_noise(args)
+        except Exception as e:
+            logger.warning(f"Failed to initialize Immiscible Diffusion helper: {e}")
+
         # Initialize temporal pyramid helper if available
         try:
             self.training_core.initialize_temporal_pyramid(args)
