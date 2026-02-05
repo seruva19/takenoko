@@ -56,15 +56,16 @@ def collect_lora_specs(lora_sd: Dict[str, torch.Tensor]) -> List[LoRATargetSpec]
                 up_shape=lora_sd[up_key].shape,
             )
         )
-    return specs
+    return sorted(specs, key=lambda spec: spec.name)
 
 
 def ensure_specs_consistent(spec_lists: List[List[LoRATargetSpec]]) -> List[LoRATargetSpec]:
     """Validate that all provided spec lists have identical names/shapes."""
     if not spec_lists:
         raise ValueError("No specs provided for consistency check.")
-    base = spec_lists[0]
+    base = sorted(spec_lists[0], key=lambda spec: spec.name)
     for idx, specs in enumerate(spec_lists[1:], start=1):
+        specs = sorted(specs, key=lambda spec: spec.name)
         if len(specs) != len(base):
             raise ValueError(f"Spec count mismatch between spec[0] and spec[{idx}]")
         for a, b in zip(base, specs):

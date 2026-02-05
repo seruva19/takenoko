@@ -6,6 +6,8 @@ import torch
 from transformers import AutoModel, AutoProcessor
 import numpy as np
 
+from .utils import resolve_device
+
 _ENCODER_CACHE: Dict[Tuple[str, str, str], Tuple[AutoProcessor, AutoModel]] = {}
 _FACE_APP_CACHE: Dict[Tuple[str, str], object] = {}
 
@@ -20,12 +22,14 @@ def encode_style_frames(
     Encode frames with either an image (CLIP) or video encoder and mean-pool to a single embedding.
     Falls back to CPU if CUDA is unavailable or video path fails.
     """
+    device = resolve_device(device)
     key = (model_name, encoder_type, device)
     if key in _ENCODER_CACHE:
         processor, model = _ENCODER_CACHE[key]
     else:
         processor = AutoProcessor.from_pretrained(model_name)
         model = AutoModel.from_pretrained(model_name).to(device)
+        model.eval()
         _ENCODER_CACHE[key] = (processor, model)
     try:
         if encoder_type == "video" and hasattr(processor, "videos"):
@@ -95,6 +99,7 @@ def encode_identity_frames(
             "insightface is required for identity encoding; install insightface and provide a compatible model."
         ) from exc
 
+    device = resolve_device(device)
     app_key = (model_name, device)
     if app_key in _FACE_APP_CACHE:
         app = _FACE_APP_CACHE[app_key]  # type: ignore[assignment]

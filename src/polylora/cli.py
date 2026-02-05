@@ -152,6 +152,8 @@ def cmd_build_pairs(args: argparse.Namespace) -> None:
 def cmd_train(args: argparse.Namespace) -> None:
     spec: List[LoRATargetSpec] = load_spec_file(Path(args.spec))
     ds = PolyLoRAPairDataset(args.data, expected_spec=spec)
+    if len(ds) == 0:
+        raise ValueError("No samples found in shard files.")
     first_emb, _, first_id, _ = ds[0]
     embed_dim = args.embed_dim or first_emb.shape[-1]
     identity_dim = first_id.shape[-1] if first_id is not None else None
@@ -181,6 +183,8 @@ def cmd_train(args: argparse.Namespace) -> None:
             batch_size=args.batch_size,
             weight_decay=args.weight_decay,
             val_split=args.val_split,
+            amp=args.amp,
+            grad_clip=args.grad_clip,
             cosine_loss_weight=args.cosine_loss_weight,
             sample_every_epochs=args.sample_every_epochs,
             sample_command=args.sample_command,
@@ -189,6 +193,9 @@ def cmd_train(args: argparse.Namespace) -> None:
             use_identity=args.use_identity,
             use_perceiver_frontend=args.use_perceiver_frontend,
             use_base_branch=args.dual_heads,
+            base_loss_weight=args.base_loss_weight,
+            use_ema=args.use_ema,
+            ema_decay=args.ema_decay,
         ),
         device=args.device,
     )
@@ -196,6 +203,50 @@ def cmd_train(args: argparse.Namespace) -> None:
     print(f"[polylora] saved checkpoint to {args.save}")
     if stats:
         print(f"[polylora] stats: {stats}")
+    if args.save_metadata:
+        import hashlib
+        import json
+        from datetime import datetime, timezone
+
+        try:
+            spec_bytes = Path(args.spec).read_bytes()
+            spec_hash = hashlib.sha256(spec_bytes).hexdigest()
+        except Exception:
+            spec_hash = "unknown"
+        meta = {
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "ckpt_path": str(args.save),
+            "spec_path": str(args.spec),
+            "spec_sha256": spec_hash,
+            "num_samples": len(ds),
+            "embed_dim": embed_dim,
+            "identity_dim": identity_dim,
+            "encoder": args.encoder if hasattr(args, "encoder") else None,
+            "encoder_type": args.encoder_type if hasattr(args, "encoder_type") else None,
+            "fusion_mode": args.si_fusion_mode,
+            "head_mode": args.head_mode,
+            "use_identity": args.use_identity,
+            "use_perceiver_frontend": args.use_perceiver_frontend,
+            "use_base_branch": args.dual_heads,
+            "train_config": {
+                "lr": args.lr,
+                "epochs": args.epochs,
+                "batch_size": args.batch_size,
+                "weight_decay": args.weight_decay,
+                "val_split": args.val_split,
+                "amp": args.amp,
+                "grad_clip": args.grad_clip,
+                "cosine_loss_weight": args.cosine_loss_weight,
+                "base_loss_weight": args.base_loss_weight,
+                "use_ema": args.use_ema,
+                "ema_decay": args.ema_decay,
+            },
+            "stats": stats or {},
+            "torch_version": torch.__version__,
+        }
+        meta_out = args.metadata_out or f"{args.save}.meta.json"
+        Path(meta_out).write_text(json.dumps(meta, indent=2))
+        print(f"[polylora] wrote metadata to {meta_out}")
 
 
 def cmd_predict(args: argparse.Namespace) -> None:
@@ -429,7 +480,18 @@ def build_parser() -> argparse.ArgumentParser:
     train.add_argument("--batch-size", type=int, default=4)
     train.add_argument("--weight-decay", type=float, default=0.0)
     train.add_argument("--val-split", type=float, default=0.1)
+    train.add_argument("--grad-clip", type=float, default=1.0)
+    train.add_argument(
+        "--no-amp",
+        dest="amp",
+        action="store_false",
+        help="Disable AMP during training.",
+    )
+    train.set_defaults(amp=True)
     train.add_argument("--cosine-loss-weight", type=float, default=0.0)
+    train.add_argument("--base-loss-weight", type=float, default=1.0)
+    train.add_argument("--use-ema", action="store_true")
+    train.add_argument("--ema-decay", type=float, default=0.995)
     train.add_argument("--head-mode", default="trunk", choices=["trunk", "per_tensor"])
     train.add_argument(
         "--dual-heads",
@@ -459,6 +521,8 @@ def build_parser() -> argparse.ArgumentParser:
     train.add_argument("--sample-merge-target", default=None)
     train.add_argument("--device", default="cuda")
     train.add_argument("--save", required=True)
+    train.add_argument("--save-metadata", action="store_true")
+    train.add_argument("--metadata-out", default=None)
     train.set_defaults(func=cmd_train)
 
     predict = sub.add_parser("predict", help="Predict LoRA weights from frames")

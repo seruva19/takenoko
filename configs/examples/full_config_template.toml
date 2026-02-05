@@ -2846,8 +2846,42 @@ polylora_train_epochs = 5
 # Batch size for hyper-LoRA training.
 polylora_train_batch_size = 4
 
+# Weight decay for hyper-LoRA training.
+polylora_train_weight_decay = 0.0
+
+# Validation split for hyper-LoRA training (0 disables validation).
+polylora_train_val_split = 0.1
+
+# Enable AMP during hyper-LoRA training (auto-disables on CPU).
+polylora_train_amp = true
+
+# Gradient clip norm for hyper-LoRA training (<=0 disables).
+polylora_train_grad_clip = 1.0
+
 # Weight for the cosine loss term in hyper-LoRA training.
 polylora_cosine_loss_weight = 0.0
+
+# Optional loss weight for the base branch when polylora_dual_lora_heads = true.
+polylora_base_loss_weight = 1.0
+
+# Optional EMA tracking for the hyper-LoRA network (recommended for stability).
+polylora_use_ema = false
+
+# EMA decay rate (only used when polylora_use_ema = true).
+polylora_ema_decay = 0.995
+
+# Write a metadata JSON alongside the PolyLoRA checkpoint after training.
+polylora_save_metadata = true
+
+# Optional override path for metadata JSON; defaults to "{polylora_ckpt}.meta.json".
+# polylora_metadata_out = "checkpoints/polylora_video.meta.json"
+
+# Apply a predicted PolyLoRA on-the-fly to the LoRA network before training starts.
+# Requires polylora_predict_frames + polylora_ckpt + polylora_spec + polylora_embed_dim.
+polylora_live_apply = false
+
+# Include the base branch when applying live PolyLoRA (only meaningful if dual heads are enabled).
+polylora_live_include_base = false
 
 # Optional: run a sampling command every N epochs using a predicted LoRA from the current hypernetwork.
 # Placeholders: {lora} (predicted path), {merged} (merged path if merge target is provided), {epoch} (1-based epoch).

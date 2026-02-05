@@ -6,6 +6,9 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
+import hashlib
+import json
+from datetime import datetime, timezone
 from typing import List, Optional, Tuple
 
 import torch
@@ -24,6 +27,7 @@ from polylora.spec import (
     validate_lora_matches_spec,
 )
 from polylora.train import TrainConfig, train_polylora
+from polylora.utils import resolve_device
 
 
 class PolyLoRAController:
@@ -142,6 +146,10 @@ class PolyLoRAController:
             if not out_dir:
                 print("? Output directory is required.")
                 return False
+            use_cached_embeddings = bool(getattr(args, "polylora_use_cached_embeddings", True))
+            cache_dir = Path(out_dir) / "embedding_cache" if use_cached_embeddings else None
+            if cache_dir:
+                cache_dir.mkdir(parents=True, exist_ok=True)
             encoder_name = (
                 getattr(args, "polylora_encoder", "openai/clip-vit-large-patch14-336")
                 if non_interactive
@@ -169,6 +177,7 @@ class PolyLoRAController:
                     enc_fusion_cfg = [enc_fusion_cfg]
                 encoder_fusion = [(name, encoder_type) for name in enc_fusion_cfg]  # type: ignore[list-item]
             device = "cuda" if non_interactive else self._prompt_value("Device [cuda]: ", default="cuda")
+            device = resolve_device(device)
             base_map = {}
             if base_lora_paths:
                 if isinstance(base_lora_paths, str):
@@ -192,37 +201,70 @@ class PolyLoRAController:
                 if not frame_paths:
                     print(f"[polylora] skipping {lora_path} (no images in {frame_dir})")
                     continue
-                frames = [Image.open(fp).convert("RGB") for fp in frame_paths]
+                frames = []
+                for fp in frame_paths:
+                    with Image.open(fp) as img:
+                        frames.append(img.convert("RGB"))
                 identity_emb = None
-                if encoder_fusion:
-                    embedding = encode_style_frames_multi(
-                        frames, encoders=encoder_fusion, device=device, fusion_mode=fusion_mode
-                    )
-                else:
-                    embedding = encode_style_frames(
-                        frames,
-                        model_name=encoder_name,
-                        encoder_type=encoder_type,
-                        device=device,
-                    )
-                if use_identity:
-                    try:
-                        identity_emb = encode_identity_frames(frames, model_name=identity_encoder, device=device)
-                    except Exception as exc:
-                        print(f"[polylora] identity encoding failed for {lora_path}: {exc}")
+                cache_hit = False
+                cache_path = None
+                if cache_dir is not None:
+                    cache_path = cache_dir / f"{stem}.pt"
+                    if cache_path.exists():
+                        try:
+                            cached = torch.load(cache_path, map_location="cpu")
+                            embedding = cached.get("embedding")
+                            identity_emb = cached.get("identity")
+                            if embedding is not None:
+                                cache_hit = True
+                        except Exception as exc:
+                            print(f"[polylora] cache read failed for {cache_path}: {exc}")
+                if not cache_hit:
+                    if encoder_fusion:
+                        embedding = encode_style_frames_multi(
+                            frames, encoders=encoder_fusion, device=device, fusion_mode=fusion_mode
+                        )
+                    else:
+                        embedding = encode_style_frames(
+                            frames,
+                            model_name=encoder_name,
+                            encoder_type=encoder_type,
+                            device=device,
+                        )
+                    if use_identity:
+                        try:
+                            identity_emb = encode_identity_frames(frames, model_name=identity_encoder, device=device)
+                        except Exception as exc:
+                            print(f"[polylora] identity encoding failed for {lora_path}: {exc}")
+                    if cache_path is not None:
+                        try:
+                            record = {"embedding": embedding.cpu()}
+                            if identity_emb is not None:
+                                record["identity"] = identity_emb.cpu()
+                            torch.save(record, cache_path)
+                        except Exception as exc:
+                            print(f"[polylora] cache write failed for {cache_path}: {exc}")
+                lora_sd = load_lora_state_dict(lora_path)
+                validate_lora_matches_spec(lora_sd, spec or collect_lora_specs(lora_sd))
                 base_lora = None
                 if use_base:
                     base_path = base_map.get(lora_path.stem)
                     if base_path is None and auto_base:
-                        print(f"[polylora] dual-heads: auto-deriving base LoRA for {lora_path.stem} (attenuate={getattr(args, 'polylora_base_attenuate', 0.5)})")
-                        base_lora = {k: v * getattr(args, "polylora_base_attenuate", 0.5) if k.endswith(("lora_down.weight", "lora_up.weight")) else v for k, v in lora_sd.items()}
+                        print(
+                            f"[polylora] dual-heads: auto-deriving base LoRA for {lora_path.stem} (attenuate={getattr(args, 'polylora_base_attenuate', 0.5)})"
+                        )
+                        base_lora = {
+                            k: v * getattr(args, "polylora_base_attenuate", 0.5)
+                            if k.endswith(("lora_down.weight", "lora_up.weight"))
+                            else v
+                            for k, v in lora_sd.items()
+                        }
                     elif base_path is None:
                         raise ValueError(f"dual_lora_heads enabled but no base LoRA provided for stem {lora_path.stem}")
                     else:
                         base_lora = load_lora_state_dict(base_path)
-                        validate_lora_matches_spec(base_lora, collect_lora_specs(base_lora))
-                lora_sd = load_lora_state_dict(lora_path)
-                validate_lora_matches_spec(lora_sd, spec or collect_lora_specs(lora_sd))
+                    if base_lora is not None:
+                        validate_lora_matches_spec(base_lora, spec or collect_lora_specs(lora_sd))
                 samples.append(PairSample(embedding=embedding, lora=lora_sd, identity=identity_emb, base_lora=base_lora))
 
             if not samples:
@@ -267,6 +309,9 @@ class PolyLoRAController:
                     shard_paths.extend(sorted([f for f in p.iterdir() if f.suffix == ".pt"]))
                 else:
                     shard_paths.append(p)
+            if not shard_paths:
+                print("? No shard files found for training.")
+                return False
             embed_dim = getattr(args, "polylora_embed_dim", None)
             embed_dim_input = (
                 embed_dim
@@ -359,6 +404,9 @@ class PolyLoRAController:
             use_identity = bool(getattr(args, "polylora_use_identity", False))
             use_base = bool(getattr(args, "polylora_dual_lora_heads", False))
             dataset = PolyLoRAPairDataset(shard_paths, expected_spec=spec)
+            if len(dataset) == 0:
+                print("? No samples found in shard files.")
+                return False
             first_emb, _, first_id, _ = dataset[0]
             if embed_dim is None:
                 embed_dim = first_emb.shape[-1]
@@ -381,6 +429,10 @@ class PolyLoRAController:
                     lr=lr,
                     epochs=epochs,
                     batch_size=batch_size,
+                    weight_decay=float(getattr(args, "polylora_train_weight_decay", 0.0)),
+                    val_split=float(getattr(args, "polylora_train_val_split", 0.1)),
+                    amp=bool(getattr(args, "polylora_train_amp", True)),
+                    grad_clip=getattr(args, "polylora_train_grad_clip", 1.0),
                     cosine_loss_weight=cosine_w,
                     sample_every_epochs=sample_every,
                     sample_command=sample_cmd,
@@ -389,6 +441,9 @@ class PolyLoRAController:
                     use_identity=use_identity,
                     use_perceiver_frontend=use_perceiver,
                     use_base_branch=use_base,
+                    base_loss_weight=float(getattr(args, "polylora_base_loss_weight", 1.0)),
+                    use_ema=bool(getattr(args, "polylora_use_ema", False)),
+                    ema_decay=float(getattr(args, "polylora_ema_decay", 0.995)),
                 ),
                 device=device,
             )
@@ -396,6 +451,47 @@ class PolyLoRAController:
             print(f"[polylora] saved checkpoint to {ckpt_out}")
             if stats:
                 print(f"[polylora] stats: {stats}")
+            if bool(getattr(args, "polylora_save_metadata", True)):
+                try:
+                    spec_bytes = Path(spec_path).read_bytes()
+                    spec_hash = hashlib.sha256(spec_bytes).hexdigest()
+                except Exception:
+                    spec_hash = "unknown"
+                meta = {
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    "ckpt_path": str(ckpt_out),
+                    "spec_path": str(spec_path),
+                    "spec_sha256": spec_hash,
+                    "num_samples": len(dataset),
+                    "embed_dim": embed_dim,
+                    "identity_dim": identity_dim,
+                    "encoder": getattr(args, "polylora_encoder", None),
+                    "encoder_type": getattr(args, "polylora_encoder_type", None),
+                    "fusion_mode": getattr(args, "polylora_si_fusion_mode", None),
+                    "head_mode": getattr(args, "polylora_head_mode", None),
+                    "use_identity": use_identity,
+                    "use_perceiver_frontend": use_perceiver,
+                    "use_base_branch": use_base,
+                    "train_config": {
+                        "lr": lr,
+                        "epochs": epochs,
+                        "batch_size": batch_size,
+                        "weight_decay": float(getattr(args, "polylora_train_weight_decay", 0.0)),
+                        "val_split": float(getattr(args, "polylora_train_val_split", 0.1)),
+                        "amp": bool(getattr(args, "polylora_train_amp", True)),
+                        "grad_clip": getattr(args, "polylora_train_grad_clip", 1.0),
+                        "cosine_loss_weight": cosine_w,
+                        "base_loss_weight": float(getattr(args, "polylora_base_loss_weight", 1.0)),
+                        "use_ema": bool(getattr(args, "polylora_use_ema", False)),
+                        "ema_decay": float(getattr(args, "polylora_ema_decay", 0.995)),
+                    },
+                    "stats": stats or {},
+                    "seed": getattr(args, "seed", None),
+                    "torch_version": torch.__version__,
+                }
+                meta_out = getattr(args, "polylora_metadata_out", None) or f"{ckpt_out}.meta.json"
+                Path(meta_out).write_text(json.dumps(meta, indent=2))
+                print(f"[polylora] wrote metadata to {meta_out}")
             return True
         except Exception as e:
             print(f"? Error training hyper-LoRA: {e}")
@@ -457,7 +553,10 @@ class PolyLoRAController:
             )
             use_identity = bool(getattr(args, "polylora_use_identity", False))
             identity_encoder = getattr(args, "polylora_identity_encoder", "antelopev2")
+            use_base = bool(getattr(args, "polylora_dual_lora_heads", False))
             device = "cuda" if non_interactive else self._prompt_value("Device [cuda]: ", default="cuda")
+            device = resolve_device(device)
+            device = resolve_device(device)
             ckpt_path = (
                 getattr(args, "polylora_ckpt", "checkpoints/polylora.pt")
                 if non_interactive
@@ -489,6 +588,7 @@ class PolyLoRAController:
             model = PolyLoRANetwork(
                 embed_dim=embed_dim,
                 target_specs=spec,
+                head_mode=getattr(args, "polylora_head_mode", "trunk"),
                 fusion_mode=getattr(args, "polylora_si_fusion_mode", "style_only"),
                 identity_dim=identity_emb.shape[-1] if identity_emb is not None else None,
                 use_perceiver_frontend=bool(getattr(args, "polylora_use_perceiver_frontend", False)),
@@ -510,12 +610,28 @@ class PolyLoRAController:
             if merge_target:
                 try:
                     model_sd = torch.load(merge_target, map_location="cpu")
-                    ensure_specs_consistent([spec])
-                    for k, v in pred.items():
-                        model_sd[k] = v
-                    merged_path = Path(out_path).with_name(Path(out_path).stem + "_merged.pt")
-                    torch.save(model_sd, merged_path)
-                    print(f"[polylora] merged predicted LoRA into {merged_path}")
+                    missing_pred = [k for k in pred if k not in model_sd]
+                    extra_base = [
+                        k
+                        for k in model_sd
+                        if k.endswith("lora_down.weight") and k not in pred
+                    ]
+                    if missing_pred:
+                        print(
+                            f"[polylora] merge warning: {len(missing_pred)} predicted keys missing in merge target (first 3: {missing_pred[:3]})"
+                        )
+                    if extra_base:
+                        print(
+                            f"[polylora] merge warning: {len(extra_base)} merge target LoRA keys not predicted (first 3: {extra_base[:3]})"
+                        )
+                    if not any(k in model_sd for k in pred):
+                        print("[polylora] merge skipped: no overlapping LoRA keys in merge target.")
+                    else:
+                        for k, v in pred.items():
+                            model_sd[k] = v
+                        merged_path = Path(out_path).with_name(Path(out_path).stem + "_merged.pt")
+                        torch.save(model_sd, merged_path)
+                        print(f"[polylora] merged predicted LoRA into {merged_path}")
                 except Exception as e:
                     print(f"[polylora] merge failed: {e}")
             print(f"[polylora] wrote predicted LoRA to {out_path}")

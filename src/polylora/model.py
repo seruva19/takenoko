@@ -279,7 +279,7 @@ class PolyLoRANetwork(nn.Module):
         if residual is not None and self.use_residual and self.residual_projector is not None:
             if residual.dim() == 1:
                 residual = residual.unsqueeze(0)
-            residual = self.residual_projector(residual) * self.residual_scale
+            residual = self.residual_projector(residual)
             hidden_in = torch.cat([fused, residual], dim=-1)
         hidden = self.norm(hidden_in)
         trunk_out = self.trunk(hidden) if self.trunk is not None else hidden

@@ -13,6 +13,7 @@ from torch.utils.data import DataLoader, random_split
 
 from .model import PolyLoRANetwork, lora_loss, predict_lora_state_dict
 from .spec import LoRATargetSpec
+from .utils import resolve_device
 
 
 @dataclass
@@ -33,6 +34,29 @@ class TrainConfig:
     use_perceiver_frontend: bool = False
     use_base_branch: bool = False
     base_loss_weight: float = 1.0
+    use_ema: bool = False
+    ema_decay: float = 0.995
+
+
+class EmaTracker:
+    def __init__(self, model: nn.Module, decay: float = 0.995):
+        self.decay = decay
+        self.shadow: Dict[str, torch.Tensor] = {}
+        for name, param in model.named_parameters():
+            if not param.requires_grad:
+                continue
+            self.shadow[name] = param.detach().clone()
+
+    def update(self, model: nn.Module) -> None:
+        for name, param in model.named_parameters():
+            if name not in self.shadow:
+                continue
+            self.shadow[name].mul_(self.decay).add_(param.detach(), alpha=1 - self.decay)
+
+    def apply_to(self, model: nn.Module) -> None:
+        for name, param in model.named_parameters():
+            if name in self.shadow:
+                param.data.copy_(self.shadow[name])
 
 
 def _split_dataset(
@@ -150,6 +174,8 @@ def train_polylora(
         except Exception as e:
             print(f"[polylora][sample] skipped due to error: {e}")
 
+    device = resolve_device(device)
+    use_amp = bool(config.amp and device.startswith("cuda"))
     model.to(device)
     train_ds, val_ds = _split_dataset(dataset, config.val_split)
     train_loader = DataLoader(
@@ -162,16 +188,22 @@ def train_polylora(
         )
 
     opt = AdamW(model.parameters(), lr=config.lr, weight_decay=config.weight_decay)
-    scaler = GradScaler(enabled=config.amp)
+    scaler = GradScaler(enabled=use_amp)
     best_val = None
 
+    ema = EmaTracker(model, decay=config.ema_decay) if config.use_ema else None
+
+    last_val_losses: list[float] = []
     for epoch in range(config.epochs):
         model.train()
+        epoch_losses = []
         for embedding, lora, id_emb, base_lora in train_loader:
             embedding = embedding.to(device)
             lora = {k: v.to(device) for k, v in lora.items()}
             id_emb = id_emb.to(device) if id_emb is not None else None
-            with autocast(enabled=config.amp):
+            if base_lora is not None:
+                base_lora = {k: v.to(device) for k, v in base_lora.items()}
+            with autocast(enabled=use_amp):
                 pred = model(
                     embedding,
                     identity=id_emb if config.use_identity else None,
@@ -191,6 +223,9 @@ def train_polylora(
                 nn.utils.clip_grad_norm_(model.parameters(), config.grad_clip)
             scaler.step(opt)
             scaler.update()
+            epoch_losses.append(loss.item())
+            if ema is not None:
+                ema.update(model)
 
         if val_loader:
             model.eval()
@@ -200,6 +235,8 @@ def train_polylora(
                     embedding = embedding.to(device)
                     lora = {k: v.to(device) for k, v in lora.items()}
                     id_emb = id_emb.to(device) if id_emb is not None else None
+                    if base_lora is not None:
+                        base_lora = {k: v.to(device) for k, v in base_lora.items()}
                     pred = model(
                         embedding,
                         identity=id_emb if config.use_identity else None,
@@ -213,7 +250,20 @@ def train_polylora(
                         base_weight=config.base_loss_weight,
                     )
                     val_losses.append(val_loss.item())
-            best_val = min(val_losses) if val_losses else None
+            epoch_val = min(val_losses) if val_losses else None
+            if epoch_val is not None:
+                best_val = epoch_val if best_val is None else min(best_val, epoch_val)
+            last_val_losses = val_losses
         _run_sampling_hook(epoch)
-    stats = {"best_val_loss": best_val} if best_val is not None else {}
+    if ema is not None:
+        ema.apply_to(model)
+    stats: Dict[str, float] = {}
+    if best_val is not None:
+        stats["best_val_loss"] = best_val
+    if epoch_losses:
+        stats["last_train_loss"] = float(sum(epoch_losses) / max(1, len(epoch_losses)))
+    if val_loader and last_val_losses:
+        stats["last_val_loss"] = float(sum(last_val_losses) / max(1, len(last_val_losses)))
+    if ema is not None:
+        stats["ema_applied"] = 1.0
     return stats

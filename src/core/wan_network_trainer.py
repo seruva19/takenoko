@@ -800,6 +800,26 @@ class WanNetworkTrainer:
         if network is None:
             return
 
+        if getattr(args, "enable_polylora", False) and getattr(args, "polylora_live_apply", False):
+            try:
+                from polylora.runtime import predict_lora_from_args, merge_lora_into_network
+
+                pred = predict_lora_from_args(
+                    args,
+                    device=str(accelerator.device),
+                    include_base=bool(getattr(args, "polylora_live_include_base", False)),
+                )
+                merge_lora_into_network(
+                    network,
+                    transformer,
+                    pred,
+                    dtype=torch.float32,
+                    device=accelerator.device,
+                )
+                logger.info("✅ Applied PolyLoRA prediction to network weights.")
+            except Exception as exc:
+                logger.warning(f"PolyLoRA live apply failed: {exc}")
+
         # ========== Verbose Network Information ==========
         if getattr(args, "verbose_network", False):
             self._log_detailed_network_info(network, transformer, args)

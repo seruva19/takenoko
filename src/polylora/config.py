@@ -33,11 +33,22 @@ class PolyLoRAConfig:
     train_lr: float = 1e-3
     train_epochs: int = 5
     train_batch_size: int = 4
+    train_weight_decay: float = 0.0
+    train_val_split: float = 0.1
+    train_amp: bool = True
+    train_grad_clip: Optional[float] = 1.0
     cosine_loss_weight: float = 0.0
+    base_loss_weight: float = 1.0
+    use_ema: bool = False
+    ema_decay: float = 0.995
     sample_every_epochs: int = 0
     sample_command: Optional[str] = None
     sample_dir: str = "polylora_samples"
     sample_merge_target: Optional[str] = None
+    save_metadata: bool = True
+    metadata_out: Optional[str] = None
+    live_apply: bool = False
+    live_include_base: bool = False
 
 
 def parse_polylora_config(raw: Dict[str, Any]) -> PolyLoRAConfig:
@@ -75,11 +86,31 @@ def parse_polylora_config(raw: Dict[str, Any]) -> PolyLoRAConfig:
     cfg.train_lr = float(raw.get("polylora_train_lr", cfg.train_lr))
     cfg.train_epochs = int(raw.get("polylora_train_epochs", cfg.train_epochs))
     cfg.train_batch_size = int(raw.get("polylora_train_batch_size", cfg.train_batch_size))
+    cfg.train_weight_decay = float(raw.get("polylora_train_weight_decay", cfg.train_weight_decay))
+    cfg.train_val_split = float(raw.get("polylora_train_val_split", cfg.train_val_split))
+    cfg.train_amp = bool(raw.get("polylora_train_amp", cfg.train_amp))
+    cfg.train_grad_clip = raw.get("polylora_train_grad_clip", cfg.train_grad_clip)
+    if cfg.train_grad_clip is not None:
+        cfg.train_grad_clip = float(cfg.train_grad_clip)
+        if cfg.train_grad_clip <= 0:
+            cfg.train_grad_clip = None
     cfg.cosine_loss_weight = float(raw.get("polylora_cosine_loss_weight", cfg.cosine_loss_weight))
+    cfg.base_loss_weight = float(raw.get("polylora_base_loss_weight", cfg.base_loss_weight))
+    cfg.use_ema = bool(raw.get("polylora_use_ema", cfg.use_ema))
+    cfg.ema_decay = float(raw.get("polylora_ema_decay", cfg.ema_decay))
     cfg.sample_every_epochs = int(raw.get("polylora_sample_every_epochs", cfg.sample_every_epochs))
     cfg.sample_command = raw.get("polylora_sample_command")
     cfg.sample_dir = raw.get("polylora_sample_dir", cfg.sample_dir)
     cfg.sample_merge_target = raw.get("polylora_sample_merge_target")
+    cfg.save_metadata = bool(raw.get("polylora_save_metadata", cfg.save_metadata))
+    cfg.metadata_out = raw.get("polylora_metadata_out")
+    cfg.live_apply = bool(raw.get("polylora_live_apply", cfg.live_apply))
+    cfg.live_include_base = bool(raw.get("polylora_live_include_base", cfg.live_include_base))
+
+    if cfg.train_val_split < 0 or cfg.train_val_split >= 1:
+        raise ValueError("polylora_train_val_split must be in [0, 1).")
+    if cfg.ema_decay <= 0 or cfg.ema_decay >= 1:
+        raise ValueError("polylora_ema_decay must be in (0, 1).")
 
     if cfg.enable:
         if not isinstance(cfg.ckpt, str) or not isinstance(cfg.spec, str):
@@ -121,9 +152,20 @@ def apply_polylora_to_args(args: Any, raw: Dict[str, Any]) -> Any:
     args.polylora_train_lr = cfg.train_lr
     args.polylora_train_epochs = cfg.train_epochs
     args.polylora_train_batch_size = cfg.train_batch_size
+    args.polylora_train_weight_decay = cfg.train_weight_decay
+    args.polylora_train_val_split = cfg.train_val_split
+    args.polylora_train_amp = cfg.train_amp
+    args.polylora_train_grad_clip = cfg.train_grad_clip
     args.polylora_cosine_loss_weight = cfg.cosine_loss_weight
+    args.polylora_base_loss_weight = cfg.base_loss_weight
+    args.polylora_use_ema = cfg.use_ema
+    args.polylora_ema_decay = cfg.ema_decay
     args.polylora_sample_every_epochs = cfg.sample_every_epochs
     args.polylora_sample_command = cfg.sample_command
     args.polylora_sample_dir = cfg.sample_dir
     args.polylora_sample_merge_target = cfg.sample_merge_target
+    args.polylora_save_metadata = cfg.save_metadata
+    args.polylora_metadata_out = cfg.metadata_out
+    args.polylora_live_apply = cfg.live_apply
+    args.polylora_live_include_base = cfg.live_include_base
     return args
