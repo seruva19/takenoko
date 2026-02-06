@@ -1445,11 +1445,28 @@ class TrainingLossComputer:
             try:
                 if "pixels" in batch:
                     clean_pixels = torch.stack(batch["pixels"], dim=0)
-                    haste_total, haste_attn_loss_value, haste_proj_loss_value = (
-                        haste_helper.compute_weighted_losses(
+                    haste_fp32_distill = bool(
+                        getattr(args, "haste_autocast_fp32_on_distill", False)
+                    )
+                    autocast_ctx: ContextManager[Any] = nullcontext()
+                    loss_device_type = str(loss.device.type)
+                    if haste_fp32_distill and loss_device_type in {
+                        "cuda",
+                        "cpu",
+                        "xpu",
+                        "mps",
+                    }:
+                        autocast_ctx = torch.autocast(
+                            device_type=loss_device_type, enabled=False
+                        )
+                    with autocast_ctx:
+                        (
+                            haste_total,
+                            haste_attn_loss_value,
+                            haste_proj_loss_value,
+                        ) = haste_helper.compute_weighted_losses(
                             clean_pixels, global_step
                         )
-                    )
                     loss = loss + haste_total
                 else:
                     logger.warning(

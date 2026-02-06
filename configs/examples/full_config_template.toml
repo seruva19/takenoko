@@ -2808,6 +2808,36 @@ haste_teacher_attn_layer_offset = 4
 # Limit the number of attention heads used for alignment (0 = use all heads)
 haste_attn_head_limit = 12
 
+# Optional random subset size for attention layer pairs per step.
+# - 0: use the full [haste_attn_layer_start, haste_attn_layer_end) range
+# - >0: sample this many layers uniformly each step (lower VRAM/compute)
+haste_attn_pair_num = 0
+
+# Attention distillation loss type:
+# - "cross_entropy": original HASTE behavior (teacher probs vs student log-probs)
+# - "kl_divergence": teacher->student KL
+# - "mse": probability-space MSE
+# - "l1": probability-space L1
+haste_attn_loss_type = "cross_entropy"
+
+# Enable CAMEO-style cycle-consistency masking for attention distillation.
+# Applies query filtering using teacher argmax forward/backward consistency.
+# Disabled by default for behavior preservation.
+haste_use_cycle_consistency_mask = false
+
+# Pixel-distance threshold for cycle-consistency masking (>= 0).
+# - 0.0: auto threshold (patch_grid_side / 10)
+# - >0: explicit threshold in patch-grid pixel units
+haste_cycle_consistency_pixel_threshold = 0.0
+
+# Minimum required valid query ratio [0,1] for cycle mask application.
+# If the mask is too sparse, HASTE falls back to unmasked attention loss.
+haste_cycle_consistency_min_valid_ratio = 0.05
+
+# Run HASTE distillation calculations with autocast disabled (FP32-preferred).
+# Useful for numerical stability in attention losses; train-time only.
+haste_autocast_fp32_on_distill = false
+
 # Diffusion layer alignment depth for projection loss (0-based block index)
 haste_alignment_depth = 8
 

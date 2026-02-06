@@ -46,6 +46,42 @@ def parse_haste_config(config: Dict[str, Any], args: Any) -> None:
         raise ValueError(
             f"haste_attn_head_limit must be >= 0, got {args.haste_attn_head_limit}"
         )
+    args.haste_attn_pair_num = int(config.get("haste_attn_pair_num", 0))
+    if args.haste_attn_pair_num < 0:
+        raise ValueError(
+            f"haste_attn_pair_num must be >= 0, got {args.haste_attn_pair_num}"
+        )
+    args.haste_attn_loss_type = str(
+        config.get("haste_attn_loss_type", "cross_entropy")
+    ).lower()
+    allowed_haste_attn_loss_types = {"cross_entropy", "kl_divergence", "mse", "l1"}
+    if args.haste_attn_loss_type not in allowed_haste_attn_loss_types:
+        raise ValueError(
+            "haste_attn_loss_type must be one of "
+            f"{sorted(allowed_haste_attn_loss_types)}, got {args.haste_attn_loss_type}"
+        )
+    args.haste_use_cycle_consistency_mask = bool(
+        config.get("haste_use_cycle_consistency_mask", False)
+    )
+    args.haste_cycle_consistency_pixel_threshold = float(
+        config.get("haste_cycle_consistency_pixel_threshold", 0.0)
+    )
+    if args.haste_cycle_consistency_pixel_threshold < 0:
+        raise ValueError(
+            "haste_cycle_consistency_pixel_threshold must be >= 0, got "
+            f"{args.haste_cycle_consistency_pixel_threshold}"
+        )
+    args.haste_cycle_consistency_min_valid_ratio = float(
+        config.get("haste_cycle_consistency_min_valid_ratio", 0.05)
+    )
+    if not 0.0 <= args.haste_cycle_consistency_min_valid_ratio <= 1.0:
+        raise ValueError(
+            "haste_cycle_consistency_min_valid_ratio must be in [0, 1], got "
+            f"{args.haste_cycle_consistency_min_valid_ratio}"
+        )
+    args.haste_autocast_fp32_on_distill = bool(
+        config.get("haste_autocast_fp32_on_distill", False)
+    )
     args.haste_proj_coeff = float(config.get("haste_proj_coeff", 0.5))
     if args.haste_proj_coeff < 0:
         raise ValueError(
@@ -85,8 +121,9 @@ def parse_haste_config(config: Dict[str, Any], args: Any) -> None:
     logger.info(
         "HASTE enabled (encoder=%s, align_depth=%d, attn_layers=%d-%d, "
         "proj_coeff=%.3f, attn_coeff=%.3f, early_stop=%d, "
-        "teacher_offset=%d, head_limit=%d, "
-        "teacher_attention=%s)",
+        "teacher_offset=%d, head_limit=%d, pair_num=%d, attn_loss=%s, "
+        "teacher_attention=%s, cycle_mask=%s, cycle_threshold=%.3f, "
+        "cycle_min_ratio=%.3f, fp32_distill=%s)",
         args.haste_encoder_name,
         args.haste_alignment_depth,
         args.haste_attn_layer_start,
@@ -96,5 +133,11 @@ def parse_haste_config(config: Dict[str, Any], args: Any) -> None:
         args.haste_early_stop_step,
         args.haste_teacher_attn_layer_offset,
         args.haste_attn_head_limit,
+        args.haste_attn_pair_num,
+        args.haste_attn_loss_type,
         args.haste_use_teacher_attention,
+        args.haste_use_cycle_consistency_mask,
+        args.haste_cycle_consistency_pixel_threshold,
+        args.haste_cycle_consistency_min_valid_ratio,
+        args.haste_autocast_fp32_on_distill,
     )

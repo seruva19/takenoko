@@ -1,5 +1,6 @@
 import logging
 import math
+import random
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import torch
@@ -44,6 +45,22 @@ class HasteHelper(nn.Module):
             getattr(args, "haste_teacher_attn_layer_offset", 4)
         )
         self.attn_head_limit = int(getattr(args, "haste_attn_head_limit", 12))
+        self.attn_pair_num = int(getattr(args, "haste_attn_pair_num", 0))
+        self.attn_loss_type = str(
+            getattr(args, "haste_attn_loss_type", "cross_entropy")
+        ).lower()
+        self.use_cycle_consistency_mask = bool(
+            getattr(args, "haste_use_cycle_consistency_mask", False)
+        )
+        self.cycle_consistency_pixel_threshold = float(
+            getattr(args, "haste_cycle_consistency_pixel_threshold", 0.0)
+        )
+        self.cycle_consistency_min_valid_ratio = float(
+            getattr(args, "haste_cycle_consistency_min_valid_ratio", 0.05)
+        )
+        self.distill_force_fp32 = bool(
+            getattr(args, "haste_autocast_fp32_on_distill", False)
+        )
 
         self.encoder_manager = EncoderManager(self.device)
         self.encoders, self.encoder_types, _ = self.encoder_manager.load_encoders(
@@ -181,6 +198,83 @@ class HasteHelper(nn.Module):
         normalized = F.normalize(features, dim=-1)
         attn = torch.matmul(normalized, normalized.transpose(-2, -1))
         return F.softmax(attn, dim=-1)
+
+    def _distill_dtype_tensor(self, tensor: torch.Tensor) -> torch.Tensor:
+        if self.distill_force_fp32:
+            return tensor.float()
+        return tensor
+
+    def _compute_cycle_consistency_mask(
+        self, teacher_logits: torch.Tensor
+    ) -> Optional[torch.Tensor]:
+        if teacher_logits.dim() != 4:
+            return None
+        bsz, heads, query_tokens, key_tokens = teacher_logits.shape
+        if query_tokens != key_tokens or query_tokens <= 1:
+            return None
+        side = int(math.isqrt(query_tokens))
+        if side * side != query_tokens:
+            return None
+
+        threshold = float(self.cycle_consistency_pixel_threshold)
+        if threshold <= 0:
+            threshold = max(1.0, side / 10.0)
+
+        forward_idx = teacher_logits.argmax(dim=-1)  # [B, H, Q]
+        backward_idx = teacher_logits.argmax(dim=-2)  # [B, H, K]
+        reverse_idx = torch.gather(backward_idx, dim=-1, index=forward_idx)
+
+        original_idx = torch.arange(
+            query_tokens, device=teacher_logits.device, dtype=reverse_idx.dtype
+        ).view(1, 1, query_tokens)
+        x1 = original_idx // side
+        y1 = original_idx % side
+        x2 = reverse_idx // side
+        y2 = reverse_idx % side
+        distance = torch.sqrt(((x1 - x2).float() ** 2) + ((y1 - y2).float() ** 2))
+        return distance < threshold
+
+    def _compute_attention_distill_loss(
+        self, student_logits: torch.Tensor, teacher_logits: torch.Tensor
+    ) -> torch.Tensor:
+        eps = 1e-8
+        student_logits = self._distill_dtype_tensor(student_logits)
+        teacher_logits = self._distill_dtype_tensor(teacher_logits)
+
+        teacher_probs = F.softmax(teacher_logits, dim=-1)
+        student_log_probs = F.log_softmax(student_logits, dim=-1)
+        student_probs = student_log_probs.exp()
+
+        if self.use_cycle_consistency_mask:
+            mask = self._compute_cycle_consistency_mask(teacher_logits)
+            if mask is not None:
+                valid_ratio = float(mask.float().mean().item())
+                if valid_ratio >= self.cycle_consistency_min_valid_ratio and bool(
+                    mask.any().item()
+                ):
+                    expanded_mask = mask.unsqueeze(-1).expand_as(teacher_probs)
+                    teacher_probs = teacher_probs[expanded_mask].reshape(
+                        -1, teacher_probs.shape[-1]
+                    )
+                    student_log_probs = student_log_probs[expanded_mask].reshape(
+                        -1, student_log_probs.shape[-1]
+                    )
+                    student_probs = student_probs[expanded_mask].reshape(
+                        -1, student_probs.shape[-1]
+                    )
+
+        if self.attn_loss_type == "cross_entropy":
+            return -(teacher_probs * student_log_probs).sum(dim=-1).mean()
+        if self.attn_loss_type == "kl_divergence":
+            teacher_log_probs = torch.log(teacher_probs.clamp_min(eps))
+            return (teacher_probs * (teacher_log_probs - student_log_probs)).sum(
+                dim=-1
+            ).mean()
+        if self.attn_loss_type == "mse":
+            return F.mse_loss(student_probs, teacher_probs, reduction="mean")
+        if self.attn_loss_type == "l1":
+            return F.l1_loss(student_probs, teacher_probs, reduction="mean")
+        raise ValueError(f"Unsupported HASTE attention loss type: {self.attn_loss_type}")
 
     def _attach_student_attn_hook(
         self, layer_idx: int, block: nn.Module
@@ -422,7 +516,9 @@ class HasteHelper(nn.Module):
             )
         proj_loss = proj_loss / max(1, len(projected_list))
 
-        attn_layers = range(self.attn_layer_start, self.attn_layer_end)
+        attn_layers = list(range(self.attn_layer_start, self.attn_layer_end))
+        if 0 < self.attn_pair_num < len(attn_layers):
+            attn_layers = sorted(random.sample(attn_layers, self.attn_pair_num))
         attn_loss = torch.tensor(0.0, device=clean_pixels.device)
         used_layers = 0
         for layer_idx in attn_layers:
@@ -442,9 +538,11 @@ class HasteHelper(nn.Module):
                     )
                 teacher_attn = self._compute_attention_map(teacher_tokens)
                 student_attn = self._compute_attention_map(student_tokens)
-                attn_loss = attn_loss + _mean_over_tokens(
-                    -(teacher_attn * torch.log(student_attn + 1e-8)).sum(dim=-1)
+                fallback_attn_loss = self._compute_attention_distill_loss(
+                    student_logits=torch.log(student_attn.clamp_min(1e-8)).unsqueeze(1),
+                    teacher_logits=torch.log(teacher_attn.clamp_min(1e-8)).unsqueeze(1),
                 )
+                attn_loss = attn_loss + fallback_attn_loss
                 used_layers += 1
                 continue
 
@@ -465,11 +563,10 @@ class HasteHelper(nn.Module):
                     self._warned_missing_attn = True
                 continue
 
-            teacher_probs = F.softmax(teacher_logits, dim=-1)
-            student_log_probs = F.log_softmax(student_logits, dim=-1)
-            attn_loss = attn_loss + _mean_over_tokens(
-                -(teacher_probs * student_log_probs).sum(dim=-1)
+            layer_attn_loss = self._compute_attention_distill_loss(
+                student_logits=student_logits, teacher_logits=teacher_logits
             )
+            attn_loss = attn_loss + layer_attn_loss
             used_layers += 1
 
         attn_count = max(1, used_layers)
