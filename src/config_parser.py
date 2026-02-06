@@ -33,6 +33,9 @@ from configs.video_consistency_distance import (
 )
 from configs.self_resampling_config import apply_self_resampling_config
 from configs.videorepa_config import apply_videorepa_config
+from configs.structure_from_tracking_config import (
+    apply_structure_from_tracking_config,
+)
 
 
 def create_args_from_config(
@@ -1554,6 +1557,9 @@ def create_args_from_config(
 
     # VideoREPA (Token-Relation Distillation) settings
     apply_videorepa_config(args, config, logger)
+
+    # Structure-From-Tracking (SAM2 LGF-KL distillation) settings
+    apply_structure_from_tracking_config(args, config, logger)
 
     # SemanticGen LoRA settings
     parse_semanticgen_config(args, config, logger)

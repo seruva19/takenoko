@@ -1949,6 +1949,260 @@ videorepa_detach_teacher = true
 videorepa_encoder_chunk_size = 0
 
 # =============================================================================
+# ⚠️ STRUCTURE FROM TRACKING (SAM2 LGF-KL DISTILLATION) SETTINGS
+# =============================================================================
+
+# Enable Structure-From-Tracking distillation.
+# Distills structure-preserving motion priors from SAM2 teacher features into
+# DiT hidden states using Local Gram Flow + KL alignment. This is training-only
+# and does not modify downstream LoRA inference graphs.
+# Compatibility:
+# - Can be combined with REPA/iREPA/VideoREPA/SARA/MOALIGN/CREPA.
+# - Combined modes increase memory/time and stack multiple alignment losses.
+# - Requires pixel batches (loaded automatically when enabled).
+enable_structure_from_tracking = false
+
+# Teacher type. Currently supported:
+# - "sam2": SAM2 vision encoder teacher loaded through transformers Sam2Model.
+# - "sam3": SAM3 vision encoder teacher loaded through transformers Sam3Model.
+sft_teacher_type = "sam2"
+
+# Hugging Face model id used when sft_teacher_checkpoint is empty.
+# Recommended defaults:
+# - "facebook/sam2-hiera-small"
+# - "facebook/sam2-hiera-base-plus"
+# - "facebook/sam2-hiera-large"
+# - For SAM3 (if available in your transformers version), set an appropriate
+#   SAM3 model id supported by that release.
+sft_teacher_model_id = "facebook/sam2-hiera-large"
+
+# Optional local checkpoint/model directory for SAM2 teacher.
+# If non-empty, this takes precedence over sft_teacher_model_id.
+# Example:
+# sft_teacher_checkpoint = "models/sam2-hiera-large"
+sft_teacher_checkpoint = ""
+
+# Teacher input resize (square pixels). Must be > 0.
+# Higher values increase detail and VRAM cost.
+sft_teacher_image_size = 512
+
+# Frame chunk size for teacher forward passes over (batch * frames). Must be > 0.
+# Lower values reduce VRAM at the cost of throughput.
+sft_teacher_chunk_size = 8
+
+# Optional cap on teacher frames per sample.
+# - 0: use all frames
+# - >0: uniformly subsample to this many frames before teacher extraction
+sft_teacher_max_frames = 0
+
+# Teacher autocast dtype:
+# - "float16", "bfloat16", "float32"
+sft_teacher_dtype = "float16"
+
+# Strict paper-faithful mode (default off for behavior preservation).
+# When true, SFT enforces stricter settings and fail-fast behavior instead of
+# permissive fallbacks (tracker backend, mask prompting, KL+LGF setup).
+sft_paper_strict_mode = false
+
+# Teacher feature backend:
+# - "vision_encoder": SAM2 vision-encoder tokens + optional causal memory (default)
+# - "tracker_memory": stronger recurrent memory path for closer paper-style behavior
+sft_teacher_backend = "vision_encoder"
+
+# Tracker-memory backend options (used only when sft_teacher_backend="tracker_memory" and sft_teacher_type="sam2").
+# These target SAM2 package checkpoints/config used for recurrent-memory extraction.
+sft_tracker_memory_sam2_config = "sam2_hiera_l.yaml"
+
+# Local SAM2 checkpoint file used by tracker-memory backend.
+# Required when sft_teacher_backend="tracker_memory" unless
+# sft_tracker_memory_download_checkpoint=true.
+# Example:
+# sft_tracker_memory_sam2_checkpoint = "checkpoints/sam2_hiera_large.pt"
+sft_tracker_memory_sam2_checkpoint = "checkpoints/sam2_hiera_large.pt"
+
+# If true and checkpoint is missing, attempt to download SAM2 tracker weights.
+# If false, initialization fails when checkpoint path is missing/invalid.
+sft_tracker_memory_download_checkpoint = false
+
+# If true, fail fast when tracker-memory backend cannot initialize.
+# If false, fallback to vision_encoder backend.
+sft_tracker_memory_strict = false
+
+# Build causal teacher-memory features with EMA aggregation across frames.
+# Mirrors paper intent to transfer tracker memory-style temporal priors instead of
+# per-frame independent features.
+sft_use_causal_memory = true
+
+# EMA decay for causal teacher-memory updates in [0, 1).
+# Higher values emphasize longer-range temporal context.
+sft_teacher_memory_decay = 0.9
+
+# Enable mask-prompted teacher extraction when masks are available in the dataset.
+# If no masks are present for a sample, SFT falls back to standard frame extraction.
+sft_use_mask_prompting = false
+
+# Mask prompt blend strength in [0, 1]:
+# - 0.0: no masking effect
+# - 1.0: full foreground-only emphasis
+sft_mask_prompt_strength = 0.85
+
+# Optional blur kernel (odd integer > 0) applied to mask prompts before blending.
+sft_mask_prompt_blur_kernel = 5
+
+# Enable optional GroundingDINO prompt-derived masks when dataset masks are missing.
+# This approximates paper-style object-box prompting from text/caption context.
+sft_use_groundingdino_prompts = false
+
+# GroundingDINO checkpoint/model identifier (transformers-compatible).
+sft_groundingdino_model_id = "IDEA-Research/grounding-dino-base"
+
+# GroundingDINO thresholds in [0, 1].
+sft_groundingdino_box_threshold = 0.35
+
+# Text-score threshold in [0, 1] for GroundingDINO token/prompt matching.
+# Lower values increase recall (more boxes, more noise), higher values are stricter.
+sft_groundingdino_text_threshold = 0.25
+
+# Prompt source:
+# - "caption": use dataset caption text only
+# - "item_key": use item filename/key text only
+# - "caption_or_item_key": caption fallback to item key
+sft_groundingdino_prompt_source = "caption_or_item_key"
+
+# Detect on both first and last frame, then union boxes.
+sft_groundingdino_apply_to_last_frame = true
+
+# Optional: refine GroundingDINO boxes into SAM2 segmentation masks.
+# Requires `sam2` Python package and valid SAM2 config/checkpoint paths.
+sft_groundingdino_use_sam2_refine = false
+
+# SAM2 config identifier/path used for GroundingDINO -> SAM2 mask refinement.
+# Used only when sft_groundingdino_use_sam2_refine=true.
+sft_groundingdino_sam2_config = "sam2_hiera_l.yaml"
+
+# SAM2 checkpoint path used for GroundingDINO -> SAM2 mask refinement.
+# Must be non-empty when sft_groundingdino_use_sam2_refine=true.
+sft_groundingdino_sam2_checkpoint = "checkpoints/sam2_hiera_large.pt"
+
+# If true and checkpoint is missing, attempt Hugging Face download.
+sft_groundingdino_download_sam2_checkpoint = false
+
+# Teacher feature cache mode:
+# - "off": always run online teacher extraction
+# - "read": load precomputed teacher features only
+# - "write": always recompute and overwrite cache
+# - "read_write": load when present, otherwise compute+write
+sft_teacher_cache_mode = "off"
+
+# Directory for SFT teacher feature cache files when cache mode is not "off".
+# Example:
+# sft_teacher_cache_dir = "cache/sft_teacher_features"
+sft_teacher_cache_dir = ""
+
+# Offline SFT teacher-cache precompute settings.
+sft_teacher_cache_num_workers = 4
+
+# Number of samples processed per cache write step. Must be > 0.
+# Increase for throughput if VRAM allows; keep at 1 for lowest memory.
+sft_teacher_cache_batch_size = 1
+
+# Skip writing cache files that already exist.
+# - true: reuse existing files (fast incremental updates)
+# - false: recompute and overwrite existing entries
+sft_teacher_cache_skip_existing = true
+
+# Purge existing `*_sft_teacher.safetensors` files in cache dir before caching.
+# Useful for clean rebuilds; usually combined with skip_existing=false.
+sft_teacher_cache_purge = false
+
+# Optional frame-start stride filter for offline precompute.
+# - 1: process all clips
+# - 20: paper-style "every 20 frames" cache sampling
+sft_teacher_cache_frame_start_stride = 1
+
+# Auto-run SFT teacher cache precompute before training starts.
+# This keeps caching orchestration out of the entrypoint and runs as trainer preflight.
+sft_teacher_cache_before_training = false
+
+# Overwrite behavior for pre-train precompute:
+# - false: keep existing cache files and skip recomputation for hits
+# - true: purge existing teacher cache files and regenerate all entries
+sft_teacher_cache_overwrite_existing = false
+
+# Primary transformer block index (0-based) for SFT alignment.
+# Paper default reports best results near a deep block (e.g. 25th in their setup).
+sft_alignment_depth = 25
+
+# Optional multi-layer alignment depths (0-based). If set, overrides
+# sft_alignment_depth. Example:
+# sft_alignment_depths = [19, 25]
+
+# Global SFT loss weight (lambda). Must be > 0 when enabled.
+sft_loss_lambda = 0.5
+
+# LGF alignment loss type:
+# - "kl": temperature-softmax distribution matching (paper default)
+# - "l2": direct similarity regression (ablation mode)
+sft_loss_mode = "kl"
+
+# Teacher fusion strategy:
+# - "lgf": fuse forward/backward in LGF similarity space (paper default)
+# - "feature": fuse tokens before LGF (ablation mode)
+sft_fusion_mode = "lgf"
+
+# LGF neighborhood kernel size (odd integer >= 3). Paper uses 7x7.
+sft_lgf_kernel_size = 7
+
+# Temperature for LGF softmax distributions used in KL matching. Must be > 0.
+sft_lgf_temperature = 0.1
+
+# Fusion weight for forward/backward teacher LGF maps in [0, 1].
+# 1.0 = forward only, 0.5 = balanced fusion.
+sft_teacher_fusion_weight = 0.5
+
+# Temporal interpolation factor hint for source feature alignment (>= 1).
+# Keep at 4 for paper-style temporal alignment behavior.
+sft_temporal_interp_factor = 4
+
+# Temporal skip-mixer kernel (odd integer > 0) for interpolation branch.
+# Paper-style temporal skip path uses a 3-step kernel.
+sft_temporal_kernel_size = 3
+
+# Use backward teacher pass (reverse video order and remap back) before fusion.
+sft_enable_backward_teacher = true
+
+# Detach teacher features before LGF loss (recommended true for stability).
+sft_detach_teacher = true
+
+# Hidden width of trainable diffusion-side projector MLP. Must be > 0.
+# Legacy compatibility key for older configs; prefer sft_projector_dims below.
+sft_projector_hidden_dim = 2048
+
+# Apply GroupNorm in projector MLP blocks for stable token-feature alignment.
+sft_projector_group_norm = true
+
+# GroupNorm group count for projector hidden channels. Must be > 0.
+sft_projector_gn_groups = 32
+
+# Three-layer projector widths [d1, d2, d3]. Must contain exactly 3 positive ints.
+# Paper-style setting for 768-channel DiT features is [512, 256, 256].
+sft_projector_dims = [512, 256, 256]
+
+# Optional cap on per-frame spatial token count after interpolation.
+# -1 disables token capping.
+sft_max_spatial_tokens = -1
+
+# Token-grid alignment policy:
+# - true: interpolate mismatched token grids
+# - false: truncate to minimum token count
+sft_spatial_align = true
+
+# Temporal alignment policy:
+# - true: interpolate source/teacher frame counts to match
+# - false: truncate to shared frame count
+sft_temporal_align = true
+
+# =============================================================================
 # ⚠️ MOALIGN (MOTION-CENTRIC RELATIONAL ALIGNMENT) SETTINGS
 # =============================================================================
 #
@@ -5524,3 +5778,4 @@ target_frames = [1, 25]
 
 # Extract each target_frame sequence once
 frame_sample = 1
+

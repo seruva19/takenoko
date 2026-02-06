@@ -1147,6 +1147,7 @@ class TrainingCore:
         is_main_process: bool = False,
         val_epoch_step_sync: Optional[Tuple[Any, Any]] = None,
         repa_helper: Optional[Any] = None,
+        sft_alignment_helper: Optional[Any] = None,
         moalign_helper: Optional[Any] = None,
         semfeat_helper: Optional[Any] = None,
         reg_helper: Optional[Any] = None,
@@ -2119,6 +2120,7 @@ class TrainingCore:
                                 repa_helper=(
                                     repa_helper if sara_helper is None else None
                                 ),
+                                sft_alignment_helper=sft_alignment_helper,
                                 moalign_helper=moalign_helper,
                                 semfeat_helper=semfeat_helper,
                                 bfm_conditioning_helper=self.bfm_conditioning_helper,
@@ -2435,6 +2437,7 @@ class TrainingCore:
                                         vae=vae,
                                         target_loi_context=None,
                                         repa_helper=repa_helper,
+                                        sft_alignment_helper=sft_alignment_helper,
                                         moalign_helper=moalign_helper,
                                         semfeat_helper=semfeat_helper,
                                         reg_helper=reg_helper,
@@ -2487,6 +2490,7 @@ class TrainingCore:
                             vae=vae,
                             target_loi_context=None,
                             repa_helper=repa_helper,
+                            sft_alignment_helper=sft_alignment_helper,
                             moalign_helper=moalign_helper,
                             semfeat_helper=semfeat_helper,
                             reg_helper=reg_helper,

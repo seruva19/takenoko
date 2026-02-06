@@ -8,6 +8,7 @@ the previous inlined implementation in `core/training_core.py`.
 from __future__ import annotations
 
 from contextlib import nullcontext
+import inspect
 import math
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple, Callable, List, ContextManager, cast
@@ -66,6 +67,31 @@ def _get_loss_kwargs(args):
         "stepped_step_size": getattr(args, "stepped_step_size", 50),
         "stepped_multiplier": getattr(args, "stepped_multiplier", 10.0),
     }
+
+
+def _repa_helper_accepts_item_info(helper: Any) -> bool:
+    """Return True when helper.get_repa_loss supports item_info or **kwargs."""
+    cached = getattr(helper, "_accepts_item_info_kwarg", None)
+    if cached is not None:
+        return bool(cached)
+
+    accepts_item_info = False
+    get_repa_loss = getattr(helper, "get_repa_loss", None)
+    if callable(get_repa_loss):
+        try:
+            sig = inspect.signature(get_repa_loss)
+            params = sig.parameters.values()
+            accepts_item_info = "item_info" in sig.parameters or any(
+                p.kind == inspect.Parameter.VAR_KEYWORD for p in params
+            )
+        except (TypeError, ValueError):
+            accepts_item_info = False
+
+    try:
+        setattr(helper, "_accepts_item_info_kwarg", accepts_item_info)
+    except Exception:
+        pass
+    return accepts_item_info
 
 
 @dataclass
@@ -499,6 +525,7 @@ class TrainingLossComputer:
         network: Optional[Any] = None,
         control_signal_processor: Optional[Any] = None,
         repa_helper: Optional[Any] = None,
+        sft_alignment_helper: Optional[Any] = None,
         moalign_helper: Optional[Any] = None,
         semfeat_helper: Optional[Any] = None,
         bfm_conditioning_helper: Optional[Any] = None,
@@ -1290,8 +1317,15 @@ class TrainingLossComputer:
                             # For safety, we leave it; repa_helper will likely global pool.
                             pass
 
-                    # Pass full (resampled) tensor; repa_helper handles slicing or CREPA logic
-                    repa_val = repa_helper.get_repa_loss(clean_pixels, vae)
+                    # Pass full (resampled) tensor; add item_info only when supported.
+                    if _repa_helper_accepts_item_info(repa_helper):
+                        repa_val = repa_helper.get_repa_loss(
+                            clean_pixels,
+                            vae,
+                            item_info=batch.get("item_info"),
+                        )
+                    else:
+                        repa_val = repa_helper.get_repa_loss(clean_pixels, vae)
                     loss = loss + repa_val
                     repa_loss_value = repa_val.detach()
                 else:
@@ -1302,6 +1336,51 @@ class TrainingLossComputer:
                     )
             except Exception as e:
                 helper_name = type(repa_helper).__name__
+                logger.warning("%s loss computation failed: %s", helper_name, e)
+        if sft_alignment_helper is not None:
+            try:
+                if "pixels" in batch:
+                    clean_pixels = torch.stack(
+                        batch["pixels"], dim=0
+                    )  # (B, C, F, H, W) or (B, C, H, W)
+
+                    if clean_pixels.dim() == 5:
+                        lat_f = latents.shape[2]
+                        pt = self.config.patch_size[0]
+                        target_f = max(1, lat_f // pt)
+                        pix_f = clean_pixels.shape[2]
+
+                        if pix_f > target_f:
+                            indices = (
+                                torch.linspace(0, pix_f - 1, target_f)
+                                .long()
+                                .to(clean_pixels.device)
+                            )
+                            clean_pixels = clean_pixels.index_select(2, indices)
+
+                    if _repa_helper_accepts_item_info(sft_alignment_helper):
+                        sft_alignment_val = sft_alignment_helper.get_repa_loss(
+                            clean_pixels,
+                            vae,
+                            item_info=batch.get("item_info"),
+                        )
+                    else:
+                        sft_alignment_val = sft_alignment_helper.get_repa_loss(
+                            clean_pixels, vae
+                        )
+                    loss = loss + sft_alignment_val
+                    if repa_loss_value is None:
+                        repa_loss_value = sft_alignment_val.detach()
+                    else:
+                        repa_loss_value = repa_loss_value + sft_alignment_val.detach()
+                else:
+                    helper_name = type(sft_alignment_helper).__name__
+                    logger.warning(
+                        "%s enabled, but no 'pixels' found in batch. Skipping alignment loss.",
+                        helper_name,
+                    )
+            except Exception as e:
+                helper_name = type(sft_alignment_helper).__name__
                 logger.warning("%s loss computation failed: %s", helper_name, e)
 
         # ---- Optional BFM SemFeat Loss ----

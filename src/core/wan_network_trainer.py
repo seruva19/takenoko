@@ -51,6 +51,10 @@ from enhancements.semanticgen.trainer_integration import (
     setup_semantic_training_integration,
     teardown_semantic_training_integration,
 )
+from enhancements.structure_from_tracking.trainer_integration import (
+    maybe_add_structure_from_tracking_params,
+    maybe_precompute_sft_teacher_cache_before_training,
+)
 from enhancements.blockwise_flow_matching.conditioning import (
     BFMConditioningHelper,
     infer_text_context_dim,
@@ -438,6 +442,9 @@ class WanNetworkTrainer:
                     "🚨 FP16 accumulation not available, requires at least PyTorch 2.7.0"
                 )
 
+        if not args.show_timesteps:
+            maybe_precompute_sft_teacher_cache_before_training(args)
+
         # Handle model-specific arguments
         self.handle_model_specific_args(args)
 
@@ -481,6 +488,7 @@ class WanNetworkTrainer:
             or getattr(args, "sara_enabled", False)
             or getattr(args, "enable_repa", False)
             or getattr(args, "enable_videorepa", False)
+            or getattr(args, "enable_structure_from_tracking", False)
             or getattr(args, "enable_moalign", False)
             or getattr(args, "enable_semanticgen_lora", False)
             or getattr(args, "semantic_align_enabled", False)
@@ -552,6 +560,7 @@ class WanNetworkTrainer:
                 or getattr(args, "sara_enabled", False)
                 or getattr(args, "enable_repa", False)
                 or getattr(args, "enable_videorepa", False)
+                or getattr(args, "enable_structure_from_tracking", False)
                 or getattr(args, "enable_moalign", False)
                 or getattr(args, "load_val_pixels", False)
             )
@@ -963,6 +972,29 @@ class WanNetworkTrainer:
             except Exception as exc:
                 logger.warning(f"VideoREPA setup failed: {exc}")
                 videorepa_helper = None
+
+        structure_from_tracking_helper = None
+        if getattr(args, "enable_structure_from_tracking", False):
+            try:
+                from enhancements.structure_from_tracking.sft_helper import (
+                    StructureFromTrackingHelper,
+                )
+
+                logger.info(
+                    "Structure-From-Tracking is enabled. Initializing helper module."
+                )
+                structure_from_tracking_helper = StructureFromTrackingHelper(
+                    transformer, args
+                )
+                maybe_add_structure_from_tracking_params(
+                    trainable_params,
+                    lr_descriptions,
+                    structure_from_tracking_helper,
+                    args,
+                )
+            except Exception as exc:
+                logger.warning(f"Structure-From-Tracking setup failed: {exc}")
+                structure_from_tracking_helper = None
 
         bfm_conditioning_helper = None
         if getattr(args, "bfm_semfeat_conditioning_enabled", False) or getattr(
@@ -1609,6 +1641,7 @@ class WanNetworkTrainer:
             # ========== SARA / REPA / CREPA / REG Helper Setup ==========
             sara_helper = None
             repa_helper = None
+            sft_alignment_helper = None
             reg_helper = None
             layer_sync_helper = None
             haste_helper = None
@@ -1699,6 +1732,17 @@ class WanNetworkTrainer:
                         args.crepa_enabled = original_crepa_enabled
                 repa_helper.setup_hooks()
                 repa_helper = accelerator.prepare(repa_helper)
+            if structure_from_tracking_helper is not None:
+                try:
+                    logger.info(
+                        "Structure-From-Tracking is enabled. Setting up the LGF-KL helper."
+                    )
+                    sft_alignment_helper = structure_from_tracking_helper
+                    sft_alignment_helper.setup_hooks()
+                    sft_alignment_helper = accelerator.prepare(sft_alignment_helper)
+                except Exception as exc:
+                    logger.warning(f"Structure-From-Tracking hook setup failed: {exc}")
+                    sft_alignment_helper = None
             if getattr(args, "enable_layer_sync", False):
                 try:
                     from enhancements.layer_sync.helper import LayerSyncHelper
@@ -1831,6 +1875,7 @@ class WanNetworkTrainer:
                 is_main_process=is_main_process,
                 val_epoch_step_sync=val_epoch_step_sync,
                 repa_helper=repa_helper if sara_helper is None else None,
+                sft_alignment_helper=sft_alignment_helper,
                 moalign_helper=moalign_helper,
                 semfeat_helper=semfeat_helper,
                 reg_helper=reg_helper,
@@ -1848,6 +1893,8 @@ class WanNetworkTrainer:
             sara_helper.remove_hooks()
         if "repa_helper" in locals() and repa_helper is not None:
             repa_helper.remove_hooks()
+        if "sft_alignment_helper" in locals() and sft_alignment_helper is not None:
+            sft_alignment_helper.remove_hooks()
         if "moalign_helper" in locals() and moalign_helper is not None:
             moalign_helper.remove_hooks()
         if "reg_helper" in locals() and reg_helper is not None:
