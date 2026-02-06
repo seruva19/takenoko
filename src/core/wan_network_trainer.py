@@ -740,6 +740,25 @@ class WanNetworkTrainer:
         transformer.eval()
         transformer.requires_grad_(False)
 
+        # Configure self-resampling attention routing if requested
+        if bool(getattr(args, "enable_self_resampling_attention_routing", False)):
+            cfg = getattr(args, "self_resampling_attention_routing_config", None)
+            if isinstance(cfg, dict) and hasattr(
+                transformer, "set_self_resampling_history_routing"
+            ):
+                try:
+                    transformer.set_self_resampling_history_routing(cfg)  # type: ignore[attr-defined]
+                    logger.info(
+                        "Self-resampling token-wise attention routing enabled (backend=%s, top_k=%s).",
+                        cfg.get("backend", "exact"),
+                        cfg.get("top_k_frames"),
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to enable self-resampling attention routing: %s",
+                        exc,
+                    )
+
         if self.eqm_mode_config and self.eqm_mode_config.energy_head:
             register_energy_head_metadata(
                 transformer, mode=self.eqm_mode_config.energy_mode

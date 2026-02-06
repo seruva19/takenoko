@@ -43,6 +43,7 @@ from enhancements.memflow_guidance.training_integration import (
 from enhancements.semanticgen.training_integration import SemanticGenTrainingState
 
 from enhancements.error_recycling.error_recycling_helper import ErrorRecyclingHelper
+from enhancements.self_resampling.self_resampling_helper import SelfResamplingHelper
 
 
 from enhancements.differential_guidance.training_integration import (
@@ -73,6 +74,7 @@ from transition.pipeline import (
     finalize_batch_if_enabled,
     update_teacher_if_needed,
 )
+from core.self_resampling_runtime import maybe_apply_self_resampling
 from core.training_inputs import prepare_standard_training_inputs
 from energy_based.eqm_mode.training_helper import EqMTrainingHelper
 
@@ -304,6 +306,10 @@ class TrainingCore:
 
         # Error recycling helper (optional, training-only)
         self.error_recycling_helper: Optional[ErrorRecyclingHelper] = None
+        # Self-resampling helper (optional, training-only)
+        self.self_resampling_helper: Optional[SelfResamplingHelper] = None
+        self._warned_self_resampling_eqm = False
+        self._warned_self_resampling_fast_rollout_fallback = False
         self._last_mixflow_stats: Optional[Dict[str, float]] = None
 
         # Weight EMA tracking (initialized when enabled)
@@ -1229,6 +1235,27 @@ class TrainingCore:
                     logger.warning("Error recycling setup failed: %s", exc)
                     self.error_recycling_helper = None
 
+        # Initialize self-resampling helper (train-only, LoRA-gated)
+        self.self_resampling_helper = None
+        if bool(getattr(args, "enable_self_resampling", False)):
+            network_module = str(getattr(args, "network_module", "")).lower()
+            train_arch = str(getattr(args, "train_architecture", "lora")).lower()
+            if "lora" not in network_module and train_arch != "lora":
+                logger.warning(
+                    "Self-resampling requires LoRA training; disabling for network_module=%s.",
+                    network_module or "<unset>",
+                )
+            else:
+                try:
+                    self.self_resampling_helper = SelfResamplingHelper(
+                        args, noise_scheduler
+                    )
+                    self.self_resampling_helper.setup_hooks()
+                    logger.info("Self-resampling enabled for this run.")
+                except Exception as exc:
+                    logger.warning("Self-resampling setup failed: %s", exc)
+                    self.self_resampling_helper = None
+
         # Calculate starting epoch when resuming from checkpoint
         if global_step > 0:
             # We're resuming from a checkpoint - calculate which epoch we should be in
@@ -1627,7 +1654,13 @@ class TrainingCore:
                             need_intermediate = prepared_transition.need_directional
 
                     error_recycling_state = None
+                    self_resampling_state = None
                     latents_for_dit = latents
+                    rollout_transformer = (
+                        dual_model_manager.active_model
+                        if dual_model_manager is not None
+                        else transformer
+                    )
                     if (
                         self.error_recycling_helper is not None
                         and self.error_recycling_helper.enabled
@@ -1662,6 +1695,58 @@ class TrainingCore:
                                     "Error recycling skipped: could not rebuild noisy inputs for timesteps shape %s.",
                                     tuple(timesteps.shape),
                                 )
+
+                    def _predict_self_resampling_with_full_dit(
+                        rollout_input: torch.Tensor,
+                        rollout_timesteps: torch.Tensor,
+                    ) -> Any:
+                        with torch.no_grad():
+                            return self.call_dit(
+                                args,
+                                accelerator,
+                                rollout_transformer,
+                                latents_for_dit,
+                                batch,
+                                noise,
+                                rollout_input,
+                                rollout_timesteps,
+                                network_dtype,
+                                control_signal_processor,
+                                controlnet,
+                                global_step=global_step,
+                                reg_cls_token=None,
+                            )
+
+                    (
+                        noisy_model_input,
+                        self_resampling_state,
+                        self._warned_self_resampling_eqm,
+                        self._warned_self_resampling_fast_rollout_fallback,
+                    ) = maybe_apply_self_resampling(
+                        args=args,
+                        accelerator=accelerator,
+                        self_resampling_helper=self.self_resampling_helper,
+                        noisy_model_input=noisy_model_input,
+                        rollout_latents=latents_for_dit,
+                        noise=noise,
+                        timesteps=timesteps,
+                        rollout_transformer=rollout_transformer,
+                        batch=batch,
+                        network_dtype=network_dtype,
+                        patch_size=self.config.patch_size,
+                        global_step=global_step,
+                        controlnet=controlnet,
+                        eqm_enabled=eqm_enabled,
+                        warned_self_resampling_eqm=self._warned_self_resampling_eqm,
+                        warned_self_resampling_fast_rollout_fallback=(
+                            self._warned_self_resampling_fast_rollout_fallback
+                        ),
+                        bfm_conditioning_helper=self.bfm_conditioning_helper,
+                        catlvdm_corruption_helper=self.catlvdm_corruption_helper,
+                        semanticgen_state=self.semanticgen_state,
+                        semantic_conditioning_helper=self.semantic_conditioning_helper,
+                        predict_with_full_dit=_predict_self_resampling_with_full_dit,
+                    )
                     # Optional: If the network supports TLora-style masking, update mask from timesteps
                     try:
                         if unwrapped_net is None:
@@ -2105,6 +2190,26 @@ class TrainingCore:
                                             },
                                             step=global_step,
                                         )
+
+                            if (
+                                accelerator.is_main_process
+                                and accelerator.trackers
+                                and accelerator.sync_gradients
+                                and self.self_resampling_helper is not None
+                                and self_resampling_state is not None
+                            ):
+                                log_interval = int(
+                                    getattr(args, "self_resampling_log_interval", 50)
+                                    or 50
+                                )
+                                if global_step % max(log_interval, 1) == 0:
+                                    metrics = (
+                                        self.self_resampling_helper.state_to_metrics(
+                                            self_resampling_state
+                                        )
+                                    )
+                                    if metrics:
+                                        accelerator.log(metrics, step=global_step)
 
                     memflow_loss = None
                     if (

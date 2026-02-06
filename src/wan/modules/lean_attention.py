@@ -21,6 +21,13 @@ def forward_wan22_lean_block(
     sparse_attention: bool,
     batched_rotary: Optional[torch.Tensor],
     extra_tokens: int,
+    history_routing_config: Optional[dict],
+    block_index: int,
+    enable_rollout_kv_cache: bool,
+    rollout_kv_cache: Optional[dict],
+    enable_rollout_self_attn_kv_cache: bool,
+    rollout_self_attn_kv_cache: Optional[dict],
+    rollout_history_frame_count: int,
     force_fp16: bool,
     fp32_default: bool,
 ) -> torch.Tensor:
@@ -84,6 +91,11 @@ def forward_wan22_lean_block(
         sparse_attention=sparse_attention,
         batched_rotary=batched_rotary,  # type: ignore[arg-type]
         extra_tokens=extra_tokens,
+        history_routing_config=history_routing_config,
+        block_index=block_index,
+        enable_rollout_self_attn_kv_cache=enable_rollout_self_attn_kv_cache,
+        rollout_self_attn_kv_cache=rollout_self_attn_kv_cache,
+        rollout_history_frame_count=rollout_history_frame_count,
     )
     # Gate multiply in attention dtype, then cast back to original dtype for residual add
     x = x + (y.to(attention_dtype, copy=False) * s2).to(x_orig_dtype, copy=False)
@@ -94,6 +106,9 @@ def forward_wan22_lean_block(
         norm3(x).to(attention_dtype, copy=False),
         context,
         context_lens,
+        enable_rollout_kv_cache=enable_rollout_kv_cache,
+        rollout_kv_cache=rollout_kv_cache,
+        block_index=block_index,
     ).to(x_orig_dtype, copy=False)
 
     # FFN in attention dtype

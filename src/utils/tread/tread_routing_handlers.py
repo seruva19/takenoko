@@ -122,10 +122,33 @@ def handle_routing_start(
             raise ImportError("Frame routing not available")
 
         keep_ratio = max(0.0, min(1.0, 1.0 - mask_ratio))
-        mode = "contiguous" if tread_mode == "frame_contiguous" else "stride"
+        if tread_mode == "frame_contiguous":
+            mode = "contiguous"
+        elif tread_mode == "frame_topk":
+            mode = "topk"
+        else:
+            mode = "stride"
+        top_k_frames = route_config.get("top_k_frames")
+        always_keep_first_frame = bool(
+            route_config.get("always_keep_first_frame", True)
+        )
+        always_keep_last_frame = bool(
+            route_config.get("always_keep_last_frame", False)
+        )
 
         x_proc, state.frame_state = pack_frame_routed_tokens(
-            x, kwargs["seq_lens"], kwargs["grid_sizes"], keep_ratio, mode
+            x,
+            kwargs["seq_lens"],
+            kwargs["grid_sizes"],
+            keep_ratio,
+            mode,
+            top_k_frames=(
+                int(top_k_frames)
+                if isinstance(top_k_frames, (int, float))
+                else None
+            ),
+            always_keep_first_frame=always_keep_first_frame,
+            always_keep_last_frame=always_keep_last_frame,
         )
 
         # Update kwargs with processed tensors

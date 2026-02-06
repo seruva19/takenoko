@@ -31,6 +31,7 @@ from configs.reward_vcd_config import apply_reward_vcd_config
 from configs.video_consistency_distance import (
     apply_video_consistency_distance_config,
 )
+from configs.self_resampling_config import apply_self_resampling_config
 
 
 def create_args_from_config(
@@ -158,6 +159,7 @@ def create_args_from_config(
         "full",  # Content-aware routing (existing)
         "frame_contiguous",  # Frame-based routing (existing)
         "frame_stride",  # Frame-based routing (existing)
+        "frame_topk",  # Frame importance top-k routing (new)
         "row_contiguous",  # Row-based routing (new)
         "row_stride",  # Row-based routing (new)
         "row_random",  # Row-based routing (new)
@@ -183,6 +185,10 @@ def create_args_from_config(
         )
         if args.row_tread_auto_fallback:
             logger.info("Auto-fallback enabled: video content will use frame routing")
+    elif args.enable_tread and specified_tread_mode == "frame_topk":
+        logger.info(
+            "Frame top-k TREAD enabled: dynamic per-sample frame selection for video routing."
+        )
     elif args.enable_tread and specified_tread_mode == "spatial_auto":
         logger.info("Spatial auto TREAD enabled: F=1→rows, F>1→frames (hybrid mode)")
 
@@ -707,6 +713,9 @@ def create_args_from_config(
     args.convergence_window_sizes = config.get(
         "convergence_window_sizes", [10, 25, 50, 100]
     )
+
+    # Self-resampling (train-only, LoRA gated)
+    apply_self_resampling_config(args, config, logger)
 
     # Error recycling (train-only, LoRA gated)
     apply_error_recycling_config(args, config, logger)

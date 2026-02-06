@@ -40,7 +40,14 @@ class FrameRouteState:
 
 
 def _compute_frame_indices(
-    num_frames: int, keep_ratio: float, mode: str, device: torch.device
+    num_frames: int,
+    keep_ratio: float,
+    mode: str,
+    device: torch.device,
+    frame_scores: Optional[torch.Tensor] = None,
+    top_k_frames: Optional[int] = None,
+    always_keep_first_frame: bool = True,
+    always_keep_last_frame: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Compute kept and routed frame indices.
 
@@ -81,6 +88,65 @@ def _compute_frame_indices(
                 dtype=torch.long,
             )
             kept = torch.cat([kept, additional], dim=0)
+    elif mode == "topk":
+        if top_k_frames is not None:
+            keep_frames = min(num_frames, max(1, int(top_k_frames)))
+
+        if frame_scores is None or frame_scores.numel() != num_frames:
+            # Fallback to even spacing if no valid scores are available.
+            stride = max(1, int(round(num_frames / keep_frames)))
+            kept = torch.arange(0, num_frames, stride, device=device, dtype=torch.long)[
+                :keep_frames
+            ]
+        else:
+            forced: list[int] = []
+            if always_keep_first_frame and num_frames > 0:
+                forced.append(0)
+            if always_keep_last_frame and num_frames > 1:
+                forced.append(num_frames - 1)
+            forced = sorted(set(forced))
+            forced_tensor = torch.tensor(forced, device=device, dtype=torch.long)
+
+            remaining_k = keep_frames - forced_tensor.numel()
+            if remaining_k > 0:
+                avail_mask = torch.ones(
+                    num_frames, device=device, dtype=torch.bool
+                )
+                if forced_tensor.numel() > 0:
+                    avail_mask[forced_tensor] = False
+                avail_idx = torch.arange(0, num_frames, device=device, dtype=torch.long)[
+                    avail_mask
+                ]
+                avail_scores = frame_scores[avail_mask]
+                if avail_idx.numel() > 0:
+                    topk_count = min(remaining_k, int(avail_idx.numel()))
+                    topk_rel_idx = torch.topk(
+                        avail_scores,
+                        k=topk_count,
+                        largest=True,
+                    ).indices
+                    topk_idx = avail_idx[topk_rel_idx]
+                    kept = (
+                        torch.cat([forced_tensor, topk_idx], dim=0)
+                        if forced_tensor.numel() > 0
+                        else topk_idx
+                    )
+                else:
+                    kept = forced_tensor
+            else:
+                kept = forced_tensor[:keep_frames]
+
+            if kept.numel() < keep_frames:
+                chosen = set(kept.tolist())
+                additional_idx = [i for i in range(num_frames) if i not in chosen]
+                additional = torch.tensor(
+                    additional_idx[: keep_frames - kept.numel()],
+                    device=device,
+                    dtype=torch.long,
+                )
+                kept = torch.cat([kept, additional], dim=0)
+
+            kept = torch.unique(kept, sorted=True)
     else:
         # contiguous center window
         start = max(0, (num_frames - keep_frames) // 2)
@@ -99,6 +165,9 @@ def pack_frame_routed_tokens(
     grid_sizes: torch.Tensor,
     keep_ratio: float,
     mode: str = "contiguous",
+    top_k_frames: Optional[int] = None,
+    always_keep_first_frame: bool = True,
+    always_keep_last_frame: bool = False,
 ) -> tuple[torch.Tensor, FrameRouteState]:
     """Pack tokens corresponding to kept frames; stash routed tokens for later restore.
 
@@ -113,7 +182,13 @@ def pack_frame_routed_tokens(
     keep_ratio: float
         Fraction of frames to keep in (0,1].
     mode: str
-        'contiguous' or 'stride'.
+        'contiguous', 'stride', or 'topk'.
+    top_k_frames: Optional[int]
+        Optional explicit top-k frame count for mode='topk'.
+    always_keep_first_frame: bool
+        When mode='topk', force the first frame to stay in context.
+    always_keep_last_frame: bool
+        When mode='topk', force the most recent frame to stay in context.
 
     Returns
     -------
@@ -140,7 +215,21 @@ def pack_frame_routed_tokens(
         F, H, W = grid_sizes[b].tolist()
         assert Li == F * H * W, f"Unexpected seq_len {Li} != FHW {F*H*W}"
 
-        kept_frames, routed_frames = _compute_frame_indices(F, keep_ratio, mode, device)
+        frame_scores = None
+        x_b = x[b, :Li, :]
+        if mode == "topk":
+            x_b_frames = x_b.view(F, H * W, C)
+            frame_scores = x_b_frames.detach().abs().mean(dim=(1, 2))
+        kept_frames, routed_frames = _compute_frame_indices(
+            F,
+            keep_ratio,
+            mode,
+            device,
+            frame_scores=frame_scores,
+            top_k_frames=top_k_frames,
+            always_keep_first_frame=always_keep_first_frame,
+            always_keep_last_frame=always_keep_last_frame,
+        )
         hw = H * W
         kept_tok = torch.cat(
             [
@@ -181,7 +270,6 @@ def pack_frame_routed_tokens(
         idx_proc_list.append(kept_tok)
         idx_rout_list.append(routed_tok)
 
-        x_b = x[b, :Li, :]
         x_proc_b = x_b.index_select(0, kept_tok)
         x_routed_b = x_b.index_select(0, routed_tok)
         x_routed_list.append(x_routed_b)

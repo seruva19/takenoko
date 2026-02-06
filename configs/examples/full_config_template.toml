@@ -1957,6 +1957,152 @@ moalign_stage1_allow_raft_fallback = true
 moalign_stage1_raft_model = "raft_small"
 
 # =============================================================================
+# ⚠️ SELF-RESAMPLING SETTINGS
+# =============================================================================
+# Enable Self-Resampling-style history corruption during training.
+# This feature is designed to reduce exposure bias by replacing history frames in noisy inputs
+# with detached, shifted-logit-normal resamples. Inference behavior is unchanged.
+# Dependency: effective only for LoRA training in video mode.
+enable_self_resampling = false
+
+# Warmup optimizer steps before enabling self-resampling (>= 0).
+# Use teacher forcing during warmup to stabilize early convergence.
+# Example: self_resampling_warmup_steps = 10000
+self_resampling_warmup_steps = 0
+
+# Per-step probability of applying self-resampling (0.0-1.0).
+# 1.0 applies every step after warmup; lower values interleave clean-history steps.
+self_resampling_apply_prob = 1.0
+
+# Logit-normal shift factor for simulation timestep sampling (> 0).
+# Shift is applied as: t <- s*t/(1 + (s-1)*t). Values < 1 bias toward lower noise.
+# Paper-aligned default: 0.6.
+self_resampling_shift = 0.6
+
+# Lower clamp for sampled simulation timestep t (0.0 <= min < max <= 1.0).
+# Prevents overly weak corruption near pure teacher forcing.
+self_resampling_min_t = 0.05
+
+# Upper clamp for sampled simulation timestep t (0.0 <= min < max <= 1.0).
+# Prevents overly strong corruption that can destabilize semantics.
+self_resampling_max_t = 0.95
+
+# Blend ratio between original noisy history and detached resampled history (0.0-1.0).
+# 1.0 fully replaces selected history frames; lower values mix with original noisy input.
+self_resampling_blend = 1.0
+
+# First temporal index eligible for history corruption (>= 0).
+# Example: 0 means all history-capable frames can be replaced.
+self_resampling_history_start_frame = 0
+
+# Number of tail frames excluded from corruption (>= 0).
+# Default 1 keeps the newest frame untouched while corrupting earlier history.
+self_resampling_history_exclude_tail_frames = 1
+
+# Enable autoregressive history accumulation in detached corruption (default: true).
+# This propagates residual error across time (frame-to-frame) to better emulate
+# inter-frame error accumulation described in the paper.
+self_resampling_autoregressive_history = true
+
+# Decay factor for accumulated history error (0.0-1.0).
+# 0.0 = independent frame corruption only, 1.0 = strongest carry-over.
+self_resampling_autoregressive_decay = 0.5
+
+# Stability clip multiplier (> 0) for accumulated history residuals.
+# Larger values allow stronger drift; smaller values are safer.
+self_resampling_autoregressive_clip_multiplier = 3.0
+
+# Enable exact high-cost model-in-the-loop autoregressive rollout for history
+# corruption (default: false). This performs sequential frame denoising with
+# no-grad DiT calls, closer to paper Eq. (5) behavior.
+self_resampling_model_rollout = false
+
+# Enable faster rollout predictor path when model rollout is active (default: true).
+# When enabled, Takenoko uses a lightweight velocity-only forward for rollout and
+# falls back to full call_dit path for unsupported enhancement combinations.
+self_resampling_fast_rollout = true
+
+# Enable cross-attention KV cache during fast rollout calls (default: true).
+# This caches per-block text K/V projections across rollout predictor calls to
+# reduce repeated context-side attention compute.
+self_resampling_rollout_kv_cache = true
+
+# Enable self-attention history KV-prefix cache during fast rollout (default: true).
+# This reuses cached history-frame self-attention projections when rollout proceeds
+# frame-by-frame at fixed timestep, and automatically resets cache when timestep changes.
+self_resampling_rollout_self_attn_kv_cache = true
+
+# Number of Euler rollout updates per history frame (> 0).
+# 1 is fastest and matches paper's practical 1-step setting; higher values are
+# more expensive and may better approximate multi-step integration.
+self_resampling_model_rollout_steps = 1
+
+# Optional: enable practical history routing with existing TREAD integration
+# (default: false). This approximates paper Sec. 3.3 by dynamically selecting
+# top-k history frames during routed layers.
+enable_self_resampling_history_routing = false
+
+# History routing mode used when enable_self_resampling_history_routing=true:
+# - "frame_topk": dynamic frame-importance top-k selection (recommended)
+# - "frame_stride": evenly spaced frame routing
+# - "frame_contiguous": centered contiguous frame routing
+self_resampling_history_routing_mode = "frame_topk"
+
+# Number of history frames to keep for frame_topk routing (> 0).
+self_resampling_history_routing_top_k = 5
+
+# Expected history frame count used to derive keep/drop ratio (> 0).
+# Example: top_k=5 and expected_frames=20 approximates 75% sparsity.
+self_resampling_history_routing_expected_frames = 20
+
+# Routed layer band for history routing.
+self_resampling_history_routing_start_layer_idx = 2
+
+# End layer index (inclusive) for routing band.
+# Negative values are resolved from the end of the DiT block list; -2 means
+# "second-to-last block", matching the default parser behavior.
+self_resampling_history_routing_end_layer_idx = -2
+
+# Anchor-frame keeps for frame_topk mode.
+self_resampling_history_routing_always_keep_first_frame = true
+
+# Keep the newest history frame as an always-routed anchor (default: false).
+# Enable this if you want guaranteed short-term context retention.
+self_resampling_history_routing_always_keep_last_frame = false
+
+# Optional: enable token-wise/head-wise history routing directly in attention
+# (default: false). This is higher-fidelity to paper Sec. 3.3 than TREAD-only
+# frame routing, and is more expensive.
+enable_self_resampling_attention_routing = false
+
+# Top-k history frames used by token-wise attention routing (> 0).
+self_resampling_attention_routing_top_k = 5
+
+# Layer band where token-wise attention routing is active.
+self_resampling_attention_routing_start_layer_idx = 2
+
+# End layer index (inclusive) for token-wise routing.
+# Negative values are resolved from the end of the DiT block list; -2 means
+# "second-to-last block", mirroring history routing defaults.
+self_resampling_attention_routing_end_layer_idx = -2
+
+# Routing backend:
+# - "exact": paper-closest token/head-wise routing (slower)
+# - "kernel_frame_topk": kernel-backed approximation via frame-level top-k + FlashAttention (faster)
+self_resampling_attention_routing_backend = "exact"
+
+# Anchor-frame keeps for token-wise attention routing.
+self_resampling_attention_routing_always_keep_first_frame = true
+
+# Keep the newest history frame as an always-routed anchor (default: false).
+# Turn on only when strict recency anchoring is preferred over adaptive top-k.
+self_resampling_attention_routing_always_keep_last_frame = false
+
+# Metric logging interval in optimizer steps (> 0).
+# Controls cadence for `self_resampling/*` TensorBoard metrics.
+self_resampling_log_interval = 50
+
+# =============================================================================
 # ⚠️ ERROR RECYCLING SETTINGS
 # =============================================================================
 # Enable Error-Recycling Fine-Tuning. Default: false.
@@ -4229,15 +4375,19 @@ frame_consistency_mode = "adjacent"
 # Enable TREAD routing for training
 enable_tread = false
 
-# TREAD mode: "full", "frame_contiguous", "frame_stride", "row_contiguous", "row_stride", "row_random", "spatial_auto"
+# TREAD mode: "full", "frame_contiguous", "frame_stride", "frame_topk", "row_contiguous", "row_stride", "row_random", "spatial_auto"
 # 'full' is used with tread_config_route parameters
-# 'frame_contiguous'/'frame_stride' are used with 'tread' parameter for temporal routing
+# 'frame_contiguous'/'frame_stride'/'frame_topk' are used with 'tread' parameter for temporal routing
 # 'row_contiguous'/'row_stride'/'row_random' are used with 'tread' parameter for spatial routing
 # 'spatial_auto' automatically detects F=1 (rows) vs F>1 (frames) - hybrid auto-detection mode
 tread_mode = "full"
 
-# Each route is a semicolon-separated string of key=value pairs. Keys: selection_ratio (0-1), start_layer_idx, end_layer_idx (negative allowed)
+# Each route is a semicolon-separated string of key=value pairs.
+# Common keys: selection_ratio (0-1), start_layer_idx, end_layer_idx (negative allowed)
+# Optional frame_topk keys: top_k_frames (>0), always_keep_first_frame (bool), always_keep_last_frame (bool)
 tread_config_route1 = "selection_ratio=0.1; start_layer_idx=2; end_layer_idx=-2"
+# Example for frame_topk mode:
+# tread_config_route1 = "selection_ratio=0.75; start_layer_idx=2; end_layer_idx=-2; top_k_frames=5; always_keep_first_frame=true"
 # tread_config_route2 = "selection_ratio=0.1; start_layer_idx=2; end_layer_idx=8"
 # tread_config_route3 = "selection_ratio=0.25; start_layer_idx=9; end_layer_idx=11"
 # tread_config_route4 = "selection_ratio=0.35; start_layer_idx=12; end_layer_idx=15"
@@ -4245,7 +4395,7 @@ tread_config_route1 = "selection_ratio=0.1; start_layer_idx=2; end_layer_idx=-2"
 # tread_config_route6 = "selection_ratio=0.1; start_layer_idx=24; end_layer_idx=-2"
 
 # Simplified routing blocks:
-# For temporal routing: Use tread_mode = "frame_contiguous" or "frame_stride"
+# For temporal routing: Use tread_mode = "frame_contiguous", "frame_stride", or "frame_topk"
 # For spatial routing: Use tread_mode = "row_contiguous", "row_stride", or "row_random"
 # keep_ratio: fraction of frames/rows to keep within the routed band
 # tread = { start_layer = 2, end_layer = 36, keep_ratio = 0.6 }

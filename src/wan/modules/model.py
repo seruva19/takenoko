@@ -3,7 +3,7 @@ import argparse
 import copy
 import math
 import time
-from typing import Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 import torch
 import torch.nn as nn
@@ -49,6 +49,14 @@ from utils.dispersive_loss_utils import resolve_dispersive_target_block
 
 from utils.tread.tread_router import TREADRouter
 from wan.modules.lean_attention import forward_wan22_lean_block
+from wan.modules.self_resampling_attention_runtime import (
+    maybe_route_history_attention,
+    project_cross_attn_qkv_with_rollout_cache,
+    project_self_attn_qkv_with_rollout_cache,
+)
+from wan.modules.self_resampling_model_integration import (
+    build_self_resampling_history_routing_config,
+)
 from wan.utils.compile_utils import compile_optimize as wan_compile_optimize
 from torch.nn.attention.flex_attention import flex_attention
 
@@ -311,6 +319,11 @@ class WanSelfAttention(nn.Module):
         sparse_attention: bool = False,
         batched_rotary: Optional[torch.Tensor] = None,
         extra_tokens: int = 0,
+        history_routing_config: Optional[Dict[str, Any]] = None,
+        block_index: int = -1,
+        enable_rollout_self_attn_kv_cache: bool = False,
+        rollout_self_attn_kv_cache: Optional[dict] = None,
+        rollout_history_frame_count: int = 0,
     ):
         r"""
         Args:
@@ -368,13 +381,25 @@ class WanSelfAttention(nn.Module):
             )  # type: ignore
         else:
             b, s, n, d = *x.shape[:2], self.num_heads, self.head_dim
-
-            q = self.q(x)
-            k = self.k(x)
-            v = self.v(x)
+            q, k, v = project_self_attn_qkv_with_rollout_cache(
+                x=x,
+                seq_lens=seq_lens,
+                grid_sizes=grid_sizes,
+                block_index=block_index,
+                extra_tokens=extra_tokens,
+                sparse_attention=sparse_attention,
+                batched_rotary=batched_rotary,
+                enable_rollout_self_attn_kv_cache=enable_rollout_self_attn_kv_cache,
+                rollout_self_attn_kv_cache=rollout_self_attn_kv_cache,
+                rollout_history_frame_count=rollout_history_frame_count,
+                feature_dim=self.dim,
+                q_layer=self.q,
+                k_layer=self.k,
+                v_layer=self.v,
+                norm_q_layer=self.norm_q,
+                norm_k_layer=self.norm_k,
+            )
             del x
-            q = self.norm_q(q)
-            k = self.norm_k(k)
             q = q.view(b, s, n, d)
             k = k.view(b, s, n, d)
             v = v.view(b, s, n, d)
@@ -416,16 +441,39 @@ class WanSelfAttention(nn.Module):
             else:
                 qkv = [q, k, v]
             del q, k, v
-            # Only pass k_lens for attention modes that support variable lengths (flash3/sageattn)
-            k_lens_arg = seq_lens if self.attn_mode in ("flash3", "sageattn") else None
-            x = flash_attention(
-                qkv,
-                k_lens=k_lens_arg,
-                window_size=self.window_size,
+            routed_x = maybe_route_history_attention(
+                q=qkv[0],
+                k=qkv[1],
+                v=qkv[2],
+                history_routing_config=history_routing_config,
+                training=self.training,
+                sparse_attention=sparse_attention,
+                batched_rotary=batched_rotary,
+                block_index=block_index,
+                seq_lens=seq_lens,
+                grid_sizes=grid_sizes,
+                extra_tokens=extra_tokens,
+                backend_default="exact",
                 attn_mode=self.attn_mode,
                 split_attn=self.split_attn,
-                batched_rotary=batched_rotary,
+                window_size=self.window_size,
             )
+
+            if routed_x is not None:
+                x = routed_x
+            else:
+                # Only pass k_lens for attention modes that support variable lengths (flash3/sageattn)
+                k_lens_arg = (
+                    seq_lens if self.attn_mode in ("flash3", "sageattn") else None
+                )
+                x = flash_attention(
+                    qkv,
+                    k_lens=k_lens_arg,
+                    window_size=self.window_size,
+                    attn_mode=self.attn_mode,
+                    split_attn=self.split_attn,
+                    batched_rotary=batched_rotary,
+                )
 
         # output
         x = x.flatten(2)
@@ -434,7 +482,15 @@ class WanSelfAttention(nn.Module):
 
 
 class WanCrossAttention(WanSelfAttention):
-    def forward(self, x, context, context_lens):
+    def forward(
+        self,
+        x,
+        context,
+        context_lens,
+        enable_rollout_kv_cache: bool = False,
+        rollout_kv_cache: Optional[dict] = None,
+        block_index: int = -1,
+    ):
         r"""
         Args:
             x(Tensor): Shape [B, L1, C]
@@ -447,13 +503,20 @@ class WanCrossAttention(WanSelfAttention):
         # q = self.norm_q(self.q(x)).view(b, -1, n, d)
         # k = self.norm_k(self.k(context)).view(b, -1, n, d)
         # v = self.v(context).view(b, -1, n, d)
-        q = self.q(x)
+        q, k, v = project_cross_attn_qkv_with_rollout_cache(
+            x=x,
+            context=context,
+            block_index=block_index,
+            enable_rollout_kv_cache=enable_rollout_kv_cache,
+            rollout_kv_cache=rollout_kv_cache,
+            q_layer=self.q,
+            k_layer=self.k,
+            v_layer=self.v,
+            norm_q_layer=self.norm_q,
+            norm_k_layer=self.norm_k,
+        )
         del x
-        k = self.k(context)
-        v = self.v(context)
         del context
-        q = self.norm_q(q)
-        k = self.norm_k(k)
         q = q.view(b, -1, n, d)
         k = k.view(b, -1, n, d)
         v = v.view(b, -1, n, d)
@@ -607,6 +670,13 @@ class WanAttentionBlock(nn.Module):
         sparse_attention: bool = False,
         batched_rotary: torch.Tensor | None = None,
         extra_tokens: int = 0,
+        history_routing_config: Optional[Dict[str, Any]] = None,
+        block_index: int = -1,
+        enable_rollout_kv_cache: bool = False,
+        rollout_kv_cache: Optional[dict] = None,
+        enable_rollout_self_attn_kv_cache: bool = False,
+        rollout_self_attn_kv_cache: Optional[dict] = None,
+        rollout_history_frame_count: int = 0,
     ):
         r"""
         Args:
@@ -641,6 +711,13 @@ class WanAttentionBlock(nn.Module):
                 sparse_attention,
                 batched_rotary,
                 extra_tokens,
+                history_routing_config=history_routing_config,
+                block_index=block_index,
+                enable_rollout_kv_cache=enable_rollout_kv_cache,
+                rollout_kv_cache=rollout_kv_cache,
+                enable_rollout_self_attn_kv_cache=enable_rollout_self_attn_kv_cache,
+                rollout_self_attn_kv_cache=rollout_self_attn_kv_cache,
+                rollout_history_frame_count=rollout_history_frame_count,
                 force_fp16=bool(getattr(self, "_lower_precision_attention", False)),
                 fp32_default=bool(getattr(self, "_lean_attn_fp32_default", True)),
             )
@@ -660,6 +737,11 @@ class WanAttentionBlock(nn.Module):
                 sparse_attention=sparse_attention,
                 batched_rotary=batched_rotary,  # type: ignore[arg-type]
                 extra_tokens=extra_tokens,
+                history_routing_config=history_routing_config,
+                block_index=block_index,
+                enable_rollout_self_attn_kv_cache=enable_rollout_self_attn_kv_cache,
+                rollout_self_attn_kv_cache=rollout_self_attn_kv_cache,
+                rollout_history_frame_count=rollout_history_frame_count,
             )
             x = x + (y * s2).to(x_orig_dtype, copy=False)
             del y
@@ -669,6 +751,9 @@ class WanAttentionBlock(nn.Module):
                 self.norm3(x).to(self.attention_dtype, copy=False),
                 context,
                 context_lens,
+                enable_rollout_kv_cache=enable_rollout_kv_cache,
+                rollout_kv_cache=rollout_kv_cache,
+                block_index=block_index,
             )
             del context
 
@@ -694,6 +779,13 @@ class WanAttentionBlock(nn.Module):
         sparse_attention: bool = False,
         batched_rotary: torch.Tensor | None = None,
         extra_tokens: int = 0,
+        history_routing_config: Optional[Dict[str, Any]] = None,
+        block_index: int = -1,
+        enable_rollout_kv_cache: bool = False,
+        rollout_kv_cache: Optional[dict] = None,
+        enable_rollout_self_attn_kv_cache: bool = False,
+        rollout_self_attn_kv_cache: Optional[dict] = None,
+        rollout_history_frame_count: int = 0,
     ):
         """
         Forward pass for WanAttentionBlock.
@@ -726,6 +818,13 @@ class WanAttentionBlock(nn.Module):
                 sparse_attention,
                 batched_rotary,
                 extra_tokens,
+                history_routing_config,
+                block_index,
+                enable_rollout_kv_cache,
+                rollout_kv_cache,
+                enable_rollout_self_attn_kv_cache,
+                rollout_self_attn_kv_cache,
+                rollout_history_frame_count,
                 use_reentrant=False,
             )
         return self._forward(
@@ -739,6 +838,13 @@ class WanAttentionBlock(nn.Module):
             sparse_attention,
             batched_rotary,
             extra_tokens,
+            history_routing_config,
+            block_index,
+            enable_rollout_kv_cache,
+            rollout_kv_cache,
+            enable_rollout_self_attn_kv_cache,
+            rollout_self_attn_kv_cache,
+            rollout_history_frame_count,
         )
 
 
@@ -1084,6 +1190,8 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
         # TREAD routing (optional; set via set_router)
         self._tread_router: TREADRouter | None = None
         self._tread_routes: list[dict] | None = None
+        # Optional token-wise history routing for self-resampling (Sec. 3.3 style)
+        self._self_resampling_history_routing_cfg: Optional[Dict[str, Any]] = None
 
         # Sprint sparse-dense fusion (optional; enabled via config)
         self.sprint_fusion: Optional[nn.Module] = None
@@ -1117,6 +1225,15 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
         """
         self._tread_router = router
         self._tread_routes = routes or []
+
+    def set_self_resampling_history_routing(self, config: Dict[str, Any]) -> None:
+        """Enable token-wise history routing for self-attention blocks."""
+        self._self_resampling_history_routing_cfg = (
+            build_self_resampling_history_routing_config(
+                config,
+                total_layers=len(self.blocks),
+            )
+        )
 
     def enable_sprint(
         self,
@@ -1354,6 +1471,11 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
         reg_cls_token: torch.Tensor | None = None,
         segment_idx: torch.Tensor | None = None,
         bfm_semfeat_tokens: torch.Tensor | None = None,
+        enable_rollout_kv_cache: bool = False,
+        rollout_kv_cache: Optional[dict] = None,
+        enable_rollout_self_attn_kv_cache: bool = False,
+        rollout_self_attn_kv_cache: Optional[dict] = None,
+        rollout_history_frame_count: int = 0,
     ):
         r"""
         Forward pass through the diffusion model
@@ -1660,6 +1782,13 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
             context_lens=context_lens,
             sparse_attention=sparse_attention,
             extra_tokens=reg_extra_tokens,
+            history_routing_config=self._self_resampling_history_routing_cfg,
+            block_index=-1,
+            enable_rollout_kv_cache=enable_rollout_kv_cache,
+            rollout_kv_cache=rollout_kv_cache,
+            enable_rollout_self_attn_kv_cache=enable_rollout_self_attn_kv_cache,
+            rollout_self_attn_kv_cache=rollout_self_attn_kv_cache,
+            rollout_history_frame_count=int(rollout_history_frame_count),
         )
 
         if sparse_attention:
@@ -1819,6 +1948,7 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
                     )
 
                 if not is_block_skipped:
+                    kwargs["block_index"] = block_idx
                     # Switch attention to use batched_rotary when routing
                     tread_mode_mid = str(getattr(self, "_tread_mode", "full"))
                     if tread_state.routing_now and tread_mode_mid.startswith("frame_"):
@@ -1841,6 +1971,23 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
                             context_lens=kwargs["context_lens"],
                             sparse_attention=kwargs["sparse_attention"],
                             batched_rotary=kwargs["batched_rotary"],
+                            history_routing_config=kwargs.get(
+                                "history_routing_config"
+                            ),
+                            block_index=int(kwargs.get("block_index", -1)),
+                            enable_rollout_kv_cache=bool(
+                                kwargs.get("enable_rollout_kv_cache", False)
+                            ),
+                            rollout_kv_cache=kwargs.get("rollout_kv_cache"),
+                            enable_rollout_self_attn_kv_cache=bool(
+                                kwargs.get("enable_rollout_self_attn_kv_cache", False)
+                            ),
+                            rollout_self_attn_kv_cache=kwargs.get(
+                                "rollout_self_attn_kv_cache"
+                            ),
+                            rollout_history_frame_count=int(
+                                kwargs.get("rollout_history_frame_count", 0)
+                            ),
                         )
                     else:
                         x = block(x, **kwargs)
