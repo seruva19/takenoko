@@ -1058,6 +1058,38 @@ class WanFinetuneTrainer:
             lr,
         )
 
+    @staticmethod
+    def _maybe_add_videorepa_params(
+        params_to_optimize: list[dict[str, Any]],
+        param_names: list[list[str]],
+        videorepa_helper: Any,
+        args: argparse.Namespace,
+    ) -> None:
+        """Ensure VideoREPA projector parameters are included in optimizer groups."""
+        params = getattr(videorepa_helper, "get_trainable_params", None)
+        if not callable(params):
+            return
+        trainable = list(params())
+        if not trainable:
+            return
+        existing = set()
+        for group in params_to_optimize:
+            if "params" in group:
+                existing.update(id(p) for p in group["params"])
+        new_params = [p for p in trainable if id(p) not in existing]
+        if not new_params:
+            return
+        lr = float(getattr(args, "learning_rate", 1e-4)) * float(
+            getattr(args, "input_lr_scale", 1.0)
+        )
+        params_to_optimize.append({"params": new_params, "lr": lr})
+        param_names.append([f"videorepa_projector.{i}" for i in range(len(new_params))])
+        logger.info(
+            "VideoREPA: added %d projector params to optimizer groups (lr=%.6f).",
+            len(new_params),
+            lr,
+        )
+
     def train(self, args: argparse.Namespace) -> None:
         """
         Main training loop for full fine-tuning.
@@ -1207,6 +1239,7 @@ class WanFinetuneTrainer:
             getattr(args, "enable_control_lora", False)
             or getattr(args, "sara_enabled", False)
             or getattr(args, "enable_repa", False)
+            or getattr(args, "enable_videorepa", False)
             or getattr(args, "enable_moalign", False)
             or getattr(args, "enable_semanticgen_lora", False)
             or getattr(args, "semantic_align_enabled", False)
@@ -1271,6 +1304,7 @@ class WanFinetuneTrainer:
                 getattr(args, "enable_control_lora", False)
                 or getattr(args, "sara_enabled", False)
                 or getattr(args, "enable_repa", False)
+                or getattr(args, "enable_videorepa", False)
                 or getattr(args, "enable_moalign", False)
                 or getattr(args, "load_val_pixels", False)
             )
@@ -1395,6 +1429,23 @@ class WanFinetuneTrainer:
             except Exception as exc:
                 logger.warning(f"MOALIGN setup failed: {exc}")
                 moalign_helper = None
+
+        videorepa_helper = None
+        if getattr(args, "enable_videorepa", False):
+            try:
+                from enhancements.videorepa.video_repa_helper import VideoRepaHelper
+
+                logger.info("VideoREPA is enabled. Initializing helper module.")
+                videorepa_helper = VideoRepaHelper(transformer, args)
+                self._maybe_add_videorepa_params(
+                    params_to_optimize,
+                    param_names,
+                    videorepa_helper,
+                    args,
+                )
+            except Exception as exc:
+                logger.warning(f"VideoREPA setup failed: {exc}")
+                videorepa_helper = None
 
         bfm_conditioning_helper = None
         if getattr(args, "bfm_semfeat_conditioning_enabled", False) or getattr(
@@ -1898,7 +1949,16 @@ class WanFinetuneTrainer:
         repa_helper = None
         haste_helper = None
         contrastive_attention_helper = None
-        if getattr(args, "enable_irepa", False):
+        if videorepa_helper is not None:
+            try:
+                repa_helper = videorepa_helper
+                repa_helper.setup_hooks()
+                repa_helper = accelerator.prepare(repa_helper)
+                logger.info("VideoREPA helper initialized")
+            except Exception as e:
+                logger.warning(f"Failed to initialize VideoREPA helper: {e}")
+                repa_helper = None
+        elif getattr(args, "enable_irepa", False):
             try:
                 from enhancements.repa.enhanced_repa_helper import EnhancedRepaHelper
 

@@ -32,6 +32,7 @@ from configs.video_consistency_distance import (
     apply_video_consistency_distance_config,
 )
 from configs.self_resampling_config import apply_self_resampling_config
+from configs.videorepa_config import apply_videorepa_config
 
 
 def create_args_from_config(
@@ -1550,6 +1551,9 @@ def create_args_from_config(
             args.crepa_adjacent_tau,
             args.crepa_use_backbone_features,
         )
+
+    # VideoREPA (Token-Relation Distillation) settings
+    apply_videorepa_config(args, config, logger)
 
     # SemanticGen LoRA settings
     parse_semanticgen_config(args, config, logger)

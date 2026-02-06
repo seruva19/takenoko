@@ -1295,11 +1295,14 @@ class TrainingLossComputer:
                     loss = loss + repa_val
                     repa_loss_value = repa_val.detach()
                 else:
+                    helper_name = type(repa_helper).__name__
                     logger.warning(
-                        "REPA enabled, but no 'pixels' found in batch. Skipping REPA loss."
+                        "%s enabled, but no 'pixels' found in batch. Skipping alignment loss.",
+                        helper_name,
                     )
             except Exception as e:
-                logger.warning(f"REPA loss computation failed: {e}")
+                helper_name = type(repa_helper).__name__
+                logger.warning("%s loss computation failed: %s", helper_name, e)
 
         # ---- Optional BFM SemFeat Loss ----
         if semfeat_helper is not None and getattr(args, "bfm_semfeat_enabled", False):

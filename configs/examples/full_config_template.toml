@@ -1822,6 +1822,133 @@ crepa_drop_vae_encoder = false
 crepa_normalize_by_frames = true
 
 # =============================================================================
+# ⚠️ VIDEOREPA (TOKEN RELATION DISTILLATION) SETTINGS
+# =============================================================================
+
+# Enable VideoREPA token-relation distillation (default: false for behavior safety).
+# VideoREPA aligns token-relation structure between DiT hidden states and frozen
+# visual foundation model features. This path is train-time only and does not
+# affect LoRA inference graphs.
+# Compatibility:
+# - Mutually exclusive with REPA/iREPA/CREPA/SARA/MOALIGN.
+# - Requires pixel batches (handled automatically when enabled).
+enable_videorepa = false
+
+# Teacher encoder specification.
+# REPA encoder manager backbones:
+# - "dinov2-vit-b", "dinov2-vit-l", "mae-vit-l", "jepa-vit-h"
+# Native video teachers (require videorepa_teacher_checkpoint):
+# - "videomaev2-vit-b", "videomaev2-vit-l", "videomaev2-vit-g"
+# - "vjepa-vit-l", "vjepa-vit-h", "vjepa-vit-g"
+# - "vjepa2-vit-l" (loaded via torch.hub; does not use videorepa_teacher_checkpoint)
+videorepa_encoder_name = "dinov2-vit-b"
+
+# Teacher encoder preprocessing resolution.
+# Valid values: 256, 512 (512 is supported only for DINOv2 encoders).
+videorepa_input_resolution = 256
+
+# Native teacher checkpoint path (required when videorepa_encoder_name starts with
+# "videomaev2-" or "vjepa-"; ignored for "vjepa2-*" and REPA encoder-manager backbones).
+# Example:
+# videorepa_teacher_checkpoint = "models/VideoMAEv2/vit_b_k710_dl_from_giant.pth"
+videorepa_teacher_checkpoint = ""
+
+# Native video-teacher clip length expected by VideoMAEv2/VJEPA models.
+videorepa_video_teacher_frames = 16
+
+# Native video-teacher temporal tubelet size.
+videorepa_video_teacher_tubelet_size = 2
+
+# Native VJEPA patch size (ignored by VideoMAEv2 builders that define their own patch size).
+videorepa_video_teacher_patch_size = 16
+
+# Native video-teacher input frame size (square resize before teacher forward).
+videorepa_video_teacher_image_size = 224
+
+# VideoMAEv2 alignment resolution hint [height, width] used by the upstream
+# checkpoint positional embedding interpolation path.
+videorepa_video_teacher_align_resolution = [480, 720]
+
+# For native video teachers, drop the first frame before teacher encoding.
+# This mirrors the upstream VideoREPA training recipe.
+videorepa_video_teacher_drop_first_frame = true
+
+# VJEPA checkpoint key used when loading encoder weights.
+videorepa_vjepa_checkpoint_key = "target_encoder"
+
+# VJEPA architecture toggles (advanced; match checkpoint pretraining setup).
+videorepa_vjepa_uniform_power = true
+
+# Enable SDPA kernels for VJEPA attention (recommended true on modern PyTorch/CUDA).
+videorepa_vjepa_use_sdpa = true
+
+# Enable SiLU MLP activation variant in VJEPA blocks.
+videorepa_vjepa_use_silu = false
+
+# Use tight SiLU variant (only relevant when videorepa_vjepa_use_silu = true).
+videorepa_vjepa_tight_silu = false
+
+# Primary transformer block index (0-based) for VideoREPA alignment.
+videorepa_alignment_depth = 18
+
+# Optional multi-layer alignment depths (0-based). If set, overrides
+# videorepa_alignment_depth. Example:
+# videorepa_alignment_depths = [12, 18, 24]
+
+# Global VideoREPA loss weight (lambda). Must be > 0 when enabled.
+videorepa_loss_lambda = 0.5
+
+# Relation objective mode:
+# - "cosine_similarity": REPA-style cosine feature alignment ablation
+# - "token_relation_distillation": frame-to-video relation distillation (paper-style default)
+# - "token_relation_distillation_only_spatial": per-frame spatial relation only
+# - "token_relation_distillation_only_temporal": cross-frame relation only
+videorepa_relation_mode = "token_relation_distillation"
+
+# Margin used in the ReLU(|S - T| - margin) relation penalty.
+# Increase to soften alignment pressure when training is unstable.
+videorepa_margin = 0.1
+
+# Optional margin used by spatial-only / temporal-only TRD ablations.
+# If omitted in a custom config, parser falls back to videorepa_margin.
+videorepa_margin_matrix = 0.1
+
+# Hidden width for the trainable diffusion-side projector MLP.
+videorepa_projector_hidden_dim = 2048
+
+# Target embedding dimension for alignment space.
+# Set to the teacher feature width (768 for DINOv2-B / many ViT backbones).
+videorepa_align_dim = 768
+
+# Optional cap on per-frame spatial token count after interpolation.
+# -1 disables token capping (full-resolution relation matrices).
+# Use positive values to reduce VRAM / relation matrix cost.
+videorepa_max_spatial_tokens = -1
+
+# Spatial alignment policy when source/teacher token grids differ:
+# - true: interpolate token grids to match
+# - false: truncate to min token count
+videorepa_spatial_align = true
+
+# Temporal alignment policy when source/teacher frame counts differ:
+# - true: interpolate source features along time to teacher frame count
+# - false: truncate to shared frame count
+videorepa_temporal_align = true
+
+# Temporal-only TRD masking policy:
+# - true: exclude same-frame pair blocks before averaging (paper-style behavior)
+# - false: keep all temporal-pair entries
+videorepa_temporal_exclude_same_frame = true
+
+# Detach teacher tokens before relation loss (recommended true).
+videorepa_detach_teacher = true
+
+# Encoder forward chunk size over (batch * frames):
+# - 0: process all frames at once (fastest, highest VRAM)
+# - >0: process in chunks to reduce peak memory
+videorepa_encoder_chunk_size = 0
+
+# =============================================================================
 # ⚠️ MOALIGN (MOTION-CENTRIC RELATIONAL ALIGNMENT) SETTINGS
 # =============================================================================
 #

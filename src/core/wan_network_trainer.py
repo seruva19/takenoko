@@ -480,6 +480,7 @@ class WanNetworkTrainer:
             getattr(args, "enable_control_lora", False)
             or getattr(args, "sara_enabled", False)
             or getattr(args, "enable_repa", False)
+            or getattr(args, "enable_videorepa", False)
             or getattr(args, "enable_moalign", False)
             or getattr(args, "enable_semanticgen_lora", False)
             or getattr(args, "semantic_align_enabled", False)
@@ -550,6 +551,7 @@ class WanNetworkTrainer:
                 getattr(args, "enable_control_lora", False)
                 or getattr(args, "sara_enabled", False)
                 or getattr(args, "enable_repa", False)
+                or getattr(args, "enable_videorepa", False)
                 or getattr(args, "enable_moalign", False)
                 or getattr(args, "load_val_pixels", False)
             )
@@ -947,6 +949,20 @@ class WanNetworkTrainer:
             except Exception as exc:
                 logger.warning(f"MOALIGN setup failed: {exc}")
                 moalign_helper = None
+
+        videorepa_helper = None
+        if getattr(args, "enable_videorepa", False):
+            try:
+                from enhancements.videorepa.video_repa_helper import VideoRepaHelper
+
+                logger.info("VideoREPA is enabled. Initializing helper module.")
+                videorepa_helper = VideoRepaHelper(transformer, args)
+                self._maybe_add_videorepa_params(
+                    trainable_params, lr_descriptions, videorepa_helper, args
+                )
+            except Exception as exc:
+                logger.warning(f"VideoREPA setup failed: {exc}")
+                videorepa_helper = None
 
         bfm_conditioning_helper = None
         if getattr(args, "bfm_semfeat_conditioning_enabled", False) or getattr(
@@ -1642,6 +1658,17 @@ class WanNetworkTrainer:
                         sara_helper.configure_accelerator(accelerator)
                     sara_helper.setup_hooks()
                     sara_helper = accelerator.prepare(sara_helper)
+            elif videorepa_helper is not None:
+                try:
+                    logger.info(
+                        "VideoREPA is enabled. Setting up the token-relation helper."
+                    )
+                    repa_helper = videorepa_helper
+                    repa_helper.setup_hooks()
+                    repa_helper = accelerator.prepare(repa_helper)
+                except Exception as exc:
+                    logger.warning(f"VideoREPA hook setup failed: {exc}")
+                    repa_helper = None
             elif getattr(args, "enable_irepa", False):
                 from enhancements.repa.enhanced_repa_helper import EnhancedRepaHelper
 
@@ -1890,57 +1917,6 @@ class WanNetworkTrainer:
         logger.info("🔍 Detailed LoRA Network Information:")
         logger.info("=" * 80)
 
-    @staticmethod
-    def _drop_vae_encoder_if_possible(vae: Any) -> None:
-        """Drop VAE encoder modules to save memory when only decoding latents."""
-        model = getattr(vae, "model", None)
-        if model is None:
-            return
-        encoder = getattr(model, "encoder", None)
-        if encoder is None:
-            return
-        try:
-            model.encoder = None
-            if hasattr(model, "conv1"):
-                model.conv1 = None
-            logger.info("CREPA: dropped VAE encoder modules to save memory.")
-        except Exception as exc:
-            logger.warning("CREPA: failed to drop VAE encoder modules: %s", exc)
-
-    @staticmethod
-    def _maybe_add_crepa_params(
-        trainable_params: list[Any],
-        lr_descriptions: list[str],
-        crepa_helper: Any,
-        args: argparse.Namespace,
-    ) -> None:
-        """Ensure CREPA projector parameters are included in the optimizer groups."""
-        params = getattr(crepa_helper, "get_trainable_params", None)
-        if not callable(params):
-            return
-        trainable = list(params())
-        if not trainable:
-            return
-        existing = set()
-        for group in trainable_params:
-            if isinstance(group, dict) and "params" in group:
-                existing.update(id(p) for p in group["params"])
-            elif isinstance(group, torch.nn.Parameter):
-                existing.add(id(group))
-        new_params = [p for p in trainable if id(p) not in existing]
-        if not new_params:
-            return
-        lr = float(getattr(args, "learning_rate", 1e-4)) * float(
-            getattr(args, "input_lr_scale", 1.0)
-        )
-        trainable_params.append({"params": new_params, "lr": lr})
-        lr_descriptions.append("crepa_projector")
-        logger.info(
-            "CREPA: added %d projector params to optimizer groups (lr=%.6f).",
-            len(new_params),
-            lr,
-        )
-
         # Count different types of parameters
         total_params = 0
         trainable_params = 0
@@ -2030,3 +2006,88 @@ class WanNetworkTrainer:
             logger.info(f"  Control LoRA enabled:     ❌")
 
         logger.info("=" * 80)
+
+    @staticmethod
+    def _drop_vae_encoder_if_possible(vae: Any) -> None:
+        """Drop VAE encoder modules to save memory when only decoding latents."""
+        model = getattr(vae, "model", None)
+        if model is None:
+            return
+        encoder = getattr(model, "encoder", None)
+        if encoder is None:
+            return
+        try:
+            model.encoder = None
+            if hasattr(model, "conv1"):
+                model.conv1 = None
+            logger.info("CREPA: dropped VAE encoder modules to save memory.")
+        except Exception as exc:
+            logger.warning("CREPA: failed to drop VAE encoder modules: %s", exc)
+
+    @staticmethod
+    def _maybe_add_crepa_params(
+        trainable_params: list[Any],
+        lr_descriptions: list[str],
+        crepa_helper: Any,
+        args: argparse.Namespace,
+    ) -> None:
+        """Ensure CREPA projector parameters are included in the optimizer groups."""
+        params = getattr(crepa_helper, "get_trainable_params", None)
+        if not callable(params):
+            return
+        trainable = list(params())
+        if not trainable:
+            return
+        existing = set()
+        for group in trainable_params:
+            if isinstance(group, dict) and "params" in group:
+                existing.update(id(p) for p in group["params"])
+            elif isinstance(group, torch.nn.Parameter):
+                existing.add(id(group))
+        new_params = [p for p in trainable if id(p) not in existing]
+        if not new_params:
+            return
+        lr = float(getattr(args, "learning_rate", 1e-4)) * float(
+            getattr(args, "input_lr_scale", 1.0)
+        )
+        trainable_params.append({"params": new_params, "lr": lr})
+        lr_descriptions.append("crepa_projector")
+        logger.info(
+            "CREPA: added %d projector params to optimizer groups (lr=%.6f).",
+            len(new_params),
+            lr,
+        )
+
+    @staticmethod
+    def _maybe_add_videorepa_params(
+        trainable_params: list[Any],
+        lr_descriptions: list[str],
+        videorepa_helper: Any,
+        args: argparse.Namespace,
+    ) -> None:
+        """Ensure VideoREPA projector parameters are included in optimizer groups."""
+        params = getattr(videorepa_helper, "get_trainable_params", None)
+        if not callable(params):
+            return
+        trainable = list(params())
+        if not trainable:
+            return
+        existing = set()
+        for group in trainable_params:
+            if isinstance(group, dict) and "params" in group:
+                existing.update(id(p) for p in group["params"])
+            elif isinstance(group, torch.nn.Parameter):
+                existing.add(id(group))
+        new_params = [p for p in trainable if id(p) not in existing]
+        if not new_params:
+            return
+        lr = float(getattr(args, "learning_rate", 1e-4)) * float(
+            getattr(args, "input_lr_scale", 1.0)
+        )
+        trainable_params.append({"params": new_params, "lr": lr})
+        lr_descriptions.append("videorepa_projector")
+        logger.info(
+            "VideoREPA: added %d projector params to optimizer groups (lr=%.6f).",
+            len(new_params),
+            lr,
+        )
