@@ -256,6 +256,18 @@ def collect_and_log_training_metrics(
         logs["loss/memflow_guidance"] = float(
             loss_components.memflow_guidance_loss.item()
         )
+    if getattr(loss_components, "reflexflow_adr_loss", None) is not None:
+        logs["loss/reflexflow_adr"] = float(loss_components.reflexflow_adr_loss.item())
+    if getattr(loss_components, "reflexflow_fc_loss", None) is not None:
+        logs["loss/reflexflow_fc"] = float(loss_components.reflexflow_fc_loss.item())
+    if getattr(loss_components, "reflexflow_exposure_bias_mean", None) is not None:
+        logs["reflexflow/exposure_bias_mean"] = float(
+            loss_components.reflexflow_exposure_bias_mean.item()
+        )
+    if getattr(loss_components, "reflexflow_weight_mean", None) is not None:
+        logs["reflexflow/weight_mean"] = float(
+            loss_components.reflexflow_weight_mean.item()
+        )
 
     # Optionally compute extra training metrics periodically
     try:

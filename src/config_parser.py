@@ -32,6 +32,7 @@ from configs.video_consistency_distance import (
     apply_video_consistency_distance_config,
 )
 from configs.self_resampling_config import apply_self_resampling_config
+from configs.reflexflow_config import apply_reflexflow_config
 from configs.videorepa_config import apply_videorepa_config
 from configs.vae_repa_config import apply_vae_repa_config
 from configs.structure_from_tracking_config import (
@@ -729,6 +730,7 @@ def create_args_from_config(
 
     # Self-resampling (train-only, LoRA gated)
     apply_self_resampling_config(args, config, logger)
+    apply_reflexflow_config(args, config, logger)
 
     # Error recycling (train-only, LoRA gated)
     apply_error_recycling_config(args, config, logger)

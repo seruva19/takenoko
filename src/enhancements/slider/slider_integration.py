@@ -152,6 +152,7 @@ class SliderIntegration:
                 warp_fn=kwargs.get("warp_fn"),
                 adaptive_manager=kwargs.get("adaptive_manager"),
                 transition_loss_context=kwargs.get("transition_loss_context"),
+                reflexflow_context=kwargs.get("reflexflow_context"),
                 noise_scheduler=noise_scheduler,
                 global_step=kwargs.get("global_step"),
                 current_epoch=kwargs.get("current_epoch"),

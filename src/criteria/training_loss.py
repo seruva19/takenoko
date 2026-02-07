@@ -31,6 +31,7 @@ from enhancements.blockwise_flow_matching.segment_utils import (
     normalize_timesteps,
     segment_index_for_timesteps,
 )
+from enhancements.reflexflow.reflexflow import compute_reflexflow_loss_terms
 
 
 logger = get_logger(__name__)
@@ -186,6 +187,14 @@ class LossComponents:
         Scaling component of the physics-guided motion loss.
     video_consistency_distance_loss: Optional[torch.Tensor]
         Video Consistency Distance (VCD) auxiliary loss, if enabled.
+    reflexflow_adr_loss: Optional[torch.Tensor]
+        ReflexFlow anti-drift rectification (ADR) auxiliary loss.
+    reflexflow_fc_loss: Optional[torch.Tensor]
+        ReflexFlow frequency-compensation (FC) weighted FM auxiliary loss.
+    reflexflow_exposure_bias_mean: Optional[torch.Tensor]
+        Mean exposure-bias magnitude used to construct FC weights.
+    reflexflow_weight_mean: Optional[torch.Tensor]
+        Mean FC reweighting factor.
     """
 
     total_loss: torch.Tensor
@@ -232,6 +241,10 @@ class LossComponents:
     physics_motion_rotation_loss: Optional[torch.Tensor] = None
     physics_motion_scaling_loss: Optional[torch.Tensor] = None
     video_consistency_distance_loss: Optional[torch.Tensor] = None
+    reflexflow_adr_loss: Optional[torch.Tensor] = None
+    reflexflow_fc_loss: Optional[torch.Tensor] = None
+    reflexflow_exposure_bias_mean: Optional[torch.Tensor] = None
+    reflexflow_weight_mean: Optional[torch.Tensor] = None
 
 
 class TrainingLossComputer:
@@ -546,6 +559,7 @@ class TrainingLossComputer:
         adaptive_manager: Optional[Any] = None,
         transition_loss_context: Optional[Dict[str, Any]] = None,
         noise_scheduler: Optional[Any] = None,
+        reflexflow_context: Optional[Dict[str, Any]] = None,
     ) -> LossComponents:
         """Compute the full training loss and its components.
 
@@ -958,6 +972,40 @@ class TrainingLossComputer:
             loss = loss + transition_directional_weight * directional_value.mean()
 
         base_loss = loss
+
+        # ---- Optional ReflexFlow (ADR + FC) auxiliary objective ----
+        reflexflow_adr_loss_value: Optional[torch.Tensor] = None
+        reflexflow_fc_loss_value: Optional[torch.Tensor] = None
+        reflexflow_exposure_bias_mean_value: Optional[torch.Tensor] = None
+        reflexflow_weight_mean_value: Optional[torch.Tensor] = None
+        if (
+            getattr(args, "enable_reflexflow", False)
+            and isinstance(reflexflow_context, dict)
+            and bool(reflexflow_context.get("applied", False))
+        ):
+            try:
+                reflex_terms = compute_reflexflow_loss_terms(
+                    model_pred=model_pred.to(network_dtype),
+                    target=base_target.to(network_dtype),
+                    noisy_model_input=noisy_model_input.to(network_dtype),
+                    latents=latents.to(network_dtype),
+                    clean_pred=reflexflow_context.get("clean_pred"),
+                    alpha=float(getattr(args, "reflexflow_alpha", 1.0)),
+                )
+                beta1 = float(getattr(args, "reflexflow_beta1", 10.0))
+                beta2 = float(getattr(args, "reflexflow_beta2", 1.0))
+
+                if beta1 > 0.0 and reflex_terms.adr_loss is not None:
+                    loss = loss + beta1 * reflex_terms.adr_loss
+                    reflexflow_adr_loss_value = reflex_terms.adr_loss.detach()
+                if beta2 > 0.0 and reflex_terms.fc_loss is not None:
+                    loss = loss + beta2 * reflex_terms.fc_loss
+                    reflexflow_fc_loss_value = reflex_terms.fc_loss.detach()
+
+                reflexflow_exposure_bias_mean_value = reflex_terms.exposure_bias_mean
+                reflexflow_weight_mean_value = reflex_terms.weight_mean
+            except Exception as e:
+                logger.warning("ReflexFlow loss computation failed: %s", e)
 
         # ---- Physics-guided motion loss (optional, training-only) ----
         physics_motion_loss_value: Optional[torch.Tensor] = None
@@ -2039,6 +2087,10 @@ class TrainingLossComputer:
             physics_motion_rotation_loss=physics_motion_rotation_value,
             physics_motion_scaling_loss=physics_motion_scaling_value,
             video_consistency_distance_loss=video_consistency_distance_loss_value,
+            reflexflow_adr_loss=reflexflow_adr_loss_value,
+            reflexflow_fc_loss=reflexflow_fc_loss_value,
+            reflexflow_exposure_bias_mean=reflexflow_exposure_bias_mean_value,
+            reflexflow_weight_mean=reflexflow_weight_mean_value,
         )
 
     @torch.no_grad()

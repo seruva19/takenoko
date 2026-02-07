@@ -43,6 +43,7 @@ from enhancements.memflow_guidance.training_integration import (
 from enhancements.semanticgen.training_integration import SemanticGenTrainingState
 
 from enhancements.error_recycling.error_recycling_helper import ErrorRecyclingHelper
+from enhancements.reflexflow.reflexflow_helper import ReflexFlowHelper
 from enhancements.self_resampling.self_resampling_helper import SelfResamplingHelper
 
 
@@ -75,6 +76,11 @@ from transition.pipeline import (
     update_teacher_if_needed,
 )
 from core.self_resampling_runtime import maybe_apply_self_resampling
+from enhancements.reflexflow.runtime import (
+    maybe_apply_reflexflow,
+    build_reflexflow_context,
+    maybe_log_reflexflow_metrics,
+)
 from core.training_inputs import prepare_standard_training_inputs
 from energy_based.eqm_mode.training_helper import EqMTrainingHelper
 
@@ -310,6 +316,9 @@ class TrainingCore:
         self.self_resampling_helper: Optional[SelfResamplingHelper] = None
         self._warned_self_resampling_eqm = False
         self._warned_self_resampling_fast_rollout_fallback = False
+        self.reflexflow_helper: Optional[ReflexFlowHelper] = None
+        self._warned_reflexflow_eqm = False
+        self._warned_reflexflow_clean_pred = False
         self._last_mixflow_stats: Optional[Dict[str, float]] = None
 
         # Weight EMA tracking (initialized when enabled)
@@ -1257,6 +1266,25 @@ class TrainingCore:
                     logger.warning("Self-resampling setup failed: %s", exc)
                     self.self_resampling_helper = None
 
+        # Initialize ReflexFlow scheduled-sampling helper (train-only, LoRA-gated)
+        self.reflexflow_helper = None
+        if bool(getattr(args, "enable_reflexflow", False)):
+            network_module = str(getattr(args, "network_module", "")).lower()
+            train_arch = str(getattr(args, "train_architecture", "lora")).lower()
+            if "lora" not in network_module and train_arch != "lora":
+                logger.warning(
+                    "ReflexFlow requires LoRA training; disabling for network_module=%s.",
+                    network_module or "<unset>",
+                )
+            else:
+                try:
+                    self.reflexflow_helper = ReflexFlowHelper(args, noise_scheduler)
+                    self.reflexflow_helper.setup_hooks()
+                    logger.info("ReflexFlow scheduled sampling enabled for this run.")
+                except Exception as exc:
+                    logger.warning("ReflexFlow setup failed: %s", exc)
+                    self.reflexflow_helper = None
+
         # Calculate starting epoch when resuming from checkpoint
         if global_step > 0:
             # We're resuming from a checkpoint - calculate which epoch we should be in
@@ -1656,7 +1684,9 @@ class TrainingCore:
 
                     error_recycling_state = None
                     self_resampling_state = None
+                    reflexflow_state = None
                     latents_for_dit = latents
+                    reflexflow_clean_noisy_input = None
                     rollout_transformer = (
                         dual_model_manager.active_model
                         if dual_model_manager is not None
@@ -1748,6 +1778,21 @@ class TrainingCore:
                         semantic_conditioning_helper=self.semantic_conditioning_helper,
                         predict_with_full_dit=_predict_self_resampling_with_full_dit,
                     )
+                    (
+                        noisy_model_input,
+                        reflexflow_state,
+                        reflexflow_clean_noisy_input,
+                        self._warned_reflexflow_eqm,
+                    ) = maybe_apply_reflexflow(
+                        args=args,
+                        reflexflow_helper=self.reflexflow_helper,
+                        noisy_model_input=noisy_model_input,
+                        latents=latents_for_dit,
+                        noise=noise,
+                        global_step=global_step,
+                        eqm_enabled=eqm_enabled,
+                        warned_reflexflow_eqm=self._warned_reflexflow_eqm,
+                    )
                     # Optional: If the network supports TLora-style masking, update mask from timesteps
                     try:
                         if unwrapped_net is None:
@@ -1801,6 +1846,7 @@ class TrainingCore:
                         active_transformer = transformer
                         if dual_model_manager is not None:
                             active_transformer = dual_model_manager.active_model
+                        reflexflow_context = None
 
                         if eqm_enabled:
                             if self.eqm_training_helper is None:
@@ -1982,6 +2028,55 @@ class TrainingCore:
                                     internal_guidance_shift,
                                 ) = model_result
 
+                            def _get_reflexflow_clean_prediction() -> Optional[torch.Tensor]:
+                                saved_semantic_kl = self.semanticgen_state.kl_loss
+                                saved_semantic_tokens = (
+                                    self.semanticgen_state.tokens_for_alignment
+                                )
+                                saved_mixflow_stats = self._last_mixflow_stats
+                                try:
+                                    with torch.no_grad():
+                                        clean_result = self.call_dit(
+                                            args,
+                                            accelerator,
+                                            active_transformer,
+                                            latents_for_dit,
+                                            batch,
+                                            noise,
+                                            reflexflow_clean_noisy_input,
+                                            timesteps,
+                                            network_dtype,
+                                            control_signal_processor,
+                                            controlnet,
+                                            global_step=global_step,
+                                            reg_cls_token=None,
+                                        )
+                                    if (
+                                        isinstance(clean_result, (tuple, list))
+                                        and len(clean_result) > 0
+                                        and torch.is_tensor(clean_result[0])
+                                    ):
+                                        return clean_result[0].detach()
+                                    return None
+                                finally:
+                                    self.semanticgen_state.kl_loss = saved_semantic_kl
+                                    self.semanticgen_state.tokens_for_alignment = (
+                                        saved_semantic_tokens
+                                    )
+                                    self._last_mixflow_stats = saved_mixflow_stats
+
+                            reflexflow_context, self._warned_reflexflow_clean_pred = (
+                                build_reflexflow_context(
+                                    args=args,
+                                    reflexflow_state=reflexflow_state,
+                                    reflexflow_clean_noisy_input=reflexflow_clean_noisy_input,
+                                    get_clean_prediction=_get_reflexflow_clean_prediction,
+                                    warned_reflexflow_clean_pred=(
+                                        self._warned_reflexflow_clean_pred
+                                    ),
+                                )
+                            )
+
                         transition_loss_context = {"transition_training_enabled": False}
                         per_sample_transition_loss = None
 
@@ -2149,6 +2244,7 @@ class TrainingCore:
                                 warp_fn=getattr(self, "warp", None),
                                 adaptive_manager=self.adaptive_manager,
                                 transition_loss_context=transition_loss_context,
+                                reflexflow_context=reflexflow_context,
                                 global_step=global_step,
                                 current_epoch=current_epoch,
                             )
@@ -2223,6 +2319,14 @@ class TrainingCore:
                                     )
                                     if metrics:
                                         accelerator.log(metrics, step=global_step)
+
+                            maybe_log_reflexflow_metrics(
+                                args=args,
+                                accelerator=accelerator,
+                                reflexflow_helper=self.reflexflow_helper,
+                                reflexflow_state=reflexflow_state,
+                                global_step=global_step,
+                            )
 
                     memflow_loss = None
                     if (

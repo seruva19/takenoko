@@ -16,6 +16,21 @@ def apply_self_resampling_config(
     args.self_resampling_apply_prob = float(
         config.get("self_resampling_apply_prob", 1.0)
     )
+    args.self_resampling_apply_prob_start = float(
+        config.get("self_resampling_apply_prob_start", args.self_resampling_apply_prob)
+    )
+    args.self_resampling_apply_prob_end = float(
+        config.get("self_resampling_apply_prob_end", args.self_resampling_apply_prob)
+    )
+    args.self_resampling_apply_prob_ramp_steps = int(
+        config.get("self_resampling_apply_prob_ramp_steps", 0)
+    )
+    args.self_resampling_apply_prob_start_step = int(
+        config.get("self_resampling_apply_prob_start_step", 0)
+    )
+    args.self_resampling_apply_prob_ramp_shape = str(
+        config.get("self_resampling_apply_prob_ramp_shape", "linear")
+    ).lower()
     args.self_resampling_shift = float(config.get("self_resampling_shift", 0.6))
     args.self_resampling_min_t = float(config.get("self_resampling_min_t", 0.05))
     args.self_resampling_max_t = float(config.get("self_resampling_max_t", 0.95))
@@ -103,6 +118,18 @@ def apply_self_resampling_config(
         raise ValueError("self_resampling_warmup_steps must be >= 0")
     if not 0.0 <= args.self_resampling_apply_prob <= 1.0:
         raise ValueError("self_resampling_apply_prob must be between 0 and 1")
+    if not 0.0 <= args.self_resampling_apply_prob_start <= 1.0:
+        raise ValueError("self_resampling_apply_prob_start must be between 0 and 1")
+    if not 0.0 <= args.self_resampling_apply_prob_end <= 1.0:
+        raise ValueError("self_resampling_apply_prob_end must be between 0 and 1")
+    if args.self_resampling_apply_prob_ramp_steps < 0:
+        raise ValueError("self_resampling_apply_prob_ramp_steps must be >= 0")
+    if args.self_resampling_apply_prob_start_step < 0:
+        raise ValueError("self_resampling_apply_prob_start_step must be >= 0")
+    if args.self_resampling_apply_prob_ramp_shape not in ("linear", "cosine"):
+        raise ValueError(
+            "self_resampling_apply_prob_ramp_shape must be one of: linear, cosine"
+        )
     if args.self_resampling_shift <= 0.0:
         raise ValueError("self_resampling_shift must be > 0")
     if not 0.0 <= args.self_resampling_min_t < 1.0:
@@ -229,8 +256,14 @@ def apply_self_resampling_config(
 
     if args.enable_self_resampling:
         logger.info(
-            "Self-resampling enabled: warmup_steps=%d shift=%.3f t_range=[%.3f, %.3f] blend=%.3f ar_history=%s model_rollout=%s fast_rollout=%s rollout_kv_cache=%s rollout_self_attn_kv_cache=%s rollout_steps=%d",
+            "Self-resampling enabled: warmup_steps=%d apply_prob=%.3f (start=%.3f end=%.3f ramp_steps=%d start_step=%d shape=%s) shift=%.3f t_range=[%.3f, %.3f] blend=%.3f ar_history=%s model_rollout=%s fast_rollout=%s rollout_kv_cache=%s rollout_self_attn_kv_cache=%s rollout_steps=%d",
             args.self_resampling_warmup_steps,
+            args.self_resampling_apply_prob,
+            args.self_resampling_apply_prob_start,
+            args.self_resampling_apply_prob_end,
+            args.self_resampling_apply_prob_ramp_steps,
+            args.self_resampling_apply_prob_start_step,
+            args.self_resampling_apply_prob_ramp_shape,
             args.self_resampling_shift,
             args.self_resampling_min_t,
             args.self_resampling_max_t,

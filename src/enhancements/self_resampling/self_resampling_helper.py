@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Optional, Tuple
 
@@ -32,6 +33,21 @@ class SelfResamplingHelper:
         self.enabled = bool(getattr(args, "enable_self_resampling", False))
         self.warmup_steps = int(getattr(args, "self_resampling_warmup_steps", 0))
         self.apply_prob = float(getattr(args, "self_resampling_apply_prob", 1.0))
+        self.apply_prob_start = float(
+            getattr(args, "self_resampling_apply_prob_start", self.apply_prob)
+        )
+        self.apply_prob_end = float(
+            getattr(args, "self_resampling_apply_prob_end", self.apply_prob)
+        )
+        self.apply_prob_ramp_steps = int(
+            getattr(args, "self_resampling_apply_prob_ramp_steps", 0)
+        )
+        self.apply_prob_start_step = int(
+            getattr(args, "self_resampling_apply_prob_start_step", 0)
+        )
+        self.apply_prob_ramp_shape = str(
+            getattr(args, "self_resampling_apply_prob_ramp_shape", "linear")
+        ).lower()
         self.shift = float(getattr(args, "self_resampling_shift", 0.6))
         self.min_t = float(getattr(args, "self_resampling_min_t", 0.05))
         self.max_t = float(getattr(args, "self_resampling_max_t", 0.95))
@@ -96,6 +112,23 @@ class SelfResamplingHelper:
         end = max(start, num_frames - self.history_exclude_tail_frames)
         end = min(end, num_frames)
         return start, end
+
+    def _resolve_apply_probability(self, step: int) -> float:
+        prob = self.apply_prob
+        if self.apply_prob_ramp_steps > 0:
+            if step < self.apply_prob_start_step:
+                prob = self.apply_prob_start
+            else:
+                progress = float(step - self.apply_prob_start_step) / float(
+                    max(self.apply_prob_ramp_steps, 1)
+                )
+                progress = max(0.0, min(1.0, progress))
+                if self.apply_prob_ramp_shape == "cosine":
+                    progress = 0.5 - 0.5 * math.cos(math.pi * progress)
+                prob = self.apply_prob_start + (
+                    self.apply_prob_end - self.apply_prob_start
+                ) * progress
+        return float(max(0.0, min(1.0, prob)))
 
     def _build_state(
         self,
@@ -255,6 +288,7 @@ class SelfResamplingHelper:
 
         self.iteration_count += 1
         step = int(global_step or 0)
+        effective_apply_prob = self._resolve_apply_probability(step)
         warmup_active = step < self.warmup_steps
         if warmup_active:
             return noisy_model_input, self._build_state(
@@ -311,8 +345,21 @@ class SelfResamplingHelper:
                 model_rollout_active=False,
             )
 
-        if self.apply_prob < 1.0 and (
-            torch.rand((), device=noisy_model_input.device).item() > self.apply_prob
+        if effective_apply_prob <= 0.0:
+            return noisy_model_input, self._build_state(
+                applied=False,
+                warmup_active=False,
+                simulation_timestep_mean=0.0,
+                simulation_timestep_std=0.0,
+                history_frame_start=0,
+                history_frame_end=0,
+                autoregressive_history_active=False,
+                model_rollout_active=False,
+            )
+
+        if effective_apply_prob < 1.0 and (
+            torch.rand((), device=noisy_model_input.device).item()
+            > effective_apply_prob
         ):
             return noisy_model_input, self._build_state(
                 applied=False,

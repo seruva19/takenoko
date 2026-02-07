@@ -2448,6 +2448,31 @@ self_resampling_warmup_steps = 0
 # 1.0 applies every step after warmup; lower values interleave clean-history steps.
 self_resampling_apply_prob = 1.0
 
+# Optional scheduled probability ramp for self-resampling.
+# These values control the effective per-step apply probability p(step):
+# - before start_step: p = self_resampling_apply_prob_start
+# - during ramp: interpolates start -> end over self_resampling_apply_prob_ramp_steps
+# - after ramp: p = self_resampling_apply_prob_end
+# If ramp_steps = 0, static probability is used (self_resampling_apply_prob).
+# All probability values must be in [0.0, 1.0].
+self_resampling_apply_prob_start = 1.0
+
+# Per-step probability of applying self-resampling (0.0-1.0).
+self_resampling_apply_prob_end = 1.0
+
+# Number of optimizer steps used for probability ramp interpolation (>= 0).
+# 0 disables ramping and keeps static self_resampling_apply_prob behavior.
+self_resampling_apply_prob_ramp_steps = 0
+
+# Global optimizer step where probability ramp begins (>= 0).
+# Use with warmup to delay rollout exposure until stable training begins.
+self_resampling_apply_prob_start_step = 0
+
+# Ramp interpolation shape for apply probability:
+# - "linear": linear interpolation
+# - "cosine": cosine easing (slow-fast-slow)
+self_resampling_apply_prob_ramp_shape = "linear"
+
 # Logit-normal shift factor for simulation timestep sampling (> 0).
 # Shift is applied as: t <- s*t/(1 + (s-1)*t). Values < 1 bias toward lower noise.
 # Paper-aligned default: 0.6.
@@ -2512,8 +2537,7 @@ self_resampling_rollout_self_attn_kv_cache = true
 self_resampling_model_rollout_steps = 1
 
 # Optional: enable practical history routing with existing TREAD integration
-# (default: false). This approximates paper Sec. 3.3 by dynamically selecting
-# top-k history frames during routed layers.
+# (default: false). Dynamically selects top-k history frames during routed layers.
 enable_self_resampling_history_routing = false
 
 # History routing mode used when enable_self_resampling_history_routing=true:
@@ -2575,6 +2599,77 @@ self_resampling_attention_routing_always_keep_last_frame = false
 # Metric logging interval in optimizer steps (> 0).
 # Controls cadence for `self_resampling/*` TensorBoard metrics.
 self_resampling_log_interval = 50
+
+# =============================================================================
+# ⚠️ REFLEXFLOW SETTINGS
+# =============================================================================
+
+# ReflexFlow objective (ADR + Frequency Compensation), training-only and default off.
+enable_reflexflow = false
+
+# ReflexFlow FC exposure-bias scaling coefficient alpha (>= 0).
+reflexflow_alpha = 1.0
+
+# ReflexFlow ADR coefficient beta1 (>= 0).
+reflexflow_beta1 = 10.0
+
+# ReflexFlow FC coefficient beta2 (>= 0).
+reflexflow_beta2 = 1.0
+
+# Scheduled-sampling warmup in optimizer steps (>= 0).
+# During warmup, ReflexFlow runs with clean inputs only (no bias corruption).
+reflexflow_warmup_steps = 0
+
+# Probability of applying ReflexFlow scheduled sampling per step (0.0-1.0).
+# 1.0 = always on after warmup, 0.0 = disabled.
+reflexflow_apply_prob = 1.0
+
+# Start/end probabilities for optional probability ramp.
+# If ramp_steps=0 these fall back to reflexflow_apply_prob.
+reflexflow_apply_prob_start = 1.0
+
+# End probability after ramp completion (or immediately when ramp is disabled).
+reflexflow_apply_prob_end = 1.0
+
+# Probability ramp controls:
+# - before start_step: p = reflexflow_apply_prob_start
+# - during ramp: interpolate start -> end
+# - after ramp: p = reflexflow_apply_prob_end
+# shape options: "linear" or "cosine"
+reflexflow_apply_prob_ramp_steps = 0
+
+# Global optimizer step where ReflexFlow probability ramp begins (>= 0).
+reflexflow_apply_prob_start_step = 0
+
+# Interpolation shape for ReflexFlow probability ramp: "linear" or "cosine".
+reflexflow_apply_prob_ramp_shape = "linear"
+
+# Shift for the scheduled-sampling timestep distribution (> 0).
+# Larger values bias sampled corruption timesteps later in the trajectory.
+reflexflow_shift = 0.6
+
+# Clamps for sampled corruption timestep t in normalized [0,1] space.
+# Must satisfy: 0.0 <= min_t < max_t <= 1.0
+reflexflow_min_t = 0.05
+
+# Upper clamp for sampled corruption timestep in normalized [0,1] space.
+reflexflow_max_t = 0.95
+
+# Blend ratio between original noisy input and ReflexFlow-corrupted input (0.0-1.0).
+# 1.0 = fully use ReflexFlow corruption.
+reflexflow_blend = 1.0
+
+# Optional history-only application window for video training.
+# start_frame selects the first history frame to corrupt.
+# exclude_tail_frames preserves the newest tail frames from corruption.
+reflexflow_history_start_frame = 0
+
+# Number of newest tail frames excluded from ReflexFlow corruption (>= 0).
+reflexflow_history_exclude_tail_frames = 1
+
+# Metric logging interval in optimizer steps (> 0).
+# Controls cadence for `reflexflow/*` TensorBoard metrics.
+reflexflow_log_interval = 50
 
 # =============================================================================
 # ⚠️ ERROR RECYCLING SETTINGS
