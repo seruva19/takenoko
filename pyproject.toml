@@ -49,10 +49,10 @@ dependencies = [
   "toml==0.10.2",
   "torch-optimi>=0.3.0",
   "torch-optimizer==0.3.0",
-  "torch>=2.6.0,<2.7.0",
+  "torch>=2.9,<2.10",
   "torchao==0.15.0",
   "torchmetrics>=1.7.4",
-  "torchvision>=0.21.0,<0.22.0",
+  "torchvision>=0.24.1,<0.25",
   "tqdm==4.67.1",
   "transformers==4.46.3",
   "triton-windows<=3.2.0.post19",
@@ -60,7 +60,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-cu126 = ["torch==2.6.0+cu126", "torchvision==0.21.0+cu126"]
+cu128 = ["torch==2.9.1+cu128", "torchvision==0.24.1+cu128"]
 
 [tool.uv]
 
@@ -75,12 +75,12 @@ build-backend = "hatchling.build"
 packages = ["takenoko"]
 
 [tool.uv.sources]
-torch = { index = "pytorch-cu126" }
-torchvision = { index = "pytorch-cu126" }
+torch = { index = "pytorch-cu128" }
+torchvision = { index = "pytorch-cu128" }
 
 [[tool.uv.index]]
-name = "pytorch-cu126"
-url = "https://download.pytorch.org/whl/cu126"
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
 explicit = true
 
 [tool.ruff]

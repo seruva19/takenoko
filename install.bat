@@ -51,8 +51,8 @@ if errorlevel 1 (
     echo Will install CPU-only version
     set CUDA_EXTRA=""
 ) else (
-    echo NVIDIA GPU detected. Installing CUDA 12.6 version...
-    set CUDA_EXTRA="[cu126]"
+    echo NVIDIA GPU detected. Installing CUDA 12.8 version...
+    set CUDA_EXTRA="[cu128]"
     echo.
     echo GPU summary ^(model, memory, driver^):
     nvidia-smi --query-gpu=name,memory.total,memory.free,memory.used,driver_version --format=csv
