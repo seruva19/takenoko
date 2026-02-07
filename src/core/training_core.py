@@ -45,6 +45,7 @@ from enhancements.semanticgen.training_integration import SemanticGenTrainingSta
 from enhancements.error_recycling.error_recycling_helper import ErrorRecyclingHelper
 from enhancements.reflexflow.reflexflow_helper import ReflexFlowHelper
 from enhancements.self_resampling.self_resampling_helper import SelfResamplingHelper
+from enhancements.stable_velocity.stablevm_target_helper import StableVMTargetHelper
 
 
 from enhancements.differential_guidance.training_integration import (
@@ -320,6 +321,8 @@ class TrainingCore:
         self._warned_reflexflow_eqm = False
         self._warned_reflexflow_clean_pred = False
         self._last_mixflow_stats: Optional[Dict[str, float]] = None
+        self.stablevm_target_helper: Optional[StableVMTargetHelper] = None
+        self._last_stablevm_target_metrics: Dict[str, torch.Tensor] = {}
 
         # Weight EMA tracking (initialized when enabled)
         self.weight_ema: Optional[ExponentialMovingAverage] = None
@@ -533,6 +536,32 @@ class TrainingCore:
         self._iter_time_ema_sec = new_ema
         return new_ema
 
+    def _attach_stable_velocity_target_metrics(self, loss_components: Any) -> None:
+        metrics = self._last_stablevm_target_metrics
+        if not metrics:
+            return
+        for key, value in metrics.items():
+            if value is None:
+                continue
+            try:
+                setattr(loss_components, key, value.detach())
+            except Exception:
+                setattr(loss_components, key, value)
+
+    def initialize_stable_velocity_target(self, args: argparse.Namespace) -> None:
+        """Initialize StableVM train-time target helper from parsed args."""
+        self._last_stablevm_target_metrics = {}
+        self.stablevm_target_helper = StableVMTargetHelper(args)
+        if self.stablevm_target_helper.enabled:
+            logger.info(
+                "StableVM target enabled for training (label_source=%s, t_min=%.3f, blend=%.3f, bank=%d, refs=%d).",
+                self.stablevm_target_helper.label_source,
+                self.stablevm_target_helper.t_min,
+                self.stablevm_target_helper.blend,
+                self.stablevm_target_helper.bank_capacity,
+                self.stablevm_target_helper.refs_per_sample,
+            )
+
     def call_dit(
         self,
         args: argparse.Namespace,
@@ -553,6 +582,9 @@ class TrainingCore:
         rcm_t_scaling_factor: Optional[float] = None,
         reg_cls_token: Optional[torch.Tensor] = None,
         context_override: Optional[List[torch.Tensor]] = None,
+        apply_stable_velocity_target: bool = True,
+        return_intermediate: Optional[bool] = None,
+        override_target: Optional[bool] = None,
     ) -> Union[
         Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]],
         Tuple[
@@ -576,6 +608,9 @@ class TrainingCore:
                 implementation.
         """
         model = transformer
+        _ = return_intermediate, override_target
+        if apply_stable_velocity_target:
+            self._last_stablevm_target_metrics = {}
 
         current_logging_level = getattr(args, "logging_level", "INFO").upper()
         perturbed_latents_for_target = latents.clone()  # Start with a clone
@@ -1056,6 +1091,33 @@ class TrainingCore:
                 device=accelerator.device, dtype=network_dtype
             )
 
+        if (
+            apply_stable_velocity_target
+            and self.stablevm_target_helper is not None
+            and self.stablevm_target_helper.enabled
+        ):
+            try:
+                target = self.stablevm_target_helper.apply_to_target(
+                    base_target=target,
+                    noisy_latents=noisy_model_input.to(
+                        device=accelerator.device, dtype=network_dtype
+                    ),
+                    clean_latents=perturbed_latents_for_target.to(
+                        device=accelerator.device, dtype=network_dtype
+                    ),
+                    timesteps=timesteps,
+                    batch=batch,
+                    global_step=global_step,
+                    update_bank=True,
+                )
+                self._last_stablevm_target_metrics = dict(
+                    self.stablevm_target_helper.last_metrics
+                )
+            except Exception as exc:
+                if accelerator.is_main_process:
+                    logger.warning("StableVM target fallback to base target: %s", exc)
+                self._last_stablevm_target_metrics = {}
+
         if return_internal_guidance and self.internal_guidance_helper is not None:
             ig_model_kwargs = {
                 "t": timesteps,
@@ -1176,6 +1238,7 @@ class TrainingCore:
         self.noise_scheduler = noise_scheduler
         self.internal_guidance_helper = internal_guidance_helper
         self.self_transcendence_helper = self_transcendence_helper
+        self.initialize_stable_velocity_target(args)
 
         transition_cfg = getattr(args, "transition_training", None)
         if transition_cfg and getattr(transition_cfg, "enabled", False):
@@ -1746,6 +1809,7 @@ class TrainingCore:
                                 controlnet,
                                 global_step=global_step,
                                 reg_cls_token=None,
+                                apply_stable_velocity_target=False,
                             )
 
                     (
@@ -1947,6 +2011,7 @@ class TrainingCore:
                                         global_step=global_step,
                                         reg_cls_token=None,
                                         context_override=context_override,
+                                        apply_stable_velocity_target=False,
                                     )
 
                                 noisy_model_input, did_latent_update = (
@@ -2050,6 +2115,7 @@ class TrainingCore:
                                             controlnet,
                                             global_step=global_step,
                                             reg_cls_token=None,
+                                            apply_stable_velocity_target=False,
                                         )
                                     if (
                                         isinstance(clean_result, (tuple, list))
@@ -2107,6 +2173,7 @@ class TrainingCore:
                                             control_signal_processor,
                                             controlnet,
                                             global_step=global_step,
+                                            apply_stable_velocity_target=False,
                                             return_intermediate=False,
                                             override_target=True,
                                         )
@@ -2253,6 +2320,9 @@ class TrainingCore:
                                 args=args,
                                 loss_components=loss_components,
                                 alignment_helper=self.semantic_alignment_helper,
+                            )
+                            self._attach_stable_velocity_target_metrics(
+                                loss_components
                             )
 
                             if (

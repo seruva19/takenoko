@@ -794,6 +794,7 @@ class WanFinetuneTrainer:
                     global_step=global_step,
                     reg_cls_token=None,
                     context_override=context_override,
+                    apply_stable_velocity_target=False,
                 )
 
             noisy_model_input, did_latent_update = apply_latent_update(
@@ -917,6 +918,7 @@ class WanFinetuneTrainer:
             global_step=global_step,
             current_epoch=current_epoch,
         )
+        self.training_core._attach_stable_velocity_target_metrics(loss_components)
 
         return loss_components
 
@@ -1145,6 +1147,7 @@ class WanFinetuneTrainer:
 
         # Configure advanced logging settings
         self.training_core.configure_advanced_logging(args)
+        self.training_core.initialize_stable_velocity_target(args)
 
         # Re-initialize memory manager with training args so flags are honored
         try:
@@ -2423,6 +2426,75 @@ class WanFinetuneTrainer:
                         }
                         if getattr(loss_components, "repa_loss", None) is not None:
                             logs["loss/repa"] = float(loss_components.repa_loss.item())
+                        if (
+                            getattr(loss_components, "stable_velocity_weight_mean", None)
+                            is not None
+                        ):
+                            logs["repa/stable_velocity_weight_mean"] = float(
+                                loss_components.stable_velocity_weight_mean.item()
+                            )
+                        if (
+                            getattr(loss_components, "stable_velocity_active_ratio", None)
+                            is not None
+                        ):
+                            logs["repa/stable_velocity_active_ratio"] = float(
+                                loss_components.stable_velocity_active_ratio.item()
+                            )
+                        if (
+                            getattr(
+                                loss_components,
+                                "stable_velocity_target_applied_ratio",
+                                None,
+                            )
+                            is not None
+                        ):
+                            logs["stable_velocity/target_applied_ratio"] = float(
+                                loss_components.stable_velocity_target_applied_ratio.item()
+                            )
+                        if (
+                            getattr(
+                                loss_components,
+                                "stable_velocity_target_mean_refs",
+                                None,
+                            )
+                            is not None
+                        ):
+                            logs["stable_velocity/target_mean_refs"] = float(
+                                loss_components.stable_velocity_target_mean_refs.item()
+                            )
+                        if (
+                            getattr(
+                                loss_components,
+                                "stable_velocity_target_fallback_ratio",
+                                None,
+                            )
+                            is not None
+                        ):
+                            logs["stable_velocity/target_fallback_ratio"] = float(
+                                loss_components.stable_velocity_target_fallback_ratio.item()
+                            )
+                        if (
+                            getattr(
+                                loss_components,
+                                "stable_velocity_target_global_fallback_ratio",
+                                None,
+                            )
+                            is not None
+                        ):
+                            logs["stable_velocity/target_global_fallback_ratio"] = float(
+                                loss_components.stable_velocity_target_global_fallback_ratio.item()
+                            )
+                        if (
+                            getattr(
+                                loss_components,
+                                "stable_velocity_target_bank_fill_ratio",
+                                None,
+                            )
+                            is not None
+                        ):
+                            logs["stable_velocity/target_bank_fill_ratio"] = float(
+                                loss_components.stable_velocity_target_bank_fill_ratio.item()
+                            )
                         if (
                             getattr(loss_components, "self_transcendence_loss", None)
                             is not None

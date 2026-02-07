@@ -173,6 +173,37 @@ def collect_and_log_training_metrics(
         logs["loss/moalign"] = float(loss_components.moalign_loss.item())
     if loss_components.repa_loss is not None:
         logs["loss/repa"] = float(loss_components.repa_loss.item())
+    if getattr(loss_components, "stable_velocity_weight_mean", None) is not None:
+        logs["repa/stable_velocity_weight_mean"] = float(
+            loss_components.stable_velocity_weight_mean.item()
+        )
+    if getattr(loss_components, "stable_velocity_active_ratio", None) is not None:
+        logs["repa/stable_velocity_active_ratio"] = float(
+            loss_components.stable_velocity_active_ratio.item()
+        )
+    if getattr(loss_components, "stable_velocity_target_applied_ratio", None) is not None:
+        logs["stable_velocity/target_applied_ratio"] = float(
+            loss_components.stable_velocity_target_applied_ratio.item()
+        )
+    if getattr(loss_components, "stable_velocity_target_mean_refs", None) is not None:
+        logs["stable_velocity/target_mean_refs"] = float(
+            loss_components.stable_velocity_target_mean_refs.item()
+        )
+    if getattr(loss_components, "stable_velocity_target_fallback_ratio", None) is not None:
+        logs["stable_velocity/target_fallback_ratio"] = float(
+            loss_components.stable_velocity_target_fallback_ratio.item()
+        )
+    if (
+        getattr(loss_components, "stable_velocity_target_global_fallback_ratio", None)
+        is not None
+    ):
+        logs["stable_velocity/target_global_fallback_ratio"] = float(
+            loss_components.stable_velocity_target_global_fallback_ratio.item()
+        )
+    if getattr(loss_components, "stable_velocity_target_bank_fill_ratio", None) is not None:
+        logs["stable_velocity/target_bank_fill_ratio"] = float(
+            loss_components.stable_velocity_target_bank_fill_ratio.item()
+        )
     if getattr(loss_components, "bfm_semfeat_loss", None) is not None:
         logs["loss/bfm_semfeat"] = float(loss_components.bfm_semfeat_loss.item())
     if getattr(loss_components, "bfm_semfeat_similarity", None) is not None:

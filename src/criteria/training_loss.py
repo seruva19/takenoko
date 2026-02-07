@@ -123,6 +123,20 @@ class LossComponents:
         The MOALIGN motion-centric relational alignment loss, if enabled.
     repa_loss: Optional[torch.Tensor]
         The REPA alignment loss, if enabled.
+    stable_velocity_weight_mean: Optional[torch.Tensor]
+        Mean StableVelocity weight applied to REPA samples (if enabled).
+    stable_velocity_active_ratio: Optional[torch.Tensor]
+        Fraction of REPA samples with non-zero StableVelocity weight.
+    stable_velocity_target_applied_ratio: Optional[torch.Tensor]
+        Fraction of batch samples whose base target was replaced/blended by StableVM target.
+    stable_velocity_target_mean_refs: Optional[torch.Tensor]
+        Mean number of reference-bank entries used per active StableVM label-group.
+    stable_velocity_target_fallback_ratio: Optional[torch.Tensor]
+        Fraction of StableVM-applied samples that fell back to base target due to non-finite values.
+    stable_velocity_target_global_fallback_ratio: Optional[torch.Tensor]
+        Fraction of StableVM-applied samples that used the per-shape global fallback bank.
+    stable_velocity_target_bank_fill_ratio: Optional[torch.Tensor]
+        Fill ratio of the active per-shape global memory bank relative to configured capacity.
     reg_align_loss: Optional[torch.Tensor]
         The REG alignment loss, if enabled.
     reg_cls_loss: Optional[torch.Tensor]
@@ -209,6 +223,13 @@ class LossComponents:
     self_transcendence_loss: Optional[torch.Tensor] = None
     moalign_loss: Optional[torch.Tensor] = None
     repa_loss: Optional[torch.Tensor] = None
+    stable_velocity_weight_mean: Optional[torch.Tensor] = None
+    stable_velocity_active_ratio: Optional[torch.Tensor] = None
+    stable_velocity_target_applied_ratio: Optional[torch.Tensor] = None
+    stable_velocity_target_mean_refs: Optional[torch.Tensor] = None
+    stable_velocity_target_fallback_ratio: Optional[torch.Tensor] = None
+    stable_velocity_target_global_fallback_ratio: Optional[torch.Tensor] = None
+    stable_velocity_target_bank_fill_ratio: Optional[torch.Tensor] = None
     reg_align_loss: Optional[torch.Tensor] = None
     reg_cls_loss: Optional[torch.Tensor] = None
     reg_similarity: Optional[torch.Tensor] = None
@@ -1284,6 +1305,8 @@ class TrainingLossComputer:
         sara_loss_value: Optional[torch.Tensor] = None
         moalign_loss_value: Optional[torch.Tensor] = None
         repa_loss_value: Optional[torch.Tensor] = None
+        stable_velocity_weight_mean_value: Optional[torch.Tensor] = None
+        stable_velocity_active_ratio_value: Optional[torch.Tensor] = None
         if sara_helper is not None:
             try:
                 if "pixels" in batch:
@@ -1390,6 +1413,36 @@ class TrainingLossComputer:
                         repa_val = repa_helper.get_repa_loss(clean_pixels, vae)
                     loss = loss + repa_val
                     repa_loss_value = repa_val.detach()
+                    sv_metrics = getattr(
+                        repa_helper, "last_stable_velocity_metrics", None
+                    )
+                    log_interval = int(
+                        max(
+                            1,
+                            int(getattr(args, "stable_velocity_repa_log_interval", 100)),
+                        )
+                    )
+                    should_capture_sv = bool(
+                        getattr(args, "enable_stable_velocity", False)
+                        and (global_step is None or (global_step % log_interval) == 0)
+                    )
+                    if should_capture_sv and isinstance(sv_metrics, dict):
+                        sv_mean = sv_metrics.get("stable_velocity_weight_mean")
+                        if sv_mean is not None:
+                            if torch.is_tensor(sv_mean):
+                                stable_velocity_weight_mean_value = sv_mean.detach()
+                            else:
+                                stable_velocity_weight_mean_value = loss.detach().new_tensor(
+                                    float(sv_mean)
+                                )
+                        sv_ratio = sv_metrics.get("stable_velocity_active_ratio")
+                        if sv_ratio is not None:
+                            if torch.is_tensor(sv_ratio):
+                                stable_velocity_active_ratio_value = sv_ratio.detach()
+                            else:
+                                stable_velocity_active_ratio_value = loss.detach().new_tensor(
+                                    float(sv_ratio)
+                                )
 
             except Exception as e:
                 helper_name = type(repa_helper).__name__
@@ -2059,6 +2112,8 @@ class TrainingLossComputer:
             self_transcendence_loss=self_transcendence_loss_value,
             moalign_loss=moalign_loss_value,
             repa_loss=repa_loss_value,
+            stable_velocity_weight_mean=stable_velocity_weight_mean_value,
+            stable_velocity_active_ratio=stable_velocity_active_ratio_value,
             reg_align_loss=reg_align_loss_value,
             reg_cls_loss=reg_cls_loss_value,
             reg_similarity=reg_similarity_value,

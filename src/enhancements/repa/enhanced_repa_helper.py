@@ -12,6 +12,12 @@ from enhancements.repa.encoder_manager import (
     EnhancedEncoder,
     preprocess_raw_image,
 )
+from enhancements.repa.stable_velocity_weighting import (
+    align_weights_to_batch,
+    compute_stable_velocity_weights,
+    normalize_timesteps,
+    weighted_mean,
+)
 
 logger = get_logger(__name__, level=logging.INFO)
 
@@ -271,6 +277,29 @@ class EnhancedRepaHelper(nn.Module):
 
         # Spatial alignment settings
         self.spatial_align = getattr(args, "repa_spatial_align", True)
+        self.stable_velocity_enabled = bool(
+            getattr(args, "enable_stable_velocity", False)
+            and getattr(args, "stable_velocity_repa_enabled", True)
+        )
+        self.stable_velocity_repa_weight_schedule = str(
+            getattr(args, "stable_velocity_repa_weight_schedule", "sigmoid")
+        ).lower()
+        self.stable_velocity_repa_tau = float(
+            getattr(args, "stable_velocity_repa_tau", 0.7)
+        )
+        self.stable_velocity_repa_k = float(
+            getattr(args, "stable_velocity_repa_k", 20.0)
+        )
+        self.stable_velocity_repa_path_type = str(
+            getattr(args, "stable_velocity_repa_path_type", "linear")
+        ).lower()
+        self.stable_velocity_repa_min_weight = float(
+            getattr(args, "stable_velocity_repa_min_weight", 0.0)
+        )
+        self.stable_velocity_repa_log_interval = int(
+            getattr(args, "stable_velocity_repa_log_interval", 100)
+        )
+        self.last_stable_velocity_metrics: Dict[str, torch.Tensor] = {}
 
         # Placeholders for hooks and captured features
         self.hook_handles: List[Any] = []
@@ -284,6 +313,15 @@ class EnhancedRepaHelper(nn.Module):
             f"{len(self.alignment_depths)} alignment layers, "
             f"diffusion dim: {self.diffusion_hidden_dim}"
         )
+        if self.stable_velocity_enabled:
+            logger.info(
+                "REPA: StableVelocity weighting enabled (schedule=%s, tau=%.3f, k=%.3f, path=%s, min_weight=%.3f).",
+                self.stable_velocity_repa_weight_schedule,
+                self.stable_velocity_repa_tau,
+                self.stable_velocity_repa_k,
+                self.stable_velocity_repa_path_type,
+                self.stable_velocity_repa_min_weight,
+            )
 
     def _infer_diffusion_hidden_dim(self) -> int:
         """Infer the hidden dimension of the diffusion model."""
@@ -402,8 +440,46 @@ class EnhancedRepaHelper(nn.Module):
         self.hook_handles.clear()
         logger.info("REPA: All hooks removed successfully.")
 
+    def _get_stable_velocity_weights(
+        self,
+        raw_timesteps: Any,
+        device: torch.device,
+        sample_count: int,
+    ) -> Optional[torch.Tensor]:
+        self.last_stable_velocity_metrics = {}
+        if (
+            not self.stable_velocity_enabled
+            or not torch.is_tensor(raw_timesteps)
+            or sample_count <= 0
+        ):
+            return None
+
+        t_norm = normalize_timesteps(
+            raw_timesteps,
+            float(getattr(self.args, "max_timestep", 1000.0) or 1000.0),
+        )
+        weights = compute_stable_velocity_weights(
+            t_norm=t_norm,
+            schedule=self.stable_velocity_repa_weight_schedule,
+            tau=self.stable_velocity_repa_tau,
+            k=self.stable_velocity_repa_k,
+            path_type=self.stable_velocity_repa_path_type,
+            min_weight=self.stable_velocity_repa_min_weight,
+        )
+        weights = align_weights_to_batch(weights, sample_count).to(
+            device=device, dtype=torch.float32
+        )
+        self.last_stable_velocity_metrics = {
+            "stable_velocity_weight_mean": weights.mean().detach(),
+            "stable_velocity_active_ratio": (weights > 1e-6).float().mean().detach(),
+        }
+        return weights
+
     def get_repa_loss(
-        self, clean_pixels: torch.Tensor, vae: Optional[Any] = None
+        self,
+        clean_pixels: torch.Tensor,
+        vae: Optional[Any] = None,
+        **kwargs: Any,
     ) -> torch.Tensor:
         """
         Calculates the enhanced REPA loss for a given batch.
@@ -418,6 +494,7 @@ class EnhancedRepaHelper(nn.Module):
         # Check if we have captured features from any layer
         if not any(feat is not None for feat in self.captured_features):
             return torch.tensor(0.0, device=clean_pixels.device)
+        self.last_stable_velocity_metrics = {}
 
         total_loss = torch.tensor(0.0, device=clean_pixels.device)
 
@@ -442,6 +519,15 @@ class EnhancedRepaHelper(nn.Module):
             images_input = clean_pixels
             B = clean_pixels.shape[0]
             F_frames = 1
+
+        sample_weights = self._get_stable_velocity_weights(
+            kwargs.get("timesteps"),
+            clean_pixels.device,
+            B,
+        )
+        if sample_weights is not None and float(sample_weights.sum().item()) <= 1e-8:
+            self.captured_features = [None] * len(self.alignment_depths)
+            return torch.tensor(0.0, device=clean_pixels.device)
 
         with torch.no_grad():
             # Convert pixels from [-1, 1] to [0, 1] and then to [0, 255]
@@ -617,14 +703,16 @@ class EnhancedRepaHelper(nn.Module):
                             total_sim = self_sim + neighbor_sim
                             if self.crepa_normalize_by_frames:
                                 # Normalize by frames for consistent scale across video lengths
-                                encoder_loss = -total_sim.mean()
+                                per_sample_loss = -total_sim.mean(dim=1)
                             else:
                                 # Sum over frames (stronger signal for longer videos)
-                                encoder_loss = -total_sim.sum(dim=1).mean()
+                                per_sample_loss = -total_sim.sum(dim=1)
+                            encoder_loss = weighted_mean(per_sample_loss, sample_weights)
                         else:
                             # Standard REPA (pooled)
                             similarity = (projected_norm * target_norm).sum(dim=-1)
-                            encoder_loss = -similarity.mean()
+                            per_sample_loss = -similarity
+                            encoder_loss = weighted_mean(per_sample_loss, sample_weights)
                     else:
                         # Official REPA: per-patch similarity (no pooling needed)
                         # Normalize per-patch: (N_samples, N_patches, D)
@@ -671,18 +759,24 @@ class EnhancedRepaHelper(nn.Module):
                             total_sim = self_sim + neighbor_sim
                             if self.crepa_normalize_by_frames:
                                 # Normalize by frames for consistent scale across video lengths
-                                encoder_loss = -total_sim.mean()
+                                per_sample_loss = -total_sim.mean(dim=1)
                             else:
                                 # Sum over frames (stronger signal for longer videos)
-                                encoder_loss = -total_sim.sum(dim=1).mean()
+                                per_sample_loss = -total_sim.sum(dim=1)
+                            encoder_loss = weighted_mean(per_sample_loss, sample_weights)
                         else:
                             # Standard REPA: mean over patches, then mean over samples
                             # This matches official: mean_flat(-(z_j * z_tilde_j).sum(dim=-1))
-                            encoder_loss = -patch_sim.mean()
+                            per_sample_loss = -patch_sim.mean(dim=-1)
+                            encoder_loss = weighted_mean(per_sample_loss, sample_weights)
 
                 elif similarity_fn == "mse":
                     # Mean squared error
-                    encoder_loss = F.mse_loss(projected_features, target_features)
+                    mse_per_sample = (projected_features - target_features).pow(2)
+                    mse_per_sample = mse_per_sample.reshape(
+                        mse_per_sample.shape[0], -1
+                    ).mean(dim=1)
+                    encoder_loss = weighted_mean(mse_per_sample, sample_weights)
                     # Note: CREPA isn't typically defined with MSE in the paper, but we could extrapolate.
                     # For now, ignoring CREPA for MSE to stay safe, or implement if requested.
                     if use_crepa:

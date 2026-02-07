@@ -68,6 +68,7 @@ def run_loi_extra_backward(
         controlnet,
         global_step=global_step,
         reg_cls_token=reg_cls_input,
+        apply_stable_velocity_target=False,
     )
     if model_result is None or model_result[0] is None:
         return None

@@ -35,6 +35,7 @@ from configs.self_resampling_config import apply_self_resampling_config
 from configs.reflexflow_config import apply_reflexflow_config
 from configs.videorepa_config import apply_videorepa_config
 from configs.vae_repa_config import apply_vae_repa_config
+from configs.stable_velocity_config import apply_stable_velocity_config
 from configs.structure_from_tracking_config import (
     apply_structure_from_tracking_config,
 )
@@ -1429,6 +1430,7 @@ def create_args_from_config(
     args.repa_alignment_depth = config.get("repa_alignment_depth", 8)
     args.repa_loss_lambda = config.get("repa_loss_lambda", 0.5)
     args.repa_similarity_fn = config.get("repa_similarity_fn", "cosine")
+    apply_stable_velocity_config(args, config, logger)
     apply_vae_repa_config(args, config, logger)
 
     # REG (Representation Entanglement for Generation) settings

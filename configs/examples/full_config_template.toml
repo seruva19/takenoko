@@ -1784,6 +1784,91 @@ repa_shared_projection = false
 repa_spatial_align = true
 
 # =============================================================================
+# ⚠️ STABLE VELOCITY SETTINGS
+# =============================================================================
+
+# StableVelocity / VA-REPA train-time gate. When enabled, REPA/iREPA alignment loss is weighted by
+# timestep-aware variance-regime schedules from Stable Velocity.
+enable_stable_velocity = false
+
+# StableVelocity REPA weighting group (VA-REPA)
+# Weight schedule for variance-aware alignment:
+# - "hard":       w(t) = 1[t < tau]
+# - "hard_high":  w(t) = 1[t >= tau] (ablation)
+# - "sigmoid":    w(t) = sigmoid(k * (tau - t))
+# - "cosine":     smooth decay to 0 at tau
+# - "snr":        w(t)=SNR(t)/(SNR(t)+SNR(tau))
+stable_velocity_repa_weight_schedule = "sigmoid"
+
+# Enable StableVelocity weighting on REPA/iREPA loss paths.
+stable_velocity_repa_enabled = true
+
+# Split point tau in normalized timestep space [0,1].
+# Lower values apply stronger filtering to very early/clean timesteps only.
+stable_velocity_repa_tau = 0.7
+
+# Sigmoid sharpness k for schedule="sigmoid" (> 0).
+# ~10 = softer transition, ~50 = near hard-threshold behavior.
+stable_velocity_repa_k = 20.0
+
+# Path type used by schedule="snr" ("linear" or "cosine").
+# Match your interpolation path whenever possible.
+stable_velocity_repa_path_type = "linear"
+
+# Optional floor on per-sample StableVelocity weights in [0,1].
+# 0.0 keeps full gating behavior; higher values soften suppression of high-variance timesteps.
+stable_velocity_repa_min_weight = 0.0
+
+# Logging cadence (in training steps) for StableVelocity diagnostic metrics.
+stable_velocity_repa_log_interval = 100
+
+# StableVelocity StableVM target group
+# Enable StableVM-style memory-bank target replacement for flow-matching target
+# construction at higher-noise timesteps (training-only, inference unchanged).
+# Requires enable_stable_velocity=true. Default false for behavior preservation.
+stable_velocity_stablevm_enable_target = false
+
+# Label source used for class-aware memory-bank grouping:
+# - "auto": prefer concept_id when available, otherwise dataset_index
+# - "concept_id": force concept_id from batch
+# - "dataset_index": force dataset_index from batch
+stable_velocity_stablevm_label_source = "auto"
+
+# Path type used by StableVM target interpolation ("linear" or "cosine").
+stable_velocity_stablevm_path_type = "linear"
+
+# Minimum normalized timestep t in [0,1) where StableVM target can activate.
+# Reference split is 0.5 (lower t keeps base flow-matching target).
+stable_velocity_stablevm_t_min = 0.5
+
+# Blend factor for replacing base target with StableVM target:
+# 0.0 = keep base target only, 1.0 = full StableVM target.
+stable_velocity_stablevm_blend = 1.0
+
+# FIFO memory-bank capacity per (shape,label) and per-shape global fallback bank.
+# Larger values improve reference diversity but use more host memory.
+stable_velocity_stablevm_bank_capacity_per_label = 256
+
+# Number of bank references sampled per label-group when constructing StableVM target.
+stable_velocity_stablevm_refs_per_sample = 64
+
+# Minimum references required to enable StableVM target for a group.
+# Must be <= stable_velocity_stablevm_refs_per_sample.
+stable_velocity_stablevm_min_refs = 8
+
+# Chunk size for reference-bank reductions (controls memory/runtime tradeoff).
+stable_velocity_stablevm_ref_chunk_size = 16
+
+# Use per-shape global bank when label-specific bank lacks enough references.
+stable_velocity_stablevm_use_global_fallback = true
+
+# Numerical epsilon used in StableVM target computations (>0 for stability).
+stable_velocity_stablevm_numerical_eps = 1e-8
+
+# Logging cadence for StableVM target diagnostics.
+stable_velocity_stablevm_log_interval = 100
+
+# =============================================================================
 # ⚠️ REG (REPRESENTATION ENTANGLEMENT FOR GENERATION) SETTINGS
 # =============================================================================
 
