@@ -1,8 +1,29 @@
 import logging
+import multiprocessing
+import os
+
+
+def _is_worker_process() -> bool:
+    """Return True for subprocesses (e.g., DataLoader workers) spawned by Python multiprocessing."""
+    try:
+        return multiprocessing.current_process().name != "MainProcess"
+    except Exception:
+        return False
 
 
 def _is_main_process() -> bool:
-    """Best-effort check for Accelerate rank-0. Falls back to True if unavailable."""
+    """Best-effort check for rank-0 while avoiding expensive imports in worker subprocesses."""
+    if _is_worker_process():
+        return False
+
+    for key in ("RANK", "LOCAL_RANK"):
+        value = os.environ.get(key)
+        if value is not None:
+            try:
+                return int(value) == 0
+            except ValueError:
+                break
+
     try:
         from accelerate import PartialState  # type: ignore
 
