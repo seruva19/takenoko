@@ -15,6 +15,9 @@ from modules.scheduling_flow_match_discrete import FlowMatchDiscreteScheduler
 from utils.train_utils import get_sigmas
 from common.logger import get_logger
 from core.metrics import get_throughput_metrics, get_total_runtime
+from enhancements.motion_eval.disentanglement_metrics import (
+    compute_motion_disentanglement_proxies,
+)
 
 logger = get_logger(__name__, level=logging.INFO)
 
@@ -61,6 +64,7 @@ class ValidationCore:
         self._warned_missing_torchvision = False
         self._warned_missing_ffmpeg = False
         self._warned_insufficient_frames_temporal = False
+        self._warned_motion_eval_failed = False
 
     def _warn_once(self, key: str, message: str) -> None:
         try:
@@ -388,6 +392,21 @@ class ValidationCore:
         all_timestep_avg_velocity_losses = []
         all_timestep_avg_direct_noise_losses = []
         all_timestep_snrs = []
+        enable_motion_disentanglement_eval = bool(
+            getattr(args, "enable_motion_disentanglement_eval", False)
+        )
+        motion_eval_max_items = max(
+            1, int(getattr(args, "motion_disentanglement_eval_max_items", 2))
+        )
+        motion_eval_frame_stride = max(
+            1, int(getattr(args, "motion_disentanglement_eval_frame_stride", 2))
+        )
+        motion_eval_namespace = str(
+            getattr(args, "motion_disentanglement_metrics_namespace", "motion_eval")
+        ).strip()
+        if not motion_eval_namespace:
+            motion_eval_namespace = "motion_eval"
+        all_timestep_motion_eval_metrics: Dict[str, list[float]] = {}
 
         if num_timesteps == 0:
             logger.warning(
@@ -460,6 +479,7 @@ class ValidationCore:
                 batch_velocity_losses = []
                 batch_direct_noise_losses = []
                 batch_item_counts = []  # number of items per-batch for coverage
+                batch_motion_eval_vals: Dict[str, list[torch.Tensor]] = {}
 
                 # Calculate SNR only once for the current timestep (optimization)
                 fixed_timesteps_tensor = torch.full(
@@ -1547,6 +1567,69 @@ class ValidationCore:
                                     "VMAF requested but validation batches lack 'pixels'; set load_val_pixels=true.",
                                 )
 
+                    # Motion disentanglement proxy diagnostics (DisMo-inspired)
+                    if (
+                        enable_motion_disentanglement_eval
+                        and vae is not None
+                        and "pixels" in batch
+                    ):
+                        try:
+                            pred_latents = pred.detach()  # Already converted to float32
+                            with torch.autocast(
+                                device_type=str(accelerator.device).split(":")[0],
+                                enabled=False,
+                            ):
+                                # Ensure latents match VAE's dtype to avoid type mismatch
+                                vae_dtype = vae.dtype
+                                pred_latents = pred_latents.to(dtype=vae_dtype)
+                                decoded = vae.decode(
+                                    pred_latents / getattr(vae, "scaling_factor", 1.0)
+                                )
+                                pred_frames = (
+                                    torch.stack(decoded, dim=0)
+                                    if isinstance(decoded, list)
+                                    else decoded
+                                )
+                            pred_frames = pred_frames.to(torch.float32)
+                            ref_frames = torch.stack(batch["pixels"], dim=0).to(
+                                device=pred_frames.device, dtype=torch.float32
+                            )
+                            motion_eval_metrics_local = (
+                                compute_motion_disentanglement_proxies(
+                                    pred_frames,
+                                    ref_frames,
+                                    max_items=motion_eval_max_items,
+                                    frame_stride=motion_eval_frame_stride,
+                                )
+                            )
+                            for metric_name, metric_tensor in (
+                                motion_eval_metrics_local.items()
+                            ):
+                                value = metric_tensor.detach().to(
+                                    device=accelerator.device, dtype=torch.float32
+                                )
+                                batch_motion_eval_vals.setdefault(metric_name, []).append(
+                                    value.reshape(1)
+                                )
+                        except Exception as e:
+                            if accelerator.is_main_process:
+                                self._warn_once(
+                                    "_warned_motion_eval_failed",
+                                    f"Motion disentanglement proxy diagnostics failed: {e}. Skipping motion_eval metrics.",
+                                )
+                    elif enable_motion_disentanglement_eval:
+                        if accelerator.is_main_process:
+                            if vae is None:
+                                self._warn_once(
+                                    "_warned_no_vae_for_metrics",
+                                    "Motion disentanglement diagnostics requested but VAE is not available; skipping. Ensure 'vae' is configured or lazy-load succeeded.",
+                                )
+                            if "pixels" not in batch:
+                                self._warn_once(
+                                    "_warned_no_pixels_for_metrics",
+                                    "Motion disentanglement diagnostics requested but validation batches lack 'pixels'; set load_val_pixels=true.",
+                                )
+
                 # Gather and compute metrics efficiently (refactored approach)
                 velocity_metrics = self._compute_and_gather_metrics(
                     accelerator, batch_velocity_losses, "velocity_loss"
@@ -1600,6 +1683,24 @@ class ValidationCore:
                     )
                 except Exception:
                     vmaf_metrics = {}
+                motion_eval_metrics = {}
+                for metric_name, metric_values in batch_motion_eval_vals.items():
+                    if not metric_values:
+                        continue
+                    try:
+                        motion_eval_metrics.update(
+                            self._compute_and_gather_metrics(
+                                accelerator,
+                                metric_values,
+                                f"motion_eval_{metric_name}",
+                            )
+                        )
+                    except Exception as e:
+                        if accelerator.is_main_process:
+                            self._warn_once(
+                                "_warned_motion_eval_failed",
+                                f"Failed to gather motion_eval metric '{metric_name}': {e}",
+                            )
 
                 # SNR-binned loss and coverage per timestep (quantile bins on gathered per-sample loss)
                 if accelerator.is_main_process and batch_velocity_losses:
@@ -1667,6 +1768,10 @@ class ValidationCore:
                         timestep_direct_noise_avg
                     )
                     all_timestep_snrs.append(snr_for_timestep)
+                    for key, value in motion_eval_metrics.items():
+                        all_timestep_motion_eval_metrics.setdefault(key, []).append(
+                            float(value)
+                        )
 
                     # Log per-timestep metrics
                     if global_step is not None:
@@ -1676,6 +1781,7 @@ class ValidationCore:
                             getattr(args, "perception_metrics_namespace", "perception")
                         )
                         perception_dict = {}
+                        motion_eval_dict = {}
                         per_ns = (
                             "snr_other"
                             if getattr(args, "snr_split_namespaces", False)
@@ -1714,6 +1820,12 @@ class ValidationCore:
                             tag = f"{key}_t{current_timestep}"
                             log_dict[f"val_timesteps/{tag}"] = value
                             perception_dict[f"{per_ns}/val/{tag}"] = value
+                        for key, value in motion_eval_metrics.items():
+                            tag = f"{key}_t{current_timestep}"
+                            log_dict[f"val_timesteps/{tag}"] = value
+                            motion_eval_dict[f"{motion_eval_namespace}/val/{tag}"] = (
+                                value
+                            )
 
                         try:
                             from utils.tensorboard_utils import (
@@ -1722,12 +1834,14 @@ class ValidationCore:
 
                             log_dict = _adh(args, log_dict)
                             perception_dict = _adh(args, perception_dict)
+                            motion_eval_dict = _adh(args, motion_eval_dict)
                         except Exception:
                             pass
                         # Log both standard and perception namespaced metrics
                         merged = {}
                         merged.update(log_dict)
                         merged.update(perception_dict)
+                        merged.update(motion_eval_dict)
                         accelerator.log(merged, step=global_step)
 
                     logger.info(
@@ -1995,6 +2109,19 @@ class ValidationCore:
             # Split validation metrics into essential val/ and detailed val_other/ if enabled
             val_essential = {}
             val_other = {}
+            motion_eval_aggregate = {}
+            if enable_motion_disentanglement_eval:
+                for metric_name, values in all_timestep_motion_eval_metrics.items():
+                    if not values:
+                        continue
+                    series = np.array(values, dtype=np.float32)
+                    motion_eval_aggregate[
+                        f"{motion_eval_namespace}/val/{metric_name}_avg_over_timesteps"
+                    ] = float(series.mean())
+                    if series.size > 1:
+                        motion_eval_aggregate[
+                            f"{motion_eval_namespace}/val/{metric_name}_std_over_timesteps"
+                        ] = float(series.std())
 
             if getattr(args, "val_split_namespaces", True):
                 # Keep the top-line 6 charts users care about most
@@ -2075,6 +2202,7 @@ class ValidationCore:
             merged_logs.update(val_other)
             merged_logs.update(snr_essential)
             merged_logs.update(snr_other)
+            merged_logs.update(motion_eval_aggregate)
 
             try:
                 from utils.tensorboard_utils import (

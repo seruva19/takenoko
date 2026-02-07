@@ -381,7 +381,7 @@ lr_scheduler_args = ''
 # =============================================================================
 
 # Network module to train: "networks.lora_wan", "networks.riemann_lora_wan", "networks.control_lora_wan",
-# "networks.reward_lora", "networks.vae_wan", "lycoris.kohya", "networks.t_lora", "networks.moc_lora",
+# "networks.reward_lora", "networks.vae_wan", "lycoris.kohya", "networks.t_lora", "networks.tc_lora_wan", "networks.moc_lora",
 # "networks.mhc_lora", "networks.singlora_wan", "networks.wan_finetune", "networks.slider_lora_wan",
 # "networks.relora_wan"
 # The module defines trainable adapters and is imported dynamically by the trainer.
@@ -462,6 +462,36 @@ network_alpha = 32
 #   "ortho_from_layer=true",
 #   "ortho_reg_lambda_p=1e-3",
 #   "ortho_reg_lambda_q=1e-3",
+# ]
+
+# Temporal-Conditional LoRA (TC-LoRA)
+# Activated when network_module = "networks.tc_lora_wan".
+# TC-LoRA modulates LoRA down-projected features with FiLM-style scale/shift
+# derived from timestep embeddings (and optional external sequence conditioning).
+# TC-LoRA settings are controlled via network_args only.
+# Parameters:
+# - tc_lora_enabled (bool, default false)
+# - tc_lora_use_timestep (bool, default true)
+# - tc_lora_condition_dim (int > 0, default 64)
+# - tc_lora_hidden_dim (int > 0, default 128)
+# - tc_lora_modulation_scale (float >= 0, default 1.0)
+# - tc_lora_allow_sequence_condition (bool, default true)
+# - tc_lora_use_motion_condition (bool, default false)
+# - tc_lora_motion_include_timestep (bool, default true)
+# - tc_lora_motion_frame_dim (int >= 0, default 2 for B,C,F,H,W)
+# - tc_lora_timestep_max (int > 0, default 1000)
+# Example TC-LoRA configuration:
+# network_args = [
+#   "tc_lora_enabled=true",
+#   "tc_lora_use_timestep=true",
+#   "tc_lora_condition_dim=64",
+#   "tc_lora_hidden_dim=128",
+#   "tc_lora_modulation_scale=1.0",
+#   "tc_lora_allow_sequence_condition=true",
+#   "tc_lora_use_motion_condition=true",
+#   "tc_lora_motion_include_timestep=true",
+#   "tc_lora_motion_frame_dim=2",
+#   "tc_lora_timestep_max=1000"
 # ]
 
 # MoC-LoRA (Mixture of Contexts for Long Video Generation)
@@ -4706,6 +4736,23 @@ vmaf_frame_stride = 2
 # Path to ffmpeg executable
 vmaf_ffmpeg_path = "ffmpeg"
 
+# Motion disentanglement proxy diagnostics (DisMo-inspired validation-only metrics)
+# Default: false to preserve baseline behavior and validation cost.
+# Requires load_val_pixels = true and an available VAE for decoding predicted frames.
+enable_motion_disentanglement_eval = false
+
+# Max validation items per step used for motion disentanglement proxies (must be >= 1).
+# Lower values reduce overhead; recommended range: 1-4.
+motion_disentanglement_eval_max_items = 2
+
+# Temporal frame stride for proxy computation (must be >= 1).
+# Higher stride reduces cost and focuses on coarse motion trends.
+motion_disentanglement_eval_frame_stride = 2
+
+# TensorBoard namespace used for these diagnostics.
+# Keep non-empty; change to separate experiments (for example "dismo_motion_eval").
+motion_disentanglement_metrics_namespace = "motion_eval"
+
 # =============================================================================
 # ⚠️ OPTICAL FLOW LOSS SETTINGS
 # =============================================================================
@@ -5783,6 +5830,37 @@ min_short_clip_frames = 5
 
 # Source FPS
 source_fps = 24
+
+# Stochastic delta-time sampling (DisMo-inspired, default off).
+# This augments each extracted video window with non-uniform temporal spacing.
+# The feature is training/cache-time only and does not change inference behavior.
+# enable_stochastic_delta_time_sampling:
+# - false (default): contiguous frame windows (baseline behavior)
+# - true: sample temporal step increments stochastically within each window
+enable_stochastic_delta_time_sampling = false
+
+# delta_time_sampling_distribution:
+# - "gamma" (recommended): skewed distribution favoring small offsets with occasional larger jumps
+# - "uniform": flat offset distribution
+delta_time_sampling_distribution = "gamma"
+
+# Gamma distribution parameters (used when distribution = "gamma")
+# concentration > 0, rate > 0
+delta_time_sampling_gamma_concentration = 3.0
+
+# Gamme distribution rate
+delta_time_sampling_gamma_rate = 12.0
+
+# Maximum additional temporal offset budget (in frames) applied per extracted window.
+# Higher values increase temporal diversity but can introduce larger motion gaps.
+delta_time_sampling_max_offset_frames = 8
+
+# Minimum step between adjacent sampled frames (in frames, >= 1).
+delta_time_sampling_min_step_frames = 1
+
+# Stable offset added to deterministic per-window random seed.
+# Useful for regenerating a different cached variant while keeping reproducibility.
+delta_time_sampling_seed_offset = 0
 
 # Path to mask images/videos for this dataset
 # mask_path = "/path/to/video/masks" 

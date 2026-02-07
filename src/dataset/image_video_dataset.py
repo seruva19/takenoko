@@ -1,5 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor
 import glob
+import hashlib
 import os
 import json
 import random
@@ -1287,6 +1288,13 @@ class VideoDataset(BaseDataset):
         max_frames: Optional[int] = None,
         min_short_clip_frames: Optional[int] = 5,
         source_fps: Optional[float] = None,
+        enable_stochastic_delta_time_sampling: bool = False,
+        delta_time_sampling_distribution: str = "gamma",
+        delta_time_sampling_gamma_concentration: float = 3.0,
+        delta_time_sampling_gamma_rate: float = 12.0,
+        delta_time_sampling_max_offset_frames: int = 8,
+        delta_time_sampling_min_step_frames: int = 1,
+        delta_time_sampling_seed_offset: int = 0,
         video_directory: Optional[str] = None,
         cache_directory: Optional[str] = None,
         debug_dataset: bool = False,
@@ -1350,6 +1358,32 @@ class VideoDataset(BaseDataset):
         self.max_frames = max_frames
         self.min_short_clip_frames = min_short_clip_frames
         self.source_fps = source_fps
+        self.enable_stochastic_delta_time_sampling = bool(
+            enable_stochastic_delta_time_sampling
+        )
+        self.delta_time_sampling_distribution = str(
+            delta_time_sampling_distribution or "gamma"
+        ).lower()
+        self.delta_time_sampling_gamma_concentration = float(
+            delta_time_sampling_gamma_concentration
+        )
+        self.delta_time_sampling_gamma_rate = float(delta_time_sampling_gamma_rate)
+        self.delta_time_sampling_max_offset_frames = max(
+            0, int(delta_time_sampling_max_offset_frames)
+        )
+        self.delta_time_sampling_min_step_frames = max(
+            1, int(delta_time_sampling_min_step_frames)
+        )
+        self.delta_time_sampling_seed_offset = int(delta_time_sampling_seed_offset)
+        if self.delta_time_sampling_distribution not in {"gamma", "uniform"}:
+            raise ValueError(
+                "delta_time_sampling_distribution must be either 'gamma' or 'uniform'"
+            )
+        if self.delta_time_sampling_gamma_concentration <= 0:
+            raise ValueError("delta_time_sampling_gamma_concentration must be > 0")
+        if self.delta_time_sampling_gamma_rate <= 0:
+            raise ValueError("delta_time_sampling_gamma_rate must be > 0")
+        self._warned_delta_time_short_span = False
         self.target_fps = TARGET_FPS_WAN
         self.load_control = load_control
         self.control_suffix = control_suffix
@@ -1395,6 +1429,14 @@ class VideoDataset(BaseDataset):
             # head extraction. we can limit the number of frames to be extracted
             self.datasource.set_start_and_end_frame(0, max(self.target_frames))  # type: ignore
 
+        if self.enable_stochastic_delta_time_sampling:
+            logger.info(
+                "Stochastic delta-time sampling enabled for video dataset (distribution=%s, max_offset=%s, min_step=%s).",
+                self.delta_time_sampling_distribution,
+                self.delta_time_sampling_max_offset_frames,
+                self.delta_time_sampling_min_step_frames,
+            )
+
         if self.cache_directory is None:
             self.cache_directory = self.video_directory
 
@@ -1418,8 +1460,139 @@ class VideoDataset(BaseDataset):
         metadata["target_frames"] = self.target_frames
         metadata["max_frames"] = self.max_frames
         metadata["source_fps"] = self.source_fps
+        metadata["enable_stochastic_delta_time_sampling"] = (
+            self.enable_stochastic_delta_time_sampling
+        )
+        metadata["delta_time_sampling_distribution"] = (
+            self.delta_time_sampling_distribution
+        )
+        metadata["delta_time_sampling_max_offset_frames"] = (
+            self.delta_time_sampling_max_offset_frames
+        )
+        metadata["delta_time_sampling_min_step_frames"] = (
+            self.delta_time_sampling_min_step_frames
+        )
 
         return metadata
+
+    def _make_delta_time_generator(
+        self,
+        *,
+        video_key: str,
+        crop_pos: int,
+        target_frame: int,
+    ) -> torch.Generator:
+        seed_input = (
+            f"{video_key}|{crop_pos}|{target_frame}|{self.delta_time_sampling_seed_offset}"
+        )
+        seed = int(hashlib.sha256(seed_input.encode("utf-8")).hexdigest()[:16], 16)
+        seed = seed % (2**31 - 1)
+        generator = torch.Generator(device="cpu")
+        generator.manual_seed(seed)
+        return generator
+
+    def _sample_delta_time_extra_offsets(
+        self, num_samples: int, generator: torch.Generator
+    ) -> torch.Tensor:
+        if num_samples <= 0:
+            return torch.zeros((0,), dtype=torch.long)
+
+        max_offset = int(self.delta_time_sampling_max_offset_frames)
+        if max_offset <= 0:
+            return torch.zeros((num_samples,), dtype=torch.long)
+
+        if self.delta_time_sampling_distribution == "uniform":
+            return torch.randint(
+                low=0,
+                high=max_offset + 1,
+                size=(num_samples,),
+                generator=generator,
+            )
+
+        support = torch.arange(max_offset + 1, dtype=torch.float32)
+        # Normalize support to (0, 1] to keep gamma parameters stable.
+        support_norm = (support + 1.0) / float(max_offset + 1)
+        gamma_dist = torch.distributions.Gamma(
+            concentration=float(self.delta_time_sampling_gamma_concentration),
+            rate=float(self.delta_time_sampling_gamma_rate),
+        )
+        probs = torch.exp(gamma_dist.log_prob(support_norm))
+        if not torch.isfinite(probs).all() or probs.sum() <= 0:
+            probs = torch.ones_like(support_norm)
+        probs = probs / probs.sum()
+        return torch.multinomial(
+            probs,
+            num_samples=num_samples,
+            replacement=True,
+            generator=generator,
+        )
+
+    def _build_frame_indices_for_window(
+        self,
+        *,
+        frame_count: int,
+        crop_pos: int,
+        target_frame: int,
+        video_key: str,
+    ) -> np.ndarray:
+        base_indices = np.arange(crop_pos, crop_pos + target_frame, dtype=np.int32)
+        if (
+            not self.enable_stochastic_delta_time_sampling
+            or target_frame <= 1
+            or frame_count < (crop_pos + target_frame)
+        ):
+            return base_indices
+
+        max_end = min(
+            frame_count - 1,
+            crop_pos + target_frame - 1 + self.delta_time_sampling_max_offset_frames,
+        )
+        available_span = int(max_end - crop_pos)
+        min_step = int(self.delta_time_sampling_min_step_frames)
+        required_min_span = int((target_frame - 1) * min_step)
+        if available_span < required_min_span:
+            if not self._warned_delta_time_short_span:
+                logger.warning(
+                    "Stochastic delta-time sampling skipped for short spans: "
+                    "available=%s, required_min=%s. Falling back to contiguous windows.",
+                    available_span,
+                    required_min_span,
+                )
+                self._warned_delta_time_short_span = True
+            return base_indices
+
+        generator = self._make_delta_time_generator(
+            video_key=video_key,
+            crop_pos=crop_pos,
+            target_frame=target_frame,
+        )
+        num_steps = target_frame - 1
+        sampled_extra = self._sample_delta_time_extra_offsets(num_steps, generator)
+        extra_budget = int(available_span - required_min_span)
+        allocated_extra = torch.zeros((num_steps,), dtype=torch.long)
+        if extra_budget > 0:
+            if int(sampled_extra.sum().item()) > 0:
+                probs = sampled_extra.to(torch.float32)
+                probs = probs / probs.sum()
+            else:
+                probs = torch.full((num_steps,), 1.0 / float(num_steps))
+            picks = torch.multinomial(
+                probs,
+                num_samples=extra_budget,
+                replacement=True,
+                generator=generator,
+            )
+            for idx in picks.tolist():
+                allocated_extra[idx] += 1
+
+        steps = allocated_extra + min_step
+        rel = torch.cat(
+            [torch.zeros((1,), dtype=torch.long), torch.cumsum(steps, dim=0)],
+            dim=0,
+        )
+        indices = crop_pos + rel
+        indices = torch.clamp(indices, min=crop_pos, max=max_end)
+        return indices.to(torch.int32).cpu().numpy()
 
     def retrieve_latent_cache_batches(self, num_workers: int):
         # Keep mask loading enabled so that we can pre-cache masks to `_mask.safetensors` alongside latents.
@@ -1552,7 +1725,13 @@ class VideoDataset(BaseDataset):
                     )
 
                     for crop_pos, target_frame in crop_pos_and_frames:
-                        cropped_video = video[crop_pos : crop_pos + target_frame]
+                        frame_indices = self._build_frame_indices_for_window(
+                            frame_count=frame_count,
+                            crop_pos=crop_pos,
+                            target_frame=target_frame,
+                            video_key=video_key,
+                        )
+                        cropped_video = video[frame_indices]
                         body, ext = os.path.splitext(video_key)
                         item_key = f"{body}_{crop_pos:05d}-{target_frame:03d}{ext}"
                         batch_key = (
@@ -1563,11 +1742,14 @@ class VideoDataset(BaseDataset):
                         # crop control video if available
                         cropped_control = None
                         if control_video is not None:
-                            cropped_control = control_video[
-                                crop_pos : crop_pos + target_frame
-                            ]
                             try:
-                                cropped_control = np.stack(cropped_control, axis=0)
+                                if isinstance(control_video, np.ndarray):
+                                    cropped_control = control_video[frame_indices]
+                                else:
+                                    cropped_control = np.stack(
+                                        [control_video[i] for i in frame_indices],
+                                        axis=0,
+                                    )
                             except Exception:
                                 pass
 
@@ -1575,10 +1757,12 @@ class VideoDataset(BaseDataset):
                         cropped_mask = None
                         if mask_video is not None:
                             try:
-                                cropped_mask = mask_video[
-                                    crop_pos : crop_pos + target_frame
-                                ]
-                                cropped_mask = np.stack(cropped_mask, axis=0)
+                                if isinstance(mask_video, np.ndarray):
+                                    cropped_mask = mask_video[frame_indices]
+                                else:
+                                    cropped_mask = np.stack(
+                                        [mask_video[i] for i in frame_indices], axis=0
+                                    )
                             except Exception:
                                 cropped_mask = None
 
@@ -1593,6 +1777,9 @@ class VideoDataset(BaseDataset):
                             mask_content=cropped_mask,
                             is_reg=self.is_reg,
                         )
+                        item_info.sampled_frame_indices = frame_indices.tolist()  # type: ignore[attr-defined]
+                        if len(frame_indices) > 1:
+                            item_info.delta_frame_steps = np.diff(frame_indices).tolist()  # type: ignore[attr-defined]
                         item_info.latent_cache_path = self.get_latent_cache_path(
                             item_info
                         )

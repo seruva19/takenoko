@@ -1756,6 +1756,17 @@ class TrainingCore:
                             unwrapped_net.update_rank_mask_from_timesteps(
                                 timesteps, max_timestep=1000, device=accelerator.device
                             )
+                        if hasattr(unwrapped_net, "set_tc_lora_runtime_condition"):
+                            unwrapped_net.set_tc_lora_runtime_condition(
+                                latents_for_dit,
+                                timesteps,
+                                max_timestep=getattr(args, "tc_lora_timestep_max", 1000),
+                            )
+                        elif hasattr(unwrapped_net, "set_tc_lora_timestep"):
+                            unwrapped_net.set_tc_lora_timestep(
+                                timesteps,
+                                max_timestep=getattr(args, "tc_lora_timestep_max", 1000),
+                            )
                     except Exception:
                         pass
                     if getattr(args, "network_module", "") == "networks.mhc_lora":

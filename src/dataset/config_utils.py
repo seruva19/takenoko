@@ -78,6 +78,13 @@ class VideoDatasetParams(BaseDatasetParams):
     max_frames: Optional[int] = 129
     min_short_clip_frames: Optional[int] = 5
     source_fps: Optional[float] = None
+    enable_stochastic_delta_time_sampling: bool = False
+    delta_time_sampling_distribution: str = "gamma"
+    delta_time_sampling_gamma_concentration: float = 3.0
+    delta_time_sampling_gamma_rate: float = 12.0
+    delta_time_sampling_max_offset_frames: int = 8
+    delta_time_sampling_min_step_frames: int = 1
+    delta_time_sampling_seed_offset: int = 0
 
 
 @dataclass
@@ -186,6 +193,13 @@ class ConfigSanitizer:
         "min_short_clip_frames": int,
         "cache_directory": str,
         "source_fps": float,
+        "enable_stochastic_delta_time_sampling": bool,
+        "delta_time_sampling_distribution": str,
+        "delta_time_sampling_gamma_concentration": float,
+        "delta_time_sampling_gamma_rate": float,
+        "delta_time_sampling_max_offset_frames": int,
+        "delta_time_sampling_min_step_frames": int,
+        "delta_time_sampling_seed_offset": int,
     }
 
     # options handled by argparse but not handled by user config
@@ -596,6 +610,19 @@ def _format_dataset_details_table(
             details_lines.append(
                 f"│ Source FPS          │ {dataset.source_fps or 'N/A'}"
             )
+            details_lines.append(
+                f"│ Delta-Time Sampling │ {'Yes' if getattr(dataset, 'enable_stochastic_delta_time_sampling', False) else 'No'}"
+            )
+            if getattr(dataset, "enable_stochastic_delta_time_sampling", False):
+                details_lines.append(
+                    f"│ Delta Dist Type     │ {getattr(dataset, 'delta_time_sampling_distribution', 'gamma')}"
+                )
+                details_lines.append(
+                    f"│ Delta Max Offset    │ {getattr(dataset, 'delta_time_sampling_max_offset_frames', 0)}"
+                )
+                details_lines.append(
+                    f"│ Delta Min Step      │ {getattr(dataset, 'delta_time_sampling_min_step_frames', 1)}"
+                )
 
         details_lines.append(
             f"│ Cache Directory     │ {dataset.cache_directory or 'N/A'}"

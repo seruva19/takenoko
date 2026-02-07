@@ -916,6 +916,17 @@ class SamplingManager:
                                 unwrapped_net.update_rank_mask_from_timesteps(
                                     timestep, max_timestep=1000, device=device
                                 )
+                            if hasattr(unwrapped_net, "set_tc_lora_runtime_condition"):
+                                unwrapped_net.set_tc_lora_runtime_condition(
+                                    latent,
+                                    timestep,
+                                    max_timestep=getattr(args, "tc_lora_timestep_max", 1000),
+                                )
+                            elif hasattr(unwrapped_net, "set_tc_lora_timestep"):
+                                unwrapped_net.set_tc_lora_timestep(
+                                    timestep,
+                                    max_timestep=getattr(args, "tc_lora_timestep_max", 1000),
+                                )
                             if hasattr(unwrapped_net, "set_current_step"):
                                 unwrapped_net.set_current_step(steps)
                             if hasattr(unwrapped_net, "set_mhc_timestep"):

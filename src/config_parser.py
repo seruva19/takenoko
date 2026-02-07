@@ -37,6 +37,11 @@ from configs.vae_repa_config import apply_vae_repa_config
 from configs.structure_from_tracking_config import (
     apply_structure_from_tracking_config,
 )
+from configs.tc_lora_config import parse_tc_lora_config
+from configs.delta_time_sampling_config import apply_delta_time_sampling_config
+from configs.motion_disentanglement_config import (
+    apply_motion_disentanglement_config,
+)
 
 
 def create_args_from_config(
@@ -477,6 +482,9 @@ def create_args_from_config(
     from configs.mhc_config import parse_mhc_config
 
     parse_mhc_config(config, args, logger)
+    parse_tc_lora_config(config, args, logger)
+    apply_delta_time_sampling_config(args, config, logger)
+    apply_motion_disentanglement_config(args, config, logger)
 
     apply_relora_config(args, config, logger)
     apply_internal_guidance_config(args, config, logger)

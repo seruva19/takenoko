@@ -74,6 +74,7 @@ def handle_step_validation(
             bool(getattr(args, "enable_flow_warped_ssim", False)),
             bool(getattr(args, "enable_fvd", False)),
             bool(getattr(args, "enable_vmaf", False)),
+            bool(getattr(args, "enable_motion_disentanglement_eval", False)),
         ]
     )
     # Only consider loading a VAE if validation batches include pixels
