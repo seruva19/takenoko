@@ -55,6 +55,7 @@ from enhancements.structure_from_tracking.trainer_integration import (
     maybe_add_structure_from_tracking_params,
     maybe_precompute_sft_teacher_cache_before_training,
 )
+from enhancements.repa.trainer_integration import maybe_add_vae_repa_params_for_lora
 from enhancements.blockwise_flow_matching.conditioning import (
     BFMConditioningHelper,
     infer_text_context_dim,
@@ -973,6 +974,20 @@ class WanNetworkTrainer:
                 logger.warning(f"VideoREPA setup failed: {exc}")
                 videorepa_helper = None
 
+        vae_repa_helper = None
+        if getattr(args, "enable_vae_repa", False):
+            try:
+                from enhancements.repa.vae_repa_helper import VaeRepaHelper
+
+                logger.info("VAE-REPA is enabled. Initializing helper module.")
+                vae_repa_helper = VaeRepaHelper(transformer, args, vae=vae)
+                maybe_add_vae_repa_params_for_lora(
+                    trainable_params, lr_descriptions, vae_repa_helper, args
+                )
+            except Exception as exc:
+                logger.warning(f"VAE-REPA setup failed: {exc}")
+                vae_repa_helper = None
+
         structure_from_tracking_helper = None
         if getattr(args, "enable_structure_from_tracking", False):
             try:
@@ -1701,6 +1716,15 @@ class WanNetworkTrainer:
                     repa_helper = accelerator.prepare(repa_helper)
                 except Exception as exc:
                     logger.warning(f"VideoREPA hook setup failed: {exc}")
+                    repa_helper = None
+            elif vae_repa_helper is not None:
+                try:
+                    logger.info("VAE-REPA is enabled. Setting up the helper module.")
+                    repa_helper = vae_repa_helper
+                    repa_helper.setup_hooks()
+                    repa_helper = accelerator.prepare(repa_helper)
+                except Exception as exc:
+                    logger.warning(f"VAE-REPA hook setup failed: {exc}")
                     repa_helper = None
             elif getattr(args, "enable_irepa", False):
                 from enhancements.repa.enhanced_repa_helper import EnhancedRepaHelper

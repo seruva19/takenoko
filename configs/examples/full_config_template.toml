@@ -1646,6 +1646,69 @@ enable_repa = false
 # Enable iREPA (improved REPA) for spatially focused alignment (LoRA training only, defaults off)
 enable_irepa = false
 
+# Enable VAE-REPA (VAE feature alignment from latent targets) for training acceleration.
+# This is train-time only and does not affect LoRA inference behavior.
+enable_vae_repa = false
+
+# VAE-REPA alignment single fallback depth.
+# Paper ablations favor early alignment (e.g., layer 2 on smaller backbones).
+vae_repa_alignment_depth = 2
+
+# VAE-REPA alignment multiple fallback depths.
+# Optional explicit list for multi-layer alignment.
+# vae_repa_alignment_depths = [2]
+
+# Use paper-style automatic depth mapping by model scale:
+# - small backbones -> depth 2
+# - large backbones -> depth 8
+# When enabled, this overrides manual vae_repa_alignment_depth(s).
+vae_repa_auto_depth = false
+
+# Weight for VAE-REPA alignment loss (lambda in L_total = L_denoise + lambda * L_align).
+# Must be > 0 when enable_vae_repa = true.
+vae_repa_loss_lambda = 1.0
+
+# Smooth-L1 beta threshold for VAE-REPA feature alignment.
+# Paper default: 0.05. Smaller values behave closer to L1.
+vae_repa_loss_beta = 0.05
+
+# Alignment objective for VAE-REPA:
+# - "smooth_l1": paper default and recommended.
+# - "cosine": cosine-distance objective.
+# - "l1": absolute error objective.
+# - "l2": mean-squared error objective.
+vae_repa_alignment_loss = "smooth_l1"
+
+# Hidden-width multiplier for the VAE-REPA MLP projector.
+# Projector shape: hidden_dim -> hidden_dim * multiplier -> vae_feature_dim.
+# Must be >= 1. Higher values increase capacity and train-time memory/compute.
+vae_repa_projector_hidden_mult = 4
+
+# Number of linear layers in the VAE-REPA projector MLP.
+# Paper ablation best setting is 5-layer; set >= 2.
+vae_repa_projector_layers = 5
+
+# Optional explicit latent feature channel dimension for VAE targets.
+# 0 = auto-infer from the active VAE backend; set a positive value to override.
+vae_repa_target_dim = 0
+
+# Apply alignment only for normalized timesteps in [min, max].
+# Values use [0,1] normalized timestep space.
+vae_repa_timestep_min = 0.2
+
+# Max normalized timestep to apply alignment (0.0 to 1.0).
+vae_repa_timestep_max = 0.8
+
+# Spatial token alignment policy:
+# - true: interpolate token grids when diffusion and latent token counts differ.
+# - false: global-pool both sides before Smooth-L1 (cheaper but loses spatial detail).
+vae_repa_spatial_align = true
+
+# Video handling policy:
+# - false: use first frame only for VAE-REPA targets (lower overhead).
+# - true: align all frames when available (higher cost, stronger temporal supervision).
+vae_repa_use_full_video = false
+
 # Projection layer type for iREPA: "mlp" (baseline) or "conv" (iREPA default, preserves spatial structure)
 # Only used when enable_irepa = true; defaults keep inference unchanged
 irepa_projection_type = "conv"

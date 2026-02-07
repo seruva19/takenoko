@@ -46,6 +46,9 @@ from distillation.glance_distiller import GlanceDistiller
 from core.vae_training_core import VaeTrainingCore
 from reward.reward_training_core import RewardTrainingCore
 from enhancements.repa.repa_helper import RepaHelper
+from enhancements.repa.trainer_integration import (
+    maybe_add_vae_repa_params_for_finetune,
+)
 from enhancements.blockwise_flow_matching.conditioning import (
     BFMConditioningHelper,
     infer_text_context_dim,
@@ -1447,6 +1450,23 @@ class WanFinetuneTrainer:
                 logger.warning(f"VideoREPA setup failed: {exc}")
                 videorepa_helper = None
 
+        vae_repa_helper = None
+        if getattr(args, "enable_vae_repa", False):
+            try:
+                from enhancements.repa.vae_repa_helper import VaeRepaHelper
+
+                logger.info("VAE-REPA is enabled. Initializing helper module.")
+                vae_repa_helper = VaeRepaHelper(transformer, args, vae=vae)
+                maybe_add_vae_repa_params_for_finetune(
+                    params_to_optimize,
+                    param_names,
+                    vae_repa_helper,
+                    args,
+                )
+            except Exception as exc:
+                logger.warning(f"VAE-REPA setup failed: {exc}")
+                vae_repa_helper = None
+
         bfm_conditioning_helper = None
         if getattr(args, "bfm_semfeat_conditioning_enabled", False) or getattr(
             args, "bfm_segment_conditioning_enabled", False
@@ -1957,6 +1977,15 @@ class WanFinetuneTrainer:
                 logger.info("VideoREPA helper initialized")
             except Exception as e:
                 logger.warning(f"Failed to initialize VideoREPA helper: {e}")
+                repa_helper = None
+        elif vae_repa_helper is not None:
+            try:
+                repa_helper = vae_repa_helper
+                repa_helper.setup_hooks()
+                repa_helper = accelerator.prepare(repa_helper)
+                logger.info("VAE-REPA helper initialized")
+            except Exception as e:
+                logger.warning(f"Failed to initialize VAE-REPA helper: {e}")
                 repa_helper = None
         elif getattr(args, "enable_irepa", False):
             try:

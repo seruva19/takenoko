@@ -1285,6 +1285,7 @@ class TrainingLossComputer:
                 logger.warning(f"MOALIGN loss computation failed: {e}")
         elif repa_helper is not None:
             try:
+                is_vae_repa = bool(getattr(args, "enable_vae_repa", False))
                 if "pixels" in batch:
                     clean_pixels = torch.stack(
                         batch["pixels"], dim=0
@@ -1316,24 +1317,32 @@ class TrainingLossComputer:
                             # we might duplicate frames? Or just let repa_helper handle mismatch via pooling.
                             # For safety, we leave it; repa_helper will likely global pool.
                             pass
-
-                    # Pass full (resampled) tensor; add item_info only when supported.
-                    if _repa_helper_accepts_item_info(repa_helper):
-                        repa_val = repa_helper.get_repa_loss(
-                            clean_pixels,
-                            vae,
-                            item_info=batch.get("item_info"),
-                        )
-                    else:
-                        repa_val = repa_helper.get_repa_loss(clean_pixels, vae)
-                    loss = loss + repa_val
-                    repa_loss_value = repa_val.detach()
+                elif is_vae_repa:
+                    # VAE-REPA can align against latent targets directly, even when pixels are not loaded.
+                    clean_pixels = None
                 else:
                     helper_name = type(repa_helper).__name__
                     logger.warning(
                         "%s enabled, but no 'pixels' found in batch. Skipping alignment loss.",
                         helper_name,
                     )
+                    clean_pixels = None
+
+                if clean_pixels is not None or is_vae_repa:
+                    # Pass full (resampled) tensor; add extra kwargs only when supported.
+                    if _repa_helper_accepts_item_info(repa_helper):
+                        repa_val = repa_helper.get_repa_loss(
+                            clean_pixels,
+                            vae,
+                            item_info=batch.get("item_info"),
+                            latents=latents,
+                            timesteps=timesteps,
+                        )
+                    else:
+                        repa_val = repa_helper.get_repa_loss(clean_pixels, vae)
+                    loss = loss + repa_val
+                    repa_loss_value = repa_val.detach()
+
             except Exception as e:
                 helper_name = type(repa_helper).__name__
                 logger.warning("%s loss computation failed: %s", helper_name, e)
