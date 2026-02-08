@@ -494,7 +494,7 @@ class PolyLoRAController:
                 print(f"[polylora] wrote metadata to {meta_out}")
             return True
         except Exception as e:
-            print(f"? Error training hyper-LoRA: {e}")
+            print(f"Error training PolyLoRA: {e}")
             return False
 
     def predict_sample(self, non_interactive: bool = False) -> bool:
@@ -503,14 +503,14 @@ class PolyLoRAController:
             if non_interactive:
                 frame_list = getattr(args, "polylora_predict_frames", None)
                 if frame_list is None:
-                    print("? polylora_predict_frames must be set for non-interactive predict.")
+                    print("polylora_predict_frames must be set for non-interactive predict.")
                     return False
                 if isinstance(frame_list, str):
                     frame_list = [frame_list]
             else:
                 frame_list = self._prompt_list("Paths to style frames (comma-separated): ")
             if not frame_list:
-                print("? No frame paths provided.")
+                print("No frame paths provided.")
                 return False
             frames = [Image.open(Path(p)).convert("RGB") for p in frame_list]
             spec_path = (
@@ -533,7 +533,7 @@ class PolyLoRAController:
             )
             embed_dim = int(embed_dim_input) if embed_dim_input is not None else 0
             if embed_dim <= 0:
-                print("? Embedding dimension must be > 0.")
+                print("Embedding dimension must be > 0.")
                 return False
             encoder_name = (
                 getattr(args, "polylora_encoder", "openai/clip-vit-large-patch14-336")
@@ -649,7 +649,7 @@ class PolyLoRAController:
                     print(f"[polylora] smoke command failed (exit {e.returncode}): {e.stderr}")
             return True
         except Exception as e:
-            print(f"? Error predicting hyper-LoRA: {e}")
+            print(f"Error predicting PolyLoRA: {e}")
             return False
 
     def qa_corpus(self, non_interactive: bool = False) -> bool:
@@ -665,7 +665,7 @@ class PolyLoRAController:
                     default=getattr(args, "polylora_frames_root", None),
                 )
             if not lora_paths:
-                print("? No LoRA paths provided for QA.")
+                print("No LoRA paths provided for QA.")
                 return False
             if isinstance(lora_paths, str):
                 lora_paths = [lora_paths]

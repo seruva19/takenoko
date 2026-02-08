@@ -380,7 +380,7 @@ lr_scheduler_args = ''
 # NETWORK SETTINGS
 # =============================================================================
 
-# Network module to train: "networks.lora_wan", "networks.riemann_lora_wan", "networks.control_lora_wan",
+# Network module to train: "networks.lora_wan", "networks.ic_lora_wan", "networks.riemann_lora_wan", "networks.control_lora_wan",
 # "networks.reward_lora", "networks.vae_wan", "lycoris.kohya", "networks.t_lora", "networks.tc_lora_wan", "networks.moc_lora",
 # "networks.mhc_lora", "networks.singlora_wan", "networks.wan_finetune", "networks.slider_lora_wan",
 # "networks.relora_wan"
@@ -416,6 +416,34 @@ network_alpha = 32
 # LoRA-GGPO regularization (perturbs Linear LoRA weights during training):
 # Parsed by `takenoko.create_args_from_config` into args.ggpo_sigma/ggpo_beta for the loss hooks.
 # network_args = ["ggpo_sigma=0.03", "ggpo_beta=0.01"]
+
+# IC-LoRA (requires network_module = "networks.ic_lora_wan")
+# Example:
+# network_args = [
+#   "ic_lora_enabled=true",
+#   "ic_lora_concat_mode=reference_target_frames",
+#   "ic_lora_reference_suffix=_reference",
+#   "ic_lora_require_reference=true",
+#   "ic_lora_target_only_loss=true",
+#   "ic_lora_reference_dropout_p=0.15",
+#   "ic_lora_first_frame_conditioning_p=0.2",
+#   "ic_lora_reference_downscale_factor=1",
+#   "ic_lora_use_masked_conditioning=true",
+#   "ic_lora_masked_loss_only=true",
+#   "ic_lora_enforce_panel_tags=true",
+#   "ic_lora_sync_score_key=sync_score",
+#   "ic_lora_min_sync_score=0.85"
+# ]
+# Sync score filtering:
+# - Scores are read from per-sample caption text (e.g. "sync_score=0.91") or
+#   sidecar JSON files named like <media>.json / <media>.metadata.json.
+# - Filtering is disabled unless ic_lora_min_sync_score is set.
+# Other options:
+# - ic_lora_reference_dropout_p: mixes reference-conditioned and reference-free steps (0..1).
+# - ic_lora_use_masked_conditioning: SDEdit-style masking using dataset mask_signal.
+# - ic_lora_masked_loss_only: optimize only masked regions (requires masked conditioning).
+# - ic_lora_enforce_panel_tags: require captions to include [IMAGE1]/[IMAGE2]... tags.
+
 # RiemannLoRA (requires network_module = "networks.riemann_lora_wan"):
 # - loi_enabled: enable gradient-informed initialization (default false)
 # - loi_alpha: scale for LOI update (default 0.1)
@@ -3685,6 +3713,7 @@ input_lr_scale = 5.0
 control_concatenation_dim = 0
 
 # Suffix to append to media file name to get the control file
+# NOTE: IC-LoRA overrides this internally to ic_lora_reference_suffix from network_args.
 control_suffix = "_control"
 
 # Add noise to the control latents, at a random strength up to this amount
@@ -3909,34 +3938,34 @@ polylora_base_attenuate = 0.5
 # Output directory for saved embedding/LoRA pairs.
 # polylora_predict_out = "predicted_lora.pt"
 
-# Training hyperparameters for the hyper-LoRA network (used as defaults in the menu/CLI).
+# Training hyperparameters for the PolyLoRA network (used as defaults in the menu/CLI).
 polylora_train_lr = 0.001
 
-# Number of epochs to train the hyper-LoRA network.
+# Number of epochs to train the PolyLoRA network.
 polylora_train_epochs = 5
 
-# Batch size for hyper-LoRA training.
+# Batch size for PolyLoRA training.
 polylora_train_batch_size = 4
 
-# Weight decay for hyper-LoRA training.
+# Weight decay for PolyLoRA training.
 polylora_train_weight_decay = 0.0
 
-# Validation split for hyper-LoRA training (0 disables validation).
+# Validation split for PolyLoRA training (0 disables validation).
 polylora_train_val_split = 0.1
 
-# Enable AMP during hyper-LoRA training (auto-disables on CPU).
+# Enable AMP during PolyLoRA training (auto-disables on CPU).
 polylora_train_amp = true
 
-# Gradient clip norm for hyper-LoRA training (<=0 disables).
+# Gradient clip norm for PolyLoRA training (<=0 disables).
 polylora_train_grad_clip = 1.0
 
-# Weight for the cosine loss term in hyper-LoRA training.
+# Weight for the cosine loss term in PolyLoRA training.
 polylora_cosine_loss_weight = 0.0
 
 # Optional loss weight for the base branch when polylora_dual_lora_heads = true.
 polylora_base_loss_weight = 1.0
 
-# Optional EMA tracking for the hyper-LoRA network (recommended for stability).
+# Optional EMA tracking for the PolyLoRA network (recommended for stability).
 polylora_use_ema = false
 
 # EMA decay rate (only used when polylora_use_ema = true).

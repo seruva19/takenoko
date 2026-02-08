@@ -67,6 +67,11 @@ from enhancements.mixflow.training_integration import (
     apply_mixflow_slowed_interpolation,
     maybe_apply_mixflow_beta_t_sampling,
 )
+from enhancements.ic_lora.training_integration import (
+    is_ic_lora_enabled,
+    prepare_ic_lora_model_input,
+    should_skip_ic_lora_batch,
+)
 
 from enhancements.slider.slider_integration import compute_slider_loss_if_enabled
 import utils.fluxflow_augmentation as fluxflow_augmentation
@@ -801,19 +806,6 @@ class TrainingCore:
             )
 
         # call DiT
-        lat_f, lat_h, lat_w = latents.shape[2:5]
-        seq_len = (
-            lat_f
-            * lat_h
-            * lat_w
-            // (
-                self.config.patch_size[0]
-                * self.config.patch_size[1]
-                * self.config.patch_size[2]
-            )
-        )
-        if reg_cls_token is not None:
-            seq_len += 1
         latents = latents.to(device=accelerator.device, dtype=network_dtype)
         noisy_model_input = noisy_model_input.to(
             device=accelerator.device, dtype=network_dtype
@@ -901,6 +893,38 @@ class TrainingCore:
                 )
         else:
             model_input = noisy_model_input
+
+        ic_lora_ref_frames = 0
+        ic_lora_conditioned_first_frame_mask: Optional[torch.Tensor] = None
+        ic_lora_masked_loss_mask: Optional[torch.Tensor] = None
+        if is_ic_lora_enabled(args):
+            (
+                model_input,
+                ic_lora_ref_frames,
+                ic_lora_conditioned_first_frame_mask,
+                ic_lora_masked_loss_mask,
+            ) = prepare_ic_lora_model_input(
+                args=args,
+                batch=batch,
+                latents=latents,
+                noisy_model_input=model_input,
+                network_dtype=network_dtype,
+            )
+
+        seq_source = model_input if model_input.dim() == 5 else latents
+        lat_f, lat_h, lat_w = seq_source.shape[2:5]
+        seq_len = (
+            lat_f
+            * lat_h
+            * lat_w
+            // (
+                self.config.patch_size[0]
+                * self.config.patch_size[1]
+                * self.config.patch_size[2]
+            )
+        )
+        if reg_cls_token is not None:
+            seq_len += 1
 
         with accelerator.autocast():
             # Build force_keep_mask for TREAD masked training (preserve masked tokens)
@@ -1010,6 +1034,27 @@ class TrainingCore:
         if internal_guidance_pred is not None:
             internal_guidance_pred = torch.stack(internal_guidance_pred, dim=0)
 
+        if ic_lora_ref_frames > 0:
+            if model_pred.dim() < 5:
+                raise ValueError(
+                    "IC-LoRA expected model prediction with temporal dimensions."
+                )
+            temporal_axis = model_pred.dim() - 3
+            if model_pred.shape[temporal_axis] <= ic_lora_ref_frames:
+                raise ValueError(
+                    "IC-LoRA expected model prediction with prepended reference frames."
+                )
+            model_pred_slice = [slice(None)] * model_pred.dim()
+            model_pred_slice[temporal_axis] = slice(ic_lora_ref_frames, None)
+            model_pred = model_pred[tuple(model_pred_slice)]
+
+            if internal_guidance_pred is not None and internal_guidance_pred.dim() >= 5:
+                ig_temporal_axis = internal_guidance_pred.dim() - 3
+                if internal_guidance_pred.shape[ig_temporal_axis] > ic_lora_ref_frames:
+                    ig_slice = [slice(None)] * internal_guidance_pred.dim()
+                    ig_slice[ig_temporal_axis] = slice(ic_lora_ref_frames, None)
+                    internal_guidance_pred = internal_guidance_pred[tuple(ig_slice)]
+
         if model_pred.grad_fn is None:
             print(
                 "model_pred is detached from the graph before returning from call_dit"
@@ -1090,6 +1135,36 @@ class TrainingCore:
             target = noise - perturbed_latents_for_target.to(
                 device=accelerator.device, dtype=network_dtype
             )
+
+        if (
+            ic_lora_conditioned_first_frame_mask is not None
+            and bool(getattr(args, "ic_lora_target_only_loss", True))
+            and target.dim() == 5
+            and target.shape[2] > 0
+            and model_pred.dim() == 5
+            and model_pred.shape[2] > 0
+        ):
+            # Match first-frame conditioning semantics: conditioned frames do not contribute to optimization.
+            conditioned_mask = ic_lora_conditioned_first_frame_mask.to(
+                device=target.device, dtype=torch.bool
+            )
+            if bool(conditioned_mask.any().item()):
+                target = target.clone()
+                target[conditioned_mask, :, :1, :, :] = model_pred[
+                    conditioned_mask, :, :1, :, :
+                ].detach()
+
+        if (
+            ic_lora_masked_loss_mask is not None
+            and bool(getattr(args, "ic_lora_masked_loss_only", False))
+            and target.dim() == 5
+            and model_pred.dim() == 5
+        ):
+            keep_mask = ic_lora_masked_loss_mask.to(
+                device=target.device,
+                dtype=model_pred.dtype,
+            )
+            target = target * keep_mask + model_pred.detach() * (1.0 - keep_mask)
 
         if (
             apply_stable_velocity_target
@@ -1895,6 +1970,15 @@ class TrainingCore:
                             accelerator.device,
                             dit_dtype,
                         )
+
+                    skip_ic_lora_batch, ic_lora_skip_reason = should_skip_ic_lora_batch(
+                        args=args,
+                        batch=batch,
+                    )
+                    if skip_ic_lora_batch:
+                        if accelerator.is_main_process:
+                            logger.warning(ic_lora_skip_reason)
+                        continue
 
                     with ivon_sampled_params(args, optimizer):
                         if (

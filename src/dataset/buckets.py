@@ -174,6 +174,7 @@ class BucketBatchManager:
         prior_loss_weight: float = 1.0,
         sequence_batches: bool = False,
         sequence_batches_pattern: Optional[str] = None,
+        control_suffix: str = "_control",
     ):
         self.batch_size = batch_size
         self.buckets = bucketed_item_info
@@ -184,6 +185,10 @@ class BucketBatchManager:
         self._sequence_key_pattern = self._compile_sequence_pattern(
             sequence_batches_pattern
         )
+        normalized_control_suffix = str(control_suffix or "_control")
+        if not normalized_control_suffix.startswith("_"):
+            normalized_control_suffix = f"_{normalized_control_suffix}"
+        self.control_cache_suffix = f"{normalized_control_suffix}.safetensors"
         self.bucket_resos = list(self.buckets.keys())
         self.bucket_resos.sort()
         # Optional per-epoch timestep bucketing
@@ -316,6 +321,7 @@ class BucketBatchManager:
         varlen_keys = set()
         weights = []  # Collect weights for the batch
         control_signals = []  # Collect control signals for the batch
+        control_signal_present = []  # Tracks per-item control/reference availability
         mask_signals = []  # Collect mask signals for the batch
         pixels_list = []  # Collect original (or resized) pixel tensors
         svi_y_anchor_latents = []  # Collect optional SVI y anchor latents
@@ -408,11 +414,12 @@ class BucketBatchManager:
                 # Convert control content to tensor
                 control_tensor = torch.from_numpy(item_info.control_content).float()
                 control_signals.append(control_tensor)
+                control_signal_present.append(True)
             else:
                 # Check if control cache file exists
                 if item_info.latent_cache_path is not None:
                     control_cache_path = item_info.latent_cache_path.replace(
-                        ".safetensors", "_control.safetensors"
+                        ".safetensors", self.control_cache_suffix
                     )
                     if os.path.exists(control_cache_path):
                         try:
@@ -425,17 +432,22 @@ class BucketBatchManager:
                                     break
                             if control_key:
                                 control_signals.append(control_sd[control_key])
+                                control_signal_present.append(True)
                             else:
                                 control_signals.append(None)
+                                control_signal_present.append(False)
                         except Exception as e:
                             logger.warning(
                                 f"Failed to load control cache {control_cache_path}: {e}"
                             )
                             control_signals.append(None)
+                            control_signal_present.append(False)
                     else:
                         control_signals.append(None)
+                        control_signal_present.append(False)
                 else:
                     control_signals.append(None)
+                    control_signal_present.append(False)
 
             # Load mask signal if available
             if (
@@ -535,6 +547,9 @@ class BucketBatchManager:
         )
         batch_tensor_data["dataset_index"] = torch.tensor(
             dataset_indices, dtype=torch.long
+        )
+        batch_tensor_data["control_signal_present"] = torch.tensor(
+            control_signal_present, dtype=torch.bool
         )
 
         # Add control signals to batch if any are available

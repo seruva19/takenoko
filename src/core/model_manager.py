@@ -453,7 +453,13 @@ class ModelManager:
         net_kwargs = {}
         if args.network_args is not None:
             for net_arg in args.network_args:
-                key, value = net_arg.split("=")
+                if not isinstance(net_arg, str) or "=" not in net_arg:
+                    logger.warning(
+                        "Ignoring malformed network_args entry without '=': %r",
+                        net_arg,
+                    )
+                    continue
+                key, value = net_arg.split("=", 1)
                 net_kwargs[key] = value
 
         sparse_algo_to_pass = None
@@ -568,9 +574,15 @@ class ModelManager:
                     control_config=control_config,
                 )
             else:
-                network, _ = network_module.create_arch_network_from_weights(
+                network_from_weights = network_module.create_arch_network_from_weights(
                     1, weights_sd, unet=transformer
                 )
+                # Some network modules return only the network, others return
+                # (network, metadata). Support both shapes.
+                if isinstance(network_from_weights, tuple):
+                    network = network_from_weights[0]
+                else:
+                    network = network_from_weights
         else:
             # We use the name create_arch_network for compatibility with LyCORIS
             if hasattr(network_module, "create_arch_network"):
@@ -721,6 +733,9 @@ class ModelManager:
                     unet=transformer,
                     for_inference=True,
                 )
+
+            if isinstance(module, tuple):
+                module = module[0]
 
             module.apply_to(None, transformer, apply_text_encoder=False, apply_unet=True)
             for param in module.parameters():

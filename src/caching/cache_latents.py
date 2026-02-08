@@ -333,9 +333,15 @@ def encode_and_save_batch(
 
     # Save control latents if available
     if control_latent is not None:
+        control_suffix = str(
+            getattr(args, "control_suffix", "_control") if args is not None else "_control"
+        )
+        if not control_suffix.startswith("_"):
+            control_suffix = f"_{control_suffix}"
+        control_cache_suffix = f"{control_suffix}.safetensors"
         for item, cl in zip(batch, control_latent):
             control_cache_path = item.latent_cache_path.replace(  # type: ignore
-                ".safetensors", "_control.safetensors"
+                ".safetensors", control_cache_suffix
             )
             # Create a temporary ItemInfo for control latent
             control_item = ItemInfo(

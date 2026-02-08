@@ -1049,6 +1049,7 @@ class ImageDataset(BaseDataset):
                 prior_loss_weight,
                 sequence_batches=self.sequence_batches,
                 sequence_batches_pattern=self.sequence_batches_pattern,
+                control_suffix=self.control_suffix,
             )
             # Store per-epoch timestep bucketing preference on the batch manager if supported
             try:
@@ -1139,6 +1140,7 @@ class ImageDataset(BaseDataset):
             self._epoch_slide_prior_loss_weight or 1.0,
             sequence_batches=self.sequence_batches,
             sequence_batches_pattern=self.sequence_batches_pattern,
+            control_suffix=self.control_suffix,
         )
         if self._epoch_slide_num_timestep_buckets is not None:
             try:
@@ -2100,6 +2102,7 @@ class VideoDataset(BaseDataset):
                 prior_loss_weight,
                 sequence_batches=self.sequence_batches,
                 sequence_batches_pattern=self.sequence_batches_pattern,
+                control_suffix=self.control_suffix,
             )  # type: ignore
 
             self.batch_manager.show_bucket_info()
@@ -2170,6 +2173,7 @@ class VideoDataset(BaseDataset):
             self._epoch_slide_prior_loss_weight or 1.0,
             sequence_batches=self.sequence_batches,
             sequence_batches_pattern=self.sequence_batches_pattern,
+            control_suffix=self.control_suffix,
         )
 
         if log_bucket_info or not self._epoch_slide_logged_info:

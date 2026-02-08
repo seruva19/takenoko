@@ -11,6 +11,7 @@ from enhancements.immiscible_noise.config import parse_immiscible_noise_config
 from enhancements.catlvdm.config import parse_catlvdm_config
 from enhancements.moalign.config import parse_moalign_config
 from enhancements.temporal_pyramid.config import parse_temporal_pyramid_config
+from enhancements.ic_lora.config import parse_ic_lora_config
 from densedpo.config import parse_densedpo_config
 from memory.config import parse_memory_optimization_config
 from optimizers.q_galore_config import apply_q_galore_config
@@ -752,6 +753,9 @@ def create_args_from_config(
     args.save_control_videos = config.get("save_control_videos", False)
     args.control_video_save_all = config.get("control_video_save_all", False)
     args.control_video_save_dir = config.get("control_video_save_dir", "control_videos")
+
+    # IC-LoRA settings (separate network module, train-only path)
+    parse_ic_lora_config(config, args, logger)
 
     # ControlNet settings
     args.enable_controlnet = config.get("enable_controlnet", False)

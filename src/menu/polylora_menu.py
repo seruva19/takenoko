@@ -1,13 +1,13 @@
 """
 PolyLoRA-specific interactive menu shown when enable_polylora is true.
-Guides the user through prerequisite steps before running hyper-LoRA training.
+Guides the user through prerequisite steps before running PolyLoRA training.
 """
 
 from .menu_base import BaseMenu
 
 
 class PolyLoRAMenu(BaseMenu):
-    """Menu for hyper-LoRA side-pipeline steps."""
+    """Menu for PolyLoRA side-pipeline steps."""
 
     def __init__(self, trainer):
         super().__init__("Takenoko - PolyLoRA Pipeline")
@@ -31,5 +31,5 @@ class PolyLoRAMenu(BaseMenu):
 
 
 def create_polylora_menu(trainer) -> PolyLoRAMenu:
-    """Factory to build the hyper-LoRA menu."""
+    """Factory to build the PolyLoRA menu."""
     return PolyLoRAMenu(trainer)

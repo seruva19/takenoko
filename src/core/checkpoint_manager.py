@@ -856,6 +856,16 @@ class CheckpointManager:
                                 metadata_to_save[meta_key] = str(value)
                 except Exception as e:
                     logger.warning(f"Failed to add mHC mixing stats to metadata: {e}")
+            if getattr(args, "network_module", "") == "networks.ic_lora_wan":
+                metadata_to_save["reference_downscale_factor"] = str(
+                    int(getattr(args, "ic_lora_reference_downscale_factor", 1))
+                )
+                metadata_to_save["ic_lora_reference_suffix"] = str(
+                    getattr(args, "ic_lora_reference_suffix", "_reference")
+                )
+                metadata_to_save["ic_lora_concat_mode"] = str(
+                    getattr(args, "ic_lora_concat_mode", "reference_target_frames")
+                )
 
             title = (
                 args.metadata_title

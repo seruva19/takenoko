@@ -1,5 +1,7 @@
 import argparse
 import logging
+# Suppress PyTorch distributed redirect warnings on Windows/MacOS
+logging.getLogger("torch.distributed.elastic.multiprocessing.redirects").setLevel(logging.ERROR)
 import torch
 import gc
 import toml
