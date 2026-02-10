@@ -169,6 +169,38 @@ def collect_and_log_training_metrics(
         logs["loss/self_transcendence"] = float(
             loss_components.self_transcendence_loss.item()
         )
+    if getattr(loss_components, "drifting_loss", None) is not None:
+        logs["loss/drifting"] = float(loss_components.drifting_loss.item())
+    if getattr(loss_components, "drifting_drift_norm_mean", None) is not None:
+        logs["drifting/drift_norm_mean"] = float(
+            loss_components.drifting_drift_norm_mean.item()
+        )
+    if getattr(loss_components, "drifting_feature_dim", None) is not None:
+        logs["drifting/feature_dim"] = float(loss_components.drifting_feature_dim.item())
+    if getattr(loss_components, "drifting_effective_batch", None) is not None:
+        logs["drifting/effective_batch"] = float(
+            loss_components.drifting_effective_batch.item()
+        )
+    if getattr(loss_components, "drifting_active_scales", None) is not None:
+        logs["drifting/active_scales"] = float(
+            loss_components.drifting_active_scales.item()
+        )
+    if getattr(loss_components, "drifting_queue_pos_size", None) is not None:
+        logs["drifting/queue_pos_size"] = float(
+            loss_components.drifting_queue_pos_size.item()
+        )
+    if getattr(loss_components, "drifting_queue_neg_size", None) is not None:
+        logs["drifting/queue_neg_size"] = float(
+            loss_components.drifting_queue_neg_size.item()
+        )
+    if getattr(loss_components, "drifting_encoder_active", None) is not None:
+        logs["drifting/encoder_active"] = float(
+            loss_components.drifting_encoder_active.item()
+        )
+    if getattr(loss_components, "drifting_encoder_feature_dim", None) is not None:
+        logs["drifting/encoder_feature_dim"] = float(
+            loss_components.drifting_encoder_feature_dim.item()
+        )
     if getattr(loss_components, "moalign_loss", None) is not None:
         logs["loss/moalign"] = float(loss_components.moalign_loss.item())
     if loss_components.repa_loss is not None:

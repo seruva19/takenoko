@@ -2785,6 +2785,133 @@ reflexflow_history_exclude_tail_frames = 1
 reflexflow_log_interval = 50
 
 # =============================================================================
+# ⚠️ DRIFTING SETTINGS
+# =============================================================================
+
+# Enable drifting auxiliary loss (default: false).
+# This adds a drift-to-stopgrad target on the model prediction using
+# batch-estimated mean-shift vectors, inspired by "Generative Modeling via Drifting".
+enable_drifting = false
+
+# Strength multiplier applied to the drifting auxiliary loss (>= 0).
+# 0.0 disables the contribution even when enable_drifting=true.
+# Typical range: 0.01-0.2.
+drifting_loss_weight = 0.05
+
+# Kernel temperature τ for drifting field computation (> 0).
+# Lower values sharpen neighborhood weighting; higher values smooth it.
+# Typical range: 0.01-0.2.
+drifting_temperature = 0.05
+
+# Maximum feature dimension used by drifting loss (>= 1).
+# If flattened predictions exceed this value, features are pooled to this width
+# before pairwise distance/kernel computation for memory safety.
+drifting_max_feature_dim = 1024
+
+# Minimum per-device batch size required to apply drifting loss (>= 2).
+# If the effective batch is smaller, drifting is skipped for that step.
+drifting_min_batch_size = 2
+
+# Use dual-axis kernel normalization.
+# true: normalize across both source and target axes (recommended).
+# false: row-only normalization (faster/simpler baseline).
+drifting_use_dual_axis_normalization = true
+
+# Enable multi-scale drifting loss accumulation over
+# downsampled prediction/target tensors. Default: false.
+drifting_multi_scale_enabled = false
+
+# Integer downsample factors used for multi-scale drifting.
+# 1 = original resolution, 2 = half, 4 = quarter (per axis).
+# Valid values are integers >= 1.
+drifting_multi_scale_factors = [1, 2, 4]
+
+# Multi-scale reduction strategy:
+# - "mean": average losses across scales (recommended)
+# - "sum": sum all per-scale losses
+drifting_multi_scale_reduce = "mean"
+
+# Enable queue-backed banks for positive (target) and negative (prediction) samples.
+# Default: false (current batch only).
+drifting_queue_enabled = false
+
+# Per-label positive queue size (>= 0). Used when labels are available.
+drifting_queue_size_per_label = 128
+
+# Global positive queue size (>= 0), used regardless of labels.
+drifting_queue_size_global = 1000
+
+# Global negative (generated/prediction) queue size (>= 0).
+drifting_queue_neg_size_global = 1000
+
+# Maximum queue entries sampled per step for each bank (>= 0).
+drifting_queue_sample_per_step = 64
+
+# Warmup steps before queue samples are consumed for loss (>= 0).
+# During warmup, queues are filled but only current batch is used.
+drifting_queue_warmup_steps = 0
+
+# Enable CFG-aware kernel weighting.
+# Requires class labels in batch and null-label mapping when unconditional
+# samples are present. Default: false.
+drifting_cfg_weighting_enabled = false
+
+# Label value treated as unconditional/null class for weighting.
+drifting_cfg_null_label = -1
+
+# Kernel weight multiplier for conditional samples (>= 0).
+drifting_cfg_conditional_weight = 1.0
+
+# Kernel weight multiplier for unconditional samples (>= 0).
+drifting_cfg_unconditional_weight = 1.0
+
+# Apply CFG-aware weights to positive-bank kernels.
+drifting_cfg_apply_to_positive = true
+
+# Apply CFG-aware weights to negative-bank kernels.
+drifting_cfg_apply_to_negative = true
+
+# Multiply CFG-aware weights by per-sample batch weights from dataset
+# (`batch[\"weight\"]`) when available.
+drifting_cfg_use_batch_weight = false
+
+# Enable external pretrained feature encoder for drifting feature-space loss.
+# When enabled, drifting uses encoder features instead of pooled raw tensors.
+# This is useful for higher-fidelity feature-space drifting.
+drifting_feature_encoder_enabled = false
+
+# Path to a pretrained encoder module file (.pt/.pth/.ckpt/.jit) loadable as
+# a Torch module. Required when drifting_feature_encoder_enabled=true.
+# Example: "prebuilt/drifting/feature_encoder.pt"
+drifting_feature_encoder_path = ""
+
+# Spatial input size fed to the feature encoder (>= 16).
+drifting_feature_encoder_input_size = 224
+
+# Temporal reduction for video tensors before encoder forward:
+# - "mean": average frames
+# - "max": max over frames
+# - "middle": use middle frame
+drifting_feature_encoder_frame_reduce = "mean"
+
+# Channel mapping when latent channels are not RGB:
+# - "first3": use first three channels
+# - "mean_to_rgb": mean over channels and repeat to RGB
+drifting_feature_encoder_channel_mode = "first3"
+
+# Cast encoder and inputs to fp16 on CUDA for memory/perf.
+drifting_feature_encoder_use_fp16 = true
+
+# Apply ImageNet normalization to encoder inputs.
+# Input is first mapped from [-1,1] to [0,1], then normalized by ImageNet mean/std.
+drifting_feature_encoder_imagenet_norm = false
+
+# Strict mode:
+# - true: raise when encoder cannot be loaded/used
+# - false: log warning and fall back to pooled tensor features
+drifting_feature_encoder_strict = false
+
+# =============================================================================
 # ⚠️ ERROR RECYCLING SETTINGS
 # =============================================================================
 # Enable Error-Recycling Fine-Tuning. Default: false.

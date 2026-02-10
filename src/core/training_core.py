@@ -43,6 +43,7 @@ from enhancements.memflow_guidance.training_integration import (
 from enhancements.semanticgen.training_integration import SemanticGenTrainingState
 
 from enhancements.error_recycling.error_recycling_helper import ErrorRecyclingHelper
+from enhancements.drifting.drifting_helper import DriftingLossHelper
 from enhancements.reflexflow.reflexflow_helper import ReflexFlowHelper
 from enhancements.self_resampling.self_resampling_helper import SelfResamplingHelper
 from enhancements.stable_velocity.stablevm_target_helper import StableVMTargetHelper
@@ -322,6 +323,7 @@ class TrainingCore:
         self.self_resampling_helper: Optional[SelfResamplingHelper] = None
         self._warned_self_resampling_eqm = False
         self._warned_self_resampling_fast_rollout_fallback = False
+        self.drifting_helper: Optional[DriftingLossHelper] = None
         self.reflexflow_helper: Optional[ReflexFlowHelper] = None
         self._warned_reflexflow_eqm = False
         self._warned_reflexflow_clean_pred = False
@@ -1423,6 +1425,25 @@ class TrainingCore:
                     logger.warning("ReflexFlow setup failed: %s", exc)
                     self.reflexflow_helper = None
 
+        # Initialize drifting helper (train-only, LoRA-gated, inference-neutral)
+        self.drifting_helper = None
+        if bool(getattr(args, "enable_drifting", False)):
+            network_module = str(getattr(args, "network_module", "")).lower()
+            train_arch = str(getattr(args, "train_architecture", "lora")).lower()
+            if "lora" not in network_module and train_arch != "lora":
+                logger.warning(
+                    "Drifting requires LoRA training; disabling for network_module=%s.",
+                    network_module or "<unset>",
+                )
+            else:
+                try:
+                    self.drifting_helper = DriftingLossHelper(args)
+                    self.drifting_helper.setup_hooks()
+                    logger.info("Drifting auxiliary loss enabled for this run.")
+                except Exception as exc:
+                    logger.warning("Drifting setup failed: %s", exc)
+                    self.drifting_helper = None
+
         # Calculate starting epoch when resuming from checkpoint
         if global_step > 0:
             # We're resuming from a checkpoint - calculate which epoch we should be in
@@ -2389,6 +2410,7 @@ class TrainingCore:
                                 crepa_helper=crepa_helper,
                                 internal_guidance_helper=internal_guidance_helper,
                                 self_transcendence_helper=self.self_transcendence_helper,
+                                drifting_helper=self.drifting_helper,
                                 haste_helper=haste_helper,
                                 contrastive_attention_helper=contrastive_attention_helper,
                                 raft=getattr(self, "raft", None),

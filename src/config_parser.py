@@ -28,6 +28,7 @@ from configs.glance_config import apply_glance_config
 from configs.physics_guided_motion_loss import apply_physics_guided_motion_config
 from configs.self_transcendence_config import apply_self_transcendence_config
 from configs.mixflow_config import apply_mixflow_config
+from configs.drifting_config import apply_drifting_config
 from configs.reward_vcd_config import apply_reward_vcd_config
 from configs.video_consistency_distance import (
     apply_video_consistency_distance_config,
@@ -493,6 +494,7 @@ def create_args_from_config(
     apply_internal_guidance_config(args, config, logger)
     apply_self_transcendence_config(args, config, logger)
     apply_mixflow_config(args, config, logger)
+    apply_drifting_config(args, config, logger)
     args.training_comment = config.get("training_comment", "trained with Takenoko")
     args.dim_from_weights = config.get("dim_from_weights", False)
     args.lycoris = config.get("lycoris", False)

@@ -138,6 +138,7 @@ def run_loi_extra_backward(
         layer_sync_helper=layer_sync_helper,
         crepa_helper=crepa_helper,
         internal_guidance_helper=getattr(training_core, "internal_guidance_helper", None),
+        drifting_helper=getattr(training_core, "drifting_helper", None),
         haste_helper=haste_helper,
         contrastive_attention_helper=contrastive_attention_helper,
         raft=getattr(training_core, "raft", None),

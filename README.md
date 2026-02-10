@@ -142,4 +142,4 @@ Keep in mind that work on some features is not yet complete due to time and hard
 | [LTX-2](https://github.com/Lightricks/LTX-2) | repo | - IC-LoRA trainer/pipeline structure references<br>- Reference-target conditioning flow design<br>- IC-LoRA network module conventions | [Lightricks](https://github.com/Lightricks) | LTX-2 Community License | |
 | [In-Context LoRA for Diffusion Transformers](https://arxiv.org/abs/2410.23775) | paper | - In-context concatenation objective for condition/target layouts | Lianghua Huang, Wei Wang, Zhi-Fan Wu, Yupeng Shi, Huanzhang Dou, Chen Liang, Yutong Feng, Yu Liu, Jingren Zhou | CC BY 4.0 | |
 | [In-Context Sync-LoRA for Portrait Video Editing](https://arxiv.org/abs/2512.03013) | paper | - Sync-aware paired-video curation concept<br>- Motion-preserving in-context edit objective | Sagi Polaczek, Or Patashnik, Ali Mahdavi-Amiri, Daniel Cohen-Or | arXiv 1.0 |  |
-
+| [Generative Modeling via Drifting](https://arxiv.org/abs/2602.04770) | paper | - Drifting auxiliary objective<br>- Mean-shift drifting field with kernel normalization | Mingyang Deng, He Li, Tianhong Li, Yilun Du, Kaiming He | CC BY 4.0 | |

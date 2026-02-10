@@ -119,6 +119,24 @@ class LossComponents:
         The Internal Guidance auxiliary supervision loss, if enabled.
     self_transcendence_loss: Optional[torch.Tensor]
         The Self-Transcendence alignment loss, if enabled.
+    drifting_loss: Optional[torch.Tensor]
+        The Drifting auxiliary loss, if enabled.
+    drifting_drift_norm_mean: Optional[torch.Tensor]
+        Mean norm of the drifting vectors used for training diagnostics.
+    drifting_feature_dim: Optional[torch.Tensor]
+        Effective feature dimensionality used by drifting loss after pooling.
+    drifting_effective_batch: Optional[torch.Tensor]
+        Effective batch size used by drifting loss.
+    drifting_active_scales: Optional[torch.Tensor]
+        Number of multi-scale levels used by drifting loss in this step.
+    drifting_queue_pos_size: Optional[torch.Tensor]
+        Current positive queue size used by drifting helper.
+    drifting_queue_neg_size: Optional[torch.Tensor]
+        Current negative queue size used by drifting helper.
+    drifting_encoder_active: Optional[torch.Tensor]
+        Whether external drifting feature encoder was active on this step (0/1).
+    drifting_encoder_feature_dim: Optional[torch.Tensor]
+        Mean encoded feature dimensionality used for drifting loss.
     moalign_loss: Optional[torch.Tensor]
         The MOALIGN motion-centric relational alignment loss, if enabled.
     repa_loss: Optional[torch.Tensor]
@@ -221,6 +239,15 @@ class LossComponents:
     layer_sync_similarity: Optional[torch.Tensor] = None
     internal_guidance_loss: Optional[torch.Tensor] = None
     self_transcendence_loss: Optional[torch.Tensor] = None
+    drifting_loss: Optional[torch.Tensor] = None
+    drifting_drift_norm_mean: Optional[torch.Tensor] = None
+    drifting_feature_dim: Optional[torch.Tensor] = None
+    drifting_effective_batch: Optional[torch.Tensor] = None
+    drifting_active_scales: Optional[torch.Tensor] = None
+    drifting_queue_pos_size: Optional[torch.Tensor] = None
+    drifting_queue_neg_size: Optional[torch.Tensor] = None
+    drifting_encoder_active: Optional[torch.Tensor] = None
+    drifting_encoder_feature_dim: Optional[torch.Tensor] = None
     moalign_loss: Optional[torch.Tensor] = None
     repa_loss: Optional[torch.Tensor] = None
     stable_velocity_weight_mean: Optional[torch.Tensor] = None
@@ -571,6 +598,7 @@ class TrainingLossComputer:
         crepa_helper: Optional[Any] = None,
         internal_guidance_helper: Optional[Any] = None,
         self_transcendence_helper: Optional[Any] = None,
+        drifting_helper: Optional[Any] = None,
         global_step: Optional[int] = None,
         current_epoch: Optional[Any] = None,
         haste_helper: Optional[Any] = None,
@@ -1267,6 +1295,64 @@ class TrainingLossComputer:
                     "Self-Transcendence loss computation failed: %s",
                     e,
                 )
+
+        # ---- Optional Drifting Loss ----
+        drifting_loss_value: Optional[torch.Tensor] = None
+        drifting_drift_norm_mean_value: Optional[torch.Tensor] = None
+        drifting_feature_dim_value: Optional[torch.Tensor] = None
+        drifting_effective_batch_value: Optional[torch.Tensor] = None
+        drifting_active_scales_value: Optional[torch.Tensor] = None
+        drifting_queue_pos_size_value: Optional[torch.Tensor] = None
+        drifting_queue_neg_size_value: Optional[torch.Tensor] = None
+        drifting_encoder_active_value: Optional[torch.Tensor] = None
+        drifting_encoder_feature_dim_value: Optional[torch.Tensor] = None
+        if getattr(args, "enable_drifting", False):
+            try:
+                if drifting_helper is None:
+                    logger.warning(
+                        "Drifting enabled but helper is missing; skipping drifting loss."
+                    )
+                else:
+                    drifting_loss = drifting_helper.compute_loss(
+                        model_pred=model_pred.to(network_dtype),
+                        target=base_target.to(network_dtype),
+                        batch=batch,
+                        global_step=global_step,
+                    )
+                    if drifting_loss is not None:
+                        drifting_weight = float(
+                            getattr(args, "drifting_loss_weight", 0.05)
+                        )
+                        if drifting_weight > 0.0:
+                            loss = loss + drifting_weight * drifting_loss
+                            drifting_loss_value = drifting_loss.detach()
+                            drifting_metrics = drifting_helper.get_metrics()
+                            drifting_drift_norm_mean_value = drifting_metrics.get(
+                                "drifting/drift_norm_mean"
+                            )
+                            drifting_feature_dim_value = drifting_metrics.get(
+                                "drifting/feature_dim"
+                            )
+                            drifting_effective_batch_value = drifting_metrics.get(
+                                "drifting/effective_batch"
+                            )
+                            drifting_active_scales_value = drifting_metrics.get(
+                                "drifting/active_scales"
+                            )
+                            drifting_queue_pos_size_value = drifting_metrics.get(
+                                "drifting/queue_pos_size"
+                            )
+                            drifting_queue_neg_size_value = drifting_metrics.get(
+                                "drifting/queue_neg_size"
+                            )
+                            drifting_encoder_active_value = drifting_metrics.get(
+                                "drifting/encoder_active"
+                            )
+                            drifting_encoder_feature_dim_value = drifting_metrics.get(
+                                "drifting/encoder_feature_dim"
+                            )
+            except Exception as e:
+                logger.warning("Drifting loss computation failed: %s", e)
 
         # ---- Optional REG Loss ----
         reg_align_loss_value: Optional[torch.Tensor] = None
@@ -2110,6 +2196,15 @@ class TrainingLossComputer:
             layer_sync_similarity=layer_sync_similarity_value,
             internal_guidance_loss=internal_guidance_loss_value,
             self_transcendence_loss=self_transcendence_loss_value,
+            drifting_loss=drifting_loss_value,
+            drifting_drift_norm_mean=drifting_drift_norm_mean_value,
+            drifting_feature_dim=drifting_feature_dim_value,
+            drifting_effective_batch=drifting_effective_batch_value,
+            drifting_active_scales=drifting_active_scales_value,
+            drifting_queue_pos_size=drifting_queue_pos_size_value,
+            drifting_queue_neg_size=drifting_queue_neg_size_value,
+            drifting_encoder_active=drifting_encoder_active_value,
+            drifting_encoder_feature_dim=drifting_encoder_feature_dim_value,
             moalign_loss=moalign_loss_value,
             repa_loss=repa_loss_value,
             stable_velocity_weight_mean=stable_velocity_weight_mean_value,
