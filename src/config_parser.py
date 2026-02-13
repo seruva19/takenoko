@@ -46,6 +46,7 @@ from configs.delta_time_sampling_config import apply_delta_time_sampling_config
 from configs.motion_disentanglement_config import (
     apply_motion_disentanglement_config,
 )
+from configs.det_motion_transfer_config import apply_det_motion_transfer_config
 
 
 def create_args_from_config(
@@ -489,6 +490,7 @@ def create_args_from_config(
     parse_tc_lora_config(config, args, logger)
     apply_delta_time_sampling_config(args, config, logger)
     apply_motion_disentanglement_config(args, config, logger)
+    apply_det_motion_transfer_config(args, config, logger)
 
     apply_relora_config(args, config, logger)
     apply_internal_guidance_config(args, config, logger)

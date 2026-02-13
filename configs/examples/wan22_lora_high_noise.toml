@@ -21,7 +21,7 @@ t5 = "https://huggingface.co/Wan-AI/Wan2.1-T2V-14B/resolve/main/models_t5_umt5-x
 # TRAINING SETTINGS
 # =============================================================================
 
-max_train_steps = 10000 
+max_train_steps = 10000
 max_data_loader_n_workers = 2
 persistent_data_loader_workers = true
 seed = 20250811
@@ -34,7 +34,12 @@ mixed_precision = "fp16"
 # =============================================================================
 
 optimizer_type = "AdamW8bitKahan"
-optimizer_args = ["weight_decay=0.01", "betas=0.9,0.999", "stabilize=false", "eps=1e-8"]
+optimizer_args = [
+  "weight_decay=0.01",
+  "betas=0.9,0.999",
+  "stabilize=false",
+  "eps=1e-8",
+]
 learning_rate = 5e-5
 max_grad_norm = 1.0
 
@@ -93,13 +98,13 @@ auto_resume = true
 # METADATA SETTINGS
 # =============================================================================
 
-embed_config_in_metadata = true 
+embed_config_in_metadata = true
 
 # =============================================================================
 # LOGGING SETTINGS
 # =============================================================================
 
-enhanced_progress_bar = true 
+enhanced_progress_bar = true
 log_config = true
 logging_dir = "logs/wan22_lora_high_noise"
 log_with = "tensorboard"
@@ -131,12 +136,12 @@ text = """
 Young woman with short blonde hair and grey eyes, tank top, denim shorts, \
 in a cluttered open restaurant on a hill above amazing ocean beach
 """
-width = 384 
-height = 384 
-frames = 45 
-seed = 20250801 
-step = 20 
-cfg_scale = 6.0 
+width = 384
+height = 384
+frames = 45
+seed = 20250801
+step = 20
+cfg_scale = 6.0
 
 
 # =============================================================================
@@ -145,11 +150,11 @@ cfg_scale = 6.0
 
 [datasets.latent_cache]
 
-vae_cache_cpu = true 
-vae_dtype = "float16" 
-device = "cuda" 
-skip_existing = false 
-keep_cache = true 
+vae_cache_cpu = true
+vae_dtype = "float16"
+device = "cuda"
+skip_existing = false
+keep_cache = true
 
 # =============================================================================
 # TEXT ENCODER CACHE SETTINGS
@@ -157,64 +162,64 @@ keep_cache = true
 
 [datasets.text_encoder_cache]
 
-fp8_t5 = true 
-device = "cuda" 
-batch_size = 16 
-skip_existing = false 
-keep_cache = true 
+fp8_t5 = true
+device = "cuda"
+batch_size = 16
+skip_existing = false
+keep_cache = true
 
 # =============================================================================
 # DATASET SETTINGS
 # =============================================================================
 
-[datasets.general] 
+[datasets.general]
 
-caption_extension = ".txt" 
-enable_bucket = true 
-bucket_no_upscale = true 
+caption_extension = ".txt"
+enable_bucket = true
+bucket_no_upscale = true
 
 # =============================================================================
 # TRAINING DATASETS
 # =============================================================================
 
-[[datasets.train]] 
+[[datasets.train]]
 
-image_directory = "path/to/images" 
-cache_directory = "path/to/images/cache" 
-resolution = [512, 512] 
-batch_size = 1 
-num_repeats = 1 
+image_directory = "path/to/images"
+cache_directory = "path/to/images/cache"
+resolution = [512, 512]
+batch_size = 1
+num_repeats = 1
 
-[[datasets.train]] 
+[[datasets.train]]
 
-video_directory = "path/to/videos" 
-cache_directory = "path/to/videos/cache" 
-resolution = [256, 256] 
-batch_size = 1 
-num_repeats = 1 
-frame_extraction = "uniform" 
-target_frames = [1, 17, 33] 
-frame_sample = 1 
+video_directory = "path/to/videos"
+cache_directory = "path/to/videos/cache"
+resolution = [256, 256]
+batch_size = 1
+num_repeats = 1
+frame_extraction = "uniform"
+target_frames = [1, 17, 33]
+frame_sample = 1
 
 # =============================================================================
 # VALIDATION DATASETS
 # =============================================================================
 
-[[datasets.val]]  
+[[datasets.val]]
 
-image_directory = "path/to/val/images" 
-cache_directory = "path/to/val/images/cache" 
-resolution = [512, 512] 
-batch_size = 1 
-num_repeats = 1 
+image_directory = "path/to/val/images"
+cache_directory = "path/to/val/images/cache"
+resolution = [512, 512]
+batch_size = 1
+num_repeats = 1
 
-[[datasets.val]] 
+[[datasets.val]]
 
-video_directory = "path/to/val/videos" 
-cache_directory = "path/to/val/videos/cache" 
-resolution = [256, 256] 
-batch_size = 1 
-num_repeats = 1 
-frame_extraction = "head" 
-target_frames = [1, 25] 
+video_directory = "path/to/val/videos"
+cache_directory = "path/to/val/videos/cache"
+resolution = [256, 256]
+batch_size = 1
+num_repeats = 1
+frame_extraction = "head"
+target_frames = [1, 25]
 frame_sample = 1

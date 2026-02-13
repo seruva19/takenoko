@@ -2155,6 +2155,453 @@ videorepa_detach_teacher = true
 videorepa_encoder_chunk_size = 0
 
 # =============================================================================
+# ⚠️ DET MOTION TRANSFER REGULARIZER SETTINGS
+# =============================================================================
+
+# Enable DeT-inspired train-time regularization for DiT feature decoupling/tracking.
+# - Captures selected DiT block tokens during training.
+# - Adds a shared temporal-kernel smoothing regularizer across frame tokens.
+# - Adds a dense nearest-neighbor token tracking loss across adjacent frames.
+# - Requires video batches with temporal dimension > 1 to produce non-zero loss.
+enable_det_motion_transfer = false
+
+# DiT block depth used when det_alignment_depths is omitted (0-based index).
+# Use negative values to index from the end (Python-style), e.g. -1 for last block.
+det_alignment_depth = 8
+
+# Optional explicit list of block depths to hook for loss computation.
+# If provided, this list overrides det_alignment_depth.
+# Example:
+# det_alignment_depths = [8, 16, 24]
+det_alignment_depths = [8]
+
+# Temporal kernel size for smoothing along frame axis.
+# Must be odd and > 0. Paper ablations report strong results around k=5.
+det_temporal_kernel_size = 5
+
+# Temporal kernel type:
+# - "avg": uniform local averaging
+# - "gaussian": Gaussian-weighted local smoothing
+det_temporal_kernel_mode = "avg"
+
+# Weight for temporal-kernel regularization term (>= 0).
+# Effective contribution: det_temporal_kernel_loss_weight * L_temporal_kernel
+det_temporal_kernel_loss_weight = 0.1
+
+# Weight for dense tracking regularization term (>= 0).
+# Effective contribution: det_dense_tracking_loss_weight * L_dense_tracking
+det_dense_tracking_loss_weight = 0.1
+
+# Frame step used for dense token tracking (must be >= 1).
+# - 1: adjacent-frame tracking (paper-aligned local temporal assumption)
+# - 2+: longer-step associations, usually noisier but cheaper
+det_dense_tracking_stride = 1
+
+# Apply local DeT losses (temporal kernel + dense tracking) only when timestep
+# <= this value. Set to -1 to keep local losses active for all timesteps.
+det_local_loss_max_timestep = -1
+
+# Maximum number of per-frame tokens used for dense tracking (>= 0).
+# - 0: disable token capping (uses all tokens; highest cost)
+# - >0: keep top-k motion-salient tokens for efficiency
+det_dense_tracking_topk_tokens = 64
+
+# Whether temporal-kernel targets are detached when computing temporal loss.
+# - true: stable regularization target (recommended default)
+# - false: fully coupled smoothing objective
+det_detach_temporal_target = true
+
+# Optional trajectory-supervised DeT tracking loss (external .pth trajectories).
+# This path samples per-point features from model predictions using tracked points.
+# Keep disabled unless your dataset provides trajectories.
+det_external_tracking_enabled = false
+
+# Weight for the external trajectory tracking loss (>= 0).
+# Effective contribution: det_external_tracking_loss_weight * L_external_tracking
+det_external_tracking_loss_weight = 0.0
+
+# Apply external trajectory tracking only when timestep <= this value.
+# Set to -1 to disable timestep gating.
+det_external_tracking_max_timestep = 400
+
+# Optional absolute root directory containing trajectory files.
+# If empty, helper tries sidecar candidates derived from each sample item_key.
+det_trajectory_root = ""
+
+# Optional subdirectory name used when resolving trajectory files.
+# Typical DeT layout uses \"trajectories\".
+det_trajectory_subdir = "trajectories"
+
+# File extension for trajectory files.
+det_trajectory_extension = ".pth"
+
+# Use visibility channel (if present) to weight trajectory loss terms.
+det_trajectory_use_visibility = true
+
+# Optional cap on number of trajectory points per sample.
+# 0 means use all points.
+det_trajectory_max_points = 0
+
+# Minimum number of batch samples that must provide usable trajectories before
+# external tracking loss is applied in a step.
+det_external_tracking_min_active_samples = 1
+
+# In-memory LRU cache size (number of loaded trajectory files).
+det_trajectory_cache_size = 256
+
+# Run trajectory availability preflight from the active training dataset before
+# the training loop starts (no separate tool required).
+det_external_tracking_preflight_enabled = true
+
+# If true, fail fast when trajectory preflight does not meet quality thresholds.
+# If false, training continues with warnings and best-effort trajectory usage.
+det_external_tracking_preflight_strict = false
+
+# Minimum fraction of checked samples that must have usable trajectories.
+# Valid range: [0.0, 1.0].
+det_external_tracking_preflight_min_coverage = 0.7
+
+# Max number of unique samples inspected during preflight.
+# Use -1 to inspect all, positive values to cap startup cost.
+det_external_tracking_preflight_max_items = 2048
+
+# Validate trajectory tensor readability/shape during preflight.
+# - false: only check path resolution (fast)
+# - true: also load tensors to catch malformed files early
+det_external_tracking_preflight_validate_tensors = false
+
+# Bind resolved trajectory paths onto batch item metadata to avoid repeated
+# filesystem probing during training steps.
+det_external_tracking_bind_item_paths = true
+
+# Prefer in-batch trajectory tensors (batch["trajectories"]) when available.
+# This mirrors DeT's original training path and avoids repeated trajectory
+# file loading in large-scale runs. If unavailable, helper falls back to
+# item_key-based sidecar trajectory resolution.
+det_external_tracking_use_batch_trajectories = false
+
+# Adaptive locality gating for DeT local losses.
+# Motivation: Wan attention can be less temporally local than CogVideoX/Hunyuan.
+# When enabled, DeT temporal/dense local losses are down-scaled if measured
+# locality ratio is low, reducing instability.
+det_locality_adaptive_weighting_enabled = false
+
+# Target locality ratio used for adaptive scaling (> 0).
+det_locality_adaptive_target_ratio = 0.65
+
+# Minimum adaptive scale applied to local DeT losses in low-locality regimes.
+# Valid range: [0.0, 1.0].
+det_locality_adaptive_min_scale = 0.1
+
+# EMA momentum for locality-ratio smoothing in adaptive scaling.
+# Valid range: [0.0, 1.0).
+det_locality_adaptive_ema_momentum = 0.9
+
+# Attention-locality probe and auto policy (train-time only).
+# Computes a locality ratio from sampled self-attention maps (QK-softmax mass
+# on same-spatial / near-temporal neighborhoods) and can automatically
+# scale/disable local DeT losses on weak-locality backbones.
+det_attention_locality_probe_enabled = false
+
+# Probe update interval in training steps (> 0).
+det_attention_locality_probe_interval = 1
+
+# EMA momentum for probe ratio smoothing. Valid range: [0.0, 1.0).
+det_attention_locality_probe_ema_momentum = 0.95
+
+# Target/min locality ratio used by auto scaling (> 0).
+det_attention_locality_probe_min_ratio = 0.65
+
+# Auto policy:
+# - "off": report probe metrics only
+# - "scale": multiply local DeT losses by ratio/min_ratio (clamped)
+# - "disable": hard-disable local DeT losses below threshold
+det_attention_locality_auto_policy = "off"
+
+# Minimum multiplier for auto_policy="scale". Valid range: [0.0, 1.0].
+det_attention_locality_auto_scale_min = 0.1
+
+# Disable threshold for auto_policy="disable" (locality ratio).
+det_attention_locality_disable_threshold = 0.35
+
+# Re-enable threshold for auto_policy="disable" (hysteresis).
+det_attention_locality_reenable_threshold = 0.55
+
+# Locality profiler/visualizer for WAN compatibility checks (train-time only).
+# Captures per-depth normalized token-displacement histograms from DeT dense
+# tracking matches and renders heatmaps/histogram figures in TensorBoard.
+det_locality_profiler_enabled = false
+
+# Profiling interval in training steps (> 0).
+# Higher values reduce overhead on long runs.
+det_locality_profiler_interval = 200
+
+# Number of histogram bins for normalized displacement distance [0, 1].
+# Valid range: [4, 512].
+det_locality_profiler_bins = 16
+
+# Maximum number of depths to plot in locality visualizations (> 0).
+# If more depths are active, highest-sample depths are shown.
+det_locality_profiler_max_depths_in_plot = 8
+
+# TensorBoard tag prefix for profiler outputs.
+# Scalars: <prefix>/... ; Figures: <prefix>/heatmap and <prefix>/histograms
+det_locality_profiler_log_prefix = "det_locality_profile"
+
+# Export profiler artifacts to disk as PNG/JSON alongside TensorBoard logging.
+det_locality_profiler_export_artifacts = false
+
+# Optional output directory for exported profiler artifacts.
+# Empty string defaults to: <output_dir>/det_locality_profiles
+det_locality_profiler_export_dir = ""
+
+# Synchronize DeT controller runtime state across DDP ranks.
+# Useful for long multi-GPU runs where per-rank locality/loss dynamics drift.
+det_controller_sync_enabled = false
+
+# DDP sync interval in optimizer steps (> 0).
+# Every N steps, controller EMA/cooldown state is reduced across ranks.
+det_controller_sync_interval = 1
+
+# Include per-depth adaptive state in DDP sync.
+# When false, only global controller state is synchronized.
+det_controller_sync_include_per_depth = true
+
+# Automatic safeguard policy for non-local backbones (train-time only).
+# Activates a defensive mode when locality remains weak or stability spikes are
+# sustained, reducing local DeT pressure while biasing toward non-local fallback.
+det_auto_safeguard_enabled = false
+
+# Trigger threshold for effective local scale in [0, 1].
+# If observed local scale stays below this threshold for bad_step_patience
+# consecutive profiled steps, safeguard activates.
+det_auto_safeguard_locality_threshold = 0.45
+
+# Trigger threshold for unified-controller spike ratio (> 1.0).
+det_auto_safeguard_spike_ratio_threshold = 1.8
+
+# Consecutive risky steps required to activate safeguard (> 0).
+det_auto_safeguard_bad_step_patience = 4
+
+# Consecutive healthy steps required to deactivate safeguard (> 0).
+det_auto_safeguard_recovery_step_patience = 12
+
+# Upper cap on local-loss multiplier when safeguard is active.
+# 0.0 hard-disables local branches; values in (0, 1] softly retain them.
+det_auto_safeguard_local_scale_cap = 0.0
+
+# When safeguard is active, force non-local fallback blending even if normal
+# trigger conditions are not met (requires det_nonlocal_fallback_enabled=true).
+det_auto_safeguard_force_nonlocal_fallback = true
+
+# Minimum non-local blend while safeguard is active. Valid range: [0, 1].
+det_auto_safeguard_nonlocal_min_blend = 0.2
+
+# Multiplicative boost for non-local fallback term during safeguard mode.
+# Must be >= 1.0.
+det_auto_safeguard_nonlocal_weight_boost = 1.5
+
+# Unified DeT safety controller. Jointly controls local DeT losses using:
+# 1) a locality source (attention probe / locality adaptive / conservative min)
+# 2) a stability signal from local-loss spike detection with cooldown + recovery
+# This is useful for long runs on architectures where local temporal biases can intermittently destabilize optimization.
+det_unified_controller_enabled = false
+
+# Locality source consumed by unified controller:
+# - "attention_probe": det_attention_locality_scale
+# - "locality_adaptive": det_locality_scale
+# - "min": conservative min(attention_locality_scale, locality_scale) when both exist
+det_unified_controller_locality_source = "min"
+
+# Minimum scale applied by the unified controller.
+# Valid range: [0.0, 1.0].
+det_unified_controller_min_scale = 0.1
+
+# EMA momentum for local-loss stability baseline.
+# Valid range: [0.0, 1.0).
+det_unified_controller_loss_ema_momentum = 0.9
+
+# Spike trigger threshold against EMA baseline (> 1.0).
+# Example: 1.8 means "current local loss is 80% above EMA".
+det_unified_controller_spike_threshold = 1.8
+
+# Number of steps to hold min_scale after a spike (>= 0).
+det_unified_controller_cooldown_steps = 20
+
+# Number of steps to linearly recover from min_scale back to 1.0 (>= 0).
+det_unified_controller_recovery_steps = 100
+
+# Also apply unified controller scale to Wan DeT adapter gate runtime scale.
+# Requires enable_det_adapter=true for effect.
+det_unified_controller_apply_to_adapter = false
+
+# Per-depth adaptive gating for local DeT losses.
+# Applies depth-specific scales (instead of one global scale) so unstable blocks can be suppressed without disabling useful depths.
+det_per_depth_adaptive_enabled = false
+
+# Target locality ratio per depth (> 0).
+# Each depth tracks its own locality EMA and scales by ratio/target.
+det_per_depth_adaptive_locality_target_ratio = 0.65
+
+# Minimum per-depth scale. Valid range: [0.0, 1.0].
+det_per_depth_adaptive_min_scale = 0.1
+
+# EMA momentum for per-depth locality and local-loss baselines.
+# Valid range: [0.0, 1.0).
+det_per_depth_adaptive_ema_momentum = 0.9
+
+# Per-depth loss spike threshold vs per-depth EMA (> 1.0).
+det_per_depth_adaptive_spike_threshold = 1.8
+
+# Per-depth cooldown steps at min scale after a spike (>= 0).
+det_per_depth_adaptive_cooldown_steps = 20
+
+# Per-depth recovery steps from min scale back to 1.0 (>= 0).
+det_per_depth_adaptive_recovery_steps = 100
+
+# Optional non-local fallback branch for weak-locality steps.
+# When local DeT scales are low (weak locality / instability), this blends in a
+# global temporal consistency loss instead of only suppressing local losses.
+det_nonlocal_fallback_enabled = false
+
+# Weight of non-local fallback loss (> 0 when enabled).
+det_nonlocal_fallback_loss_weight = 0.0
+
+# Trigger threshold on local scale in [0, 1].
+# Fallback activates when effective local scale < trigger.
+det_nonlocal_fallback_trigger_scale = 0.6
+
+# Minimum blend multiplier once fallback is active. Valid range: [0.0, 1.0].
+det_nonlocal_fallback_min_blend = 0.0
+
+# Temporal stride for non-local frame consistency (> 0).
+det_nonlocal_fallback_stride = 1
+
+# Non-local fallback loss mode:
+# - "cosine": 1 - cosine similarity between globally pooled frame features
+# - "mse": MSE between globally pooled frame features
+det_nonlocal_fallback_mode = "cosine"
+
+# DeT per-loss warmup schedule (curriculum) for stable large-scale runs.
+det_loss_schedule_enabled = false
+
+# Warmup shape:
+# - "linear": linear 0->1 ramp
+# - "cosine": cosine warmup ramp
+det_loss_schedule_shape = "linear"
+
+# Warmup steps per DeT loss branch (>= 0).
+det_temporal_loss_warmup_steps = 0
+
+# Warmup steps for dense tracking loss (>= 0).
+det_dense_tracking_loss_warmup_steps = 0
+
+# Warmup steps for external tracking loss (>= 0).
+det_external_tracking_loss_warmup_steps = 0
+
+# Warmup steps for non-local fallback loss (>= 0).
+det_nonlocal_fallback_loss_warmup_steps = 0
+
+# Controller-driven optimizer LR modulation (train-time only).
+# Applies a dynamic LR scale to DeT adapter param groups at step time, then
+# restores original group LRs after optimizer.step() to preserve scheduler math. Requires enable_det_adapter=true.
+det_optimizer_modulation_enabled = false
+
+# Target optimizer group set:
+# - "det_adapter": only DeT adapter parameter group(s)
+det_optimizer_modulation_target = "det_adapter"
+
+# Scale source:
+# - "unified": det_unified_controller_scale
+# - "per_depth": det_per_depth_scale_mean
+# - "min": conservative min(unified, per_depth) when both exist
+det_optimizer_modulation_source = "min"
+
+# Floor for LR modulation scale. Valid range: [0.0, 1.0].
+det_optimizer_modulation_min_scale = 0.2
+
+# Warmup steps for high-frequency loss (>= 0).
+det_high_frequency_loss_warmup_steps = 0
+
+# Optional temporal high-frequency matching loss from DeT-style training.
+# This compares high-frequency temporal components of model prediction and target.
+det_high_frequency_loss_enabled = false
+
+# Weight for high-frequency temporal loss (must be > 0 when enabled).
+det_high_frequency_loss_weight = 0.0
+
+# Frequency cutoff for temporal FFT high-pass filtering (> 0).
+det_high_frequency_cutoff_frequency = 3
+
+# Apply high-frequency loss only when timestep <= this value.
+# Set to -1 to disable timestep gating.
+det_high_frequency_max_timestep = 400
+
+# Injects a small gated temporal Conv1D residual on selected Wan self-attention outputs during training.
+enable_det_adapter = false
+
+# Fallback depth used when det_adapter_alignment_depths is omitted.
+# Supports negative indexing, e.g. -1 is the last block.
+det_adapter_alignment_depth = 8
+
+# Optional explicit list of Wan block depths to adapt.
+# Example: det_adapter_alignment_depths = [8, 16, 24]
+det_adapter_alignment_depths = [8]
+
+# Temporal adapter bottleneck width. Must be > 0.
+det_adapter_rank = 128
+
+# Temporal Conv1D kernel size (odd, > 0). Larger values increase temporal
+# context and compute cost.
+det_adapter_kernel_size = 3
+
+# Initial value of the scalar residual gate before tanh clamping.
+# 0.0 means adapter starts effectively near no-op.
+det_adapter_gate_init = 0.0
+
+# Absolute maximum gate magnitude after tanh clamping.
+# Effective gate = tanh(gate_param) * det_adapter_gate_max
+det_adapter_gate_max = 0.25
+
+# Per-group LR multiplier for adapter parameters relative to learning_rate.
+det_adapter_lr_scale = 1.0
+
+# Require identical patch-grid sizes across the batch for adapter application.
+# Keep this true for safety on mixed-shape batches.
+det_adapter_require_uniform_grid = true
+
+# Allow adapter execution for sparse-attention forwards.
+# false is safer because sparse modes may not preserve dense temporal layout.
+det_adapter_allow_sparse_attention = false
+
+# Optional runtime gating: scale adapter residuals using DeT locality metrics
+# from the previous step. Useful for Wan backbones where local temporal bias can
+# destabilize training when locality is weak.
+det_adapter_follow_det_locality_scale = false
+
+# Source metric for adapter runtime locality scale:
+# - "attention_probe": uses det_attention_locality_scale
+# - "locality_adaptive": uses det_locality_scale
+det_adapter_locality_scale_source = "attention_probe"
+
+# Minimum runtime scale when locality-follow is enabled.
+# Valid range: [0.0, 1.0].
+det_adapter_locality_min_scale = 0.0
+
+# Optional warmup schedule for adapter gate strength.
+# This gradually introduces adapter influence in early training steps to avoid abrupt optimization shifts.
+det_adapter_gate_warmup_enabled = false
+
+# Number of optimizer steps to ramp adapter gate scale from 0 -> 1.
+# Must be > 0 when det_adapter_gate_warmup_enabled=true.
+det_adapter_gate_warmup_steps = 0
+
+# Warmup ramp shape for adapter gate:
+# - "linear": linear ramp
+# - "cosine": cosine ramp
+det_adapter_gate_warmup_shape = "linear"
+
+# =============================================================================
 # ⚠️ STRUCTURE FROM TRACKING (SAM2 LGF-KL DISTILLATION) SETTINGS
 # =============================================================================
 

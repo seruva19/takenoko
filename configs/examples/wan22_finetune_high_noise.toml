@@ -5,7 +5,7 @@
 # TARGET TRAINING
 # =============================================================================
 
-target_model = "wan22"  # WAN22 with improved architecture
+target_model = "wan22" # WAN22 with improved architecture
 
 # =============================================================================
 # CHECKPOINT SETTINGS - WAN22 HIGH NOISE MODEL
@@ -13,57 +13,61 @@ target_model = "wan22"  # WAN22 with improved architecture
 
 dit = "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/diffusion_models/wan2.2_t2v_high_noise_14B_fp16.safetensors"
 use_or_convert_bf16 = true
-fp8_scaled = false  
-fp8_base = false    
+fp8_scaled = false
+fp8_base = false
 mixed_precision_transformer = false
-vae = "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/vae/wan_2.1_vae.safetensors" 
-t5 = "https://huggingface.co/Wan-AI/Wan2.1-T2V-14B/resolve/main/models_t5_umt5-xxl-enc-bf16.pth" 
+vae = "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/vae/wan_2.1_vae.safetensors"
+t5 = "https://huggingface.co/Wan-AI/Wan2.1-T2V-14B/resolve/main/models_t5_umt5-xxl-enc-bf16.pth"
 
 # =============================================================================
 # TRAINING SETTINGS 
 # =============================================================================
 
 max_train_epochs = 10
-max_data_loader_n_workers = 2  
-persistent_data_loader_workers = true 
-seed = 20250122  
-gradient_checkpointing = true  
+max_data_loader_n_workers = 2
+persistent_data_loader_workers = true
+seed = 20250122
+gradient_checkpointing = true
 gradient_checkpointing_cpu_offload = true
 # gradient_accumulation_steps = 4  
-mixed_precision = "bf16" 
+mixed_precision = "bf16"
 
 # =============================================================================
 # OPTIMIZER SETTINGS 
 # =============================================================================
 
-optimizer_type = "adafactor" 
-optimizer_args = ["scale_parameter=False", "relative_step=False", "warmup_init=False"] 
-learning_rate = 1e-5  
+optimizer_type = "adafactor"
+optimizer_args = [
+  "scale_parameter=False",
+  "relative_step=False",
+  "warmup_init=False",
+]
+learning_rate = 1e-5
 max_grad_norm = 0
 
 # =============================================================================
 # LEARNING RATE SCHEDULER
 # =============================================================================
 
-lr_scheduler = "constant_with_warmup" 
-lr_warmup_steps = 100  
+lr_scheduler = "constant_with_warmup"
+lr_warmup_steps = 100
 
 # =============================================================================
 # NETWORK SETTINGS
 # =============================================================================
 
-network_module = "networks.wan_finetune"  
+network_module = "networks.wan_finetune"
 
 # =============================================================================
 # FINETUNE SETTINGS
 # =============================================================================
 
-fine_tune_ratio = 1.0  
-finetune_text_encoder = false 
-full_bf16 = true 
+fine_tune_ratio = 1.0
+finetune_text_encoder = false
+full_bf16 = true
 direct_checkpoint_loading = true
-fused_backward_pass = true 
-mem_eff_save = true  
+fused_backward_pass = true
+mem_eff_save = true
 use_stochastic_rounding = true
 use_stochastic_rounding_cuda = false
 verify_weight_dynamics_every_n_steps = 0
@@ -72,27 +76,27 @@ verify_weight_dynamics_every_n_steps = 0
 # TIMESTEP AND FLOW MATCHING SETTINGS
 # =============================================================================
 
-timestep_sampling = "shift" 
-discrete_flow_shift = 3.0  
+timestep_sampling = "shift"
+discrete_flow_shift = 3.0
 min_timestep = 875
-max_timestep = 1000  
-preserve_distribution_shape = true 
+max_timestep = 1000
+preserve_distribution_shape = true
 
 # =============================================================================
 # OPTIMIZATION SETTINGS
 # =============================================================================
 
-sdpa = true         
+sdpa = true
 # flash_attn = true 
 
 # =============================================================================
 # VALIDATION SETTINGS
 # =============================================================================
 
-validate_every_n_steps = 500  
-validate_on_epoch_end = true 
-validation_timesteps = "900,925,950,975" 
-use_unique_noise_per_batch = true 
+validate_every_n_steps = 500
+validate_on_epoch_end = true
+validation_timesteps = "900,925,950,975"
+use_unique_noise_per_batch = true
 
 # =============================================================================
 # MEMORY OPTIMIZATION SETTINGS
@@ -104,21 +108,21 @@ blocks_to_swap = 20
 # OUTPUT SETTINGS
 # =============================================================================
 
-output_dir = "output/wan22_finetune_high_noise" 
-output_name = "wan22_finetune_high_noise" 
-save_every_n_steps = 500 
-save_state = true 
+output_dir = "output/wan22_finetune_high_noise"
+output_name = "wan22_finetune_high_noise"
+save_every_n_steps = 500
+save_state = true
 save_state_every_n_epochs = 5
 save_every_n_epochs = 5
 save_last_n_epochs = 5
-auto_resume = true 
+auto_resume = true
 
 # =============================================================================
 # LOGGING SETTINGS
 # =============================================================================
 
 logging_level = "INFO"
-logging_steps = 25  
+logging_steps = 25
 log_with = "tensorboard"
 logging_dir = "logs/wan22_finetune_high_noise"
 log_config = true
@@ -133,7 +137,7 @@ log_timestep_distribution = "histogram"
 # METADATA SETTINGS
 # =============================================================================
 
-embed_config_in_metadata = true 
+embed_config_in_metadata = true
 
 # =============================================================================
 # SAMPLING SETTINGS

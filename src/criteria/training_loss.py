@@ -17,6 +17,7 @@ import torch
 import torch.nn.functional as F
 
 from common.logger import get_logger
+from criteria.det_loss_utils import extract_det_component_tensors
 from criteria.dispersive_loss import dispersive_loss_info_nce
 from criteria.loss_factory import conditional_loss_with_pseudo_huber
 from criteria.physics_guided_motion_loss import compute_physics_guided_motion_loss
@@ -119,6 +120,94 @@ class LossComponents:
         The Internal Guidance auxiliary supervision loss, if enabled.
     self_transcendence_loss: Optional[torch.Tensor]
         The Self-Transcendence alignment loss, if enabled.
+    det_temporal_kernel_loss: Optional[torch.Tensor]
+        DeT-style temporal-kernel smoothing regularization term.
+    det_dense_tracking_loss: Optional[torch.Tensor]
+        DeT-style dense token tracking regularization term.
+    det_external_tracking_loss: Optional[torch.Tensor]
+        DeT-style trajectory-supervised tracking regularization term.
+    det_external_tracking_active_samples: Optional[torch.Tensor]
+        Number of samples in the batch with usable external trajectories.
+    det_external_tracking_active_ratio: Optional[torch.Tensor]
+        Ratio of samples in the batch with usable external trajectories.
+    det_external_tracking_active_points: Optional[torch.Tensor]
+        Total number of trajectory points used for external tracking in the step.
+    det_high_frequency_loss: Optional[torch.Tensor]
+        DeT-style temporal high-frequency matching regularization term.
+    det_nonlocal_fallback_loss: Optional[torch.Tensor]
+        Non-local temporal fallback branch loss active when local scales are weak.
+    det_nonlocal_fallback_blend_mean: Optional[torch.Tensor]
+        Mean fallback blend factor across active DeT depths.
+    det_nonlocal_fallback_active_depths: Optional[torch.Tensor]
+        Number of depths with active non-local fallback blending.
+    det_controller_sync_enabled: Optional[torch.Tensor]
+        Indicator (0/1) that DeT DDP controller sync is enabled.
+    det_controller_sync_applied: Optional[torch.Tensor]
+        Indicator (0/1) that DeT controller sync ran on this step.
+    det_controller_sync_world_size: Optional[torch.Tensor]
+        Effective distributed world size observed by DeT controller sync.
+    det_optimizer_lr_scale: Optional[torch.Tensor]
+        Runtime LR modulation scale proposed for DeT optimizer groups.
+    det_optimizer_lr_modulation_active: Optional[torch.Tensor]
+        Indicator (0/1) that DeT optimizer LR modulation is active this step.
+    det_locality_ratio: Optional[torch.Tensor]
+        Mean locality ratio used to estimate whether local temporal bias is suitable.
+    det_locality_scale: Optional[torch.Tensor]
+        Adaptive scaling factor applied to local DeT losses.
+    det_attention_locality_ratio: Optional[torch.Tensor]
+        Attention-locality probe ratio (EMA).
+    det_attention_locality_scale: Optional[torch.Tensor]
+        Auto-policy multiplier derived from attention-locality probing.
+    det_attention_locality_policy_active: Optional[torch.Tensor]
+        Indicator (0/1) that auto-policy is actively suppressing local losses.
+    det_unified_controller_scale: Optional[torch.Tensor]
+        Final unified controller multiplier applied to local DeT losses.
+    det_unified_controller_locality_scale: Optional[torch.Tensor]
+        Locality source multiplier selected by unified controller policy.
+    det_unified_controller_stability_scale: Optional[torch.Tensor]
+        Stability multiplier from spike cooldown/recovery state.
+    det_unified_controller_spike_ratio: Optional[torch.Tensor]
+        Current local-loss to EMA ratio used for spike detection.
+    det_unified_controller_cooldown_active: Optional[torch.Tensor]
+        Indicator (0/1) that unified controller is in cooldown state.
+    det_per_depth_scale_mean: Optional[torch.Tensor]
+        Mean per-depth adaptive scale across active DeT depths.
+    det_per_depth_scale_min: Optional[torch.Tensor]
+        Minimum per-depth adaptive scale across active DeT depths.
+    det_per_depth_scale_max: Optional[torch.Tensor]
+        Maximum per-depth adaptive scale across active DeT depths.
+    det_per_depth_cooldown_active_count: Optional[torch.Tensor]
+        Number of DeT depths currently in per-depth cooldown.
+    det_per_depth_spike_ratio_max: Optional[torch.Tensor]
+        Maximum per-depth local-loss spike ratio across active depths.
+    det_schedule_temporal_factor: Optional[torch.Tensor]
+        Warmup multiplier applied to DeT temporal-kernel loss.
+    det_schedule_tracking_factor: Optional[torch.Tensor]
+        Warmup multiplier applied to DeT dense-tracking loss.
+    det_schedule_external_factor: Optional[torch.Tensor]
+        Warmup multiplier applied to DeT external-tracking loss.
+    det_schedule_nonlocal_factor: Optional[torch.Tensor]
+        Warmup multiplier applied to DeT non-local fallback loss.
+    det_schedule_hf_factor: Optional[torch.Tensor]
+        Warmup multiplier applied to DeT high-frequency loss.
+    det_auto_safeguard_active: Optional[torch.Tensor]
+        Indicator (0/1) that DeT auto safeguard is currently active.
+    det_auto_safeguard_risky_step: Optional[torch.Tensor]
+        Indicator (0/1) that current step matched safeguard risk criteria.
+    det_auto_safeguard_bad_streak: Optional[torch.Tensor]
+        Current consecutive risky-step count tracked by safeguard policy.
+    det_auto_safeguard_good_streak: Optional[torch.Tensor]
+        Current consecutive healthy-step count tracked by safeguard policy.
+    det_auto_safeguard_risk_locality: Optional[torch.Tensor]
+        Indicator (0/1) that locality threshold criterion was violated.
+    det_auto_safeguard_risk_spike: Optional[torch.Tensor]
+        Indicator (0/1) that spike-ratio criterion was violated.
+    det_auto_safeguard_risk_cooldown: Optional[torch.Tensor]
+        Indicator (0/1) that unified-controller cooldown criterion was active.
+    det_auto_safeguard_local_scale_cap: Optional[torch.Tensor]
+        Local-loss scale cap currently applied by safeguard policy.
+    det_auto_safeguard_nonlocal_boost: Optional[torch.Tensor]
+        Non-local fallback multiplier currently applied by safeguard policy.
     drifting_loss: Optional[torch.Tensor]
         The Drifting auxiliary loss, if enabled.
     drifting_drift_norm_mean: Optional[torch.Tensor]
@@ -239,6 +328,50 @@ class LossComponents:
     layer_sync_similarity: Optional[torch.Tensor] = None
     internal_guidance_loss: Optional[torch.Tensor] = None
     self_transcendence_loss: Optional[torch.Tensor] = None
+    det_temporal_kernel_loss: Optional[torch.Tensor] = None
+    det_dense_tracking_loss: Optional[torch.Tensor] = None
+    det_external_tracking_loss: Optional[torch.Tensor] = None
+    det_external_tracking_active_samples: Optional[torch.Tensor] = None
+    det_external_tracking_active_ratio: Optional[torch.Tensor] = None
+    det_external_tracking_active_points: Optional[torch.Tensor] = None
+    det_high_frequency_loss: Optional[torch.Tensor] = None
+    det_nonlocal_fallback_loss: Optional[torch.Tensor] = None
+    det_nonlocal_fallback_blend_mean: Optional[torch.Tensor] = None
+    det_nonlocal_fallback_active_depths: Optional[torch.Tensor] = None
+    det_controller_sync_enabled: Optional[torch.Tensor] = None
+    det_controller_sync_applied: Optional[torch.Tensor] = None
+    det_controller_sync_world_size: Optional[torch.Tensor] = None
+    det_optimizer_lr_scale: Optional[torch.Tensor] = None
+    det_optimizer_lr_modulation_active: Optional[torch.Tensor] = None
+    det_locality_ratio: Optional[torch.Tensor] = None
+    det_locality_scale: Optional[torch.Tensor] = None
+    det_attention_locality_ratio: Optional[torch.Tensor] = None
+    det_attention_locality_scale: Optional[torch.Tensor] = None
+    det_attention_locality_policy_active: Optional[torch.Tensor] = None
+    det_unified_controller_scale: Optional[torch.Tensor] = None
+    det_unified_controller_locality_scale: Optional[torch.Tensor] = None
+    det_unified_controller_stability_scale: Optional[torch.Tensor] = None
+    det_unified_controller_spike_ratio: Optional[torch.Tensor] = None
+    det_unified_controller_cooldown_active: Optional[torch.Tensor] = None
+    det_per_depth_scale_mean: Optional[torch.Tensor] = None
+    det_per_depth_scale_min: Optional[torch.Tensor] = None
+    det_per_depth_scale_max: Optional[torch.Tensor] = None
+    det_per_depth_cooldown_active_count: Optional[torch.Tensor] = None
+    det_per_depth_spike_ratio_max: Optional[torch.Tensor] = None
+    det_schedule_temporal_factor: Optional[torch.Tensor] = None
+    det_schedule_tracking_factor: Optional[torch.Tensor] = None
+    det_schedule_external_factor: Optional[torch.Tensor] = None
+    det_schedule_nonlocal_factor: Optional[torch.Tensor] = None
+    det_schedule_hf_factor: Optional[torch.Tensor] = None
+    det_auto_safeguard_active: Optional[torch.Tensor] = None
+    det_auto_safeguard_risky_step: Optional[torch.Tensor] = None
+    det_auto_safeguard_bad_streak: Optional[torch.Tensor] = None
+    det_auto_safeguard_good_streak: Optional[torch.Tensor] = None
+    det_auto_safeguard_risk_locality: Optional[torch.Tensor] = None
+    det_auto_safeguard_risk_spike: Optional[torch.Tensor] = None
+    det_auto_safeguard_risk_cooldown: Optional[torch.Tensor] = None
+    det_auto_safeguard_local_scale_cap: Optional[torch.Tensor] = None
+    det_auto_safeguard_nonlocal_boost: Optional[torch.Tensor] = None
     drifting_loss: Optional[torch.Tensor] = None
     drifting_drift_norm_mean: Optional[torch.Tensor] = None
     drifting_feature_dim: Optional[torch.Tensor] = None
@@ -587,6 +720,7 @@ class TrainingLossComputer:
         control_signal_processor: Optional[Any] = None,
         repa_helper: Optional[Any] = None,
         sft_alignment_helper: Optional[Any] = None,
+        det_motion_helper: Optional[Any] = None,
         moalign_helper: Optional[Any] = None,
         semfeat_helper: Optional[Any] = None,
         bfm_conditioning_helper: Optional[Any] = None,
@@ -1579,6 +1713,34 @@ class TrainingLossComputer:
                 helper_name = type(sft_alignment_helper).__name__
                 logger.warning("%s loss computation failed: %s", helper_name, e)
 
+        # ---- Optional DeT-style temporal-kernel + dense-tracking loss ----
+        det_component_values: Dict[str, torch.Tensor] = {}
+        if (
+            det_motion_helper is not None
+            and getattr(args, "enable_det_motion_transfer", False)
+        ):
+            try:
+                det_total_loss, det_logs = det_motion_helper.compute_loss(
+                    latents=latents,
+                    batch=batch,
+                    model_pred=model_pred,
+                    target=target,
+                    timesteps=timesteps,
+                    global_step=global_step,
+                )
+                if det_total_loss is not None:
+                    loss = loss + det_total_loss
+                if isinstance(det_logs, dict):
+                    det_component_values = extract_det_component_tensors(
+                        det_logs,
+                        reference=loss.detach(),
+                    )
+            except Exception as e:
+                logger.warning(
+                    "DeT motion transfer loss computation failed: %s",
+                    e,
+                )
+
         # ---- Optional BFM SemFeat Loss ----
         if semfeat_helper is not None and getattr(args, "bfm_semfeat_enabled", False):
             try:
@@ -2196,6 +2358,7 @@ class TrainingLossComputer:
             layer_sync_similarity=layer_sync_similarity_value,
             internal_guidance_loss=internal_guidance_loss_value,
             self_transcendence_loss=self_transcendence_loss_value,
+            **det_component_values,
             drifting_loss=drifting_loss_value,
             drifting_drift_norm_mean=drifting_drift_norm_mean_value,
             drifting_feature_dim=drifting_feature_dim_value,
@@ -2394,3 +2557,5 @@ class TrainingLossComputer:
             None otherwise.
         """
         return self._last_contrastive_components
+
+

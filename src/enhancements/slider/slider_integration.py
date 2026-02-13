@@ -134,6 +134,7 @@ class SliderIntegration:
                 control_signal_processor=kwargs.get("control_signal_processor"),
                 repa_helper=kwargs.get("repa_helper"),
                 sft_alignment_helper=kwargs.get("sft_alignment_helper"),
+                det_motion_helper=kwargs.get("det_motion_helper"),
                 moalign_helper=kwargs.get("moalign_helper"),
                 semfeat_helper=kwargs.get("semfeat_helper"),
                 bfm_conditioning_helper=kwargs.get("bfm_conditioning_helper"),

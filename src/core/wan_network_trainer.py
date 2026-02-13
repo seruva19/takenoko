@@ -1011,6 +1011,66 @@ class WanNetworkTrainer:
                 logger.warning(f"Structure-From-Tracking setup failed: {exc}")
                 structure_from_tracking_helper = None
 
+        det_motion_helper = None
+        if getattr(args, "enable_det_motion_transfer", False):
+            try:
+                from enhancements.det_motion_transfer.det_motion_helper import (
+                    DeTMotionTransferHelper,
+                )
+
+                logger.info(
+                    "DeT motion transfer regularizer is enabled. Initializing helper."
+                )
+                det_motion_helper = DeTMotionTransferHelper(transformer, args)
+                if getattr(args, "det_external_tracking_enabled", False):
+                    try:
+                        det_motion_helper.run_external_tracking_preflight(
+                            train_dataset_group
+                        )
+                    except Exception as preflight_exc:
+                        if getattr(
+                            args, "det_external_tracking_preflight_strict", False
+                        ):
+                            raise
+                        logger.warning(
+                            "DeT trajectory preflight failed (continuing with warnings): %s",
+                            preflight_exc,
+                        )
+            except Exception as exc:
+                logger.warning(f"DeT motion transfer setup failed: {exc}")
+                det_motion_helper = None
+
+        det_adapter_helper = None
+        if getattr(args, "enable_det_adapter", False):
+            try:
+                from enhancements.det_motion_transfer.wan_det_adapter import (
+                    WanDeTAdapterHelper,
+                )
+
+                logger.info("Wan-safe DeT adapter is enabled. Initializing helper.")
+                det_adapter_helper = WanDeTAdapterHelper(transformer, args)
+                det_adapter_params = det_adapter_helper.get_trainable_params()
+                if det_adapter_params:
+                    det_adapter_lr = float(args.learning_rate) * float(
+                        getattr(args, "det_adapter_lr_scale", 1.0)
+                    )
+                    trainable_params.append(
+                        {
+                            "params": det_adapter_params,
+                            "lr": det_adapter_lr,
+                            "det_adapter_group": True,
+                        }
+                    )
+                    lr_descriptions.append("det_adapter")
+                else:
+                    logger.warning(
+                        "Wan-safe DeT adapter enabled but no trainable parameters were found."
+                    )
+                    det_adapter_helper = None
+            except Exception as exc:
+                logger.warning(f"Wan-safe DeT adapter setup failed: {exc}")
+                det_adapter_helper = None
+
         bfm_conditioning_helper = None
         if getattr(args, "bfm_semfeat_conditioning_enabled", False) or getattr(
             args, "bfm_segment_conditioning_enabled", False
@@ -1202,6 +1262,15 @@ class WanNetworkTrainer:
             )
         except Exception as exc:
             logger.warning("Weight EMA setup skipped: %s", exc)
+        try:
+            if det_motion_helper is not None:
+                accelerator.register_for_checkpointing(det_motion_helper)
+                logger.info("DeT helper runtime checkpointing is enabled.")
+        except Exception as exc:
+            logger.debug(
+                "Could not register DeT helper for checkpointing: %s",
+                exc,
+            )
 
         # ========== Checkpoint Hooks ==========
         self.checkpoint_manager.register_hooks(accelerator, args, transformer, network)
@@ -1767,6 +1836,22 @@ class WanNetworkTrainer:
                 except Exception as exc:
                     logger.warning(f"Structure-From-Tracking hook setup failed: {exc}")
                     sft_alignment_helper = None
+            if det_motion_helper is not None:
+                try:
+                    logger.info(
+                        "DeT motion transfer regularizer is enabled. Setting up hooks."
+                    )
+                    det_motion_helper.setup_hooks()
+                except Exception as exc:
+                    logger.warning(f"DeT motion transfer hook setup failed: {exc}")
+                    det_motion_helper = None
+            if det_adapter_helper is not None:
+                try:
+                    logger.info("Wan-safe DeT adapter is enabled. Setting up hooks.")
+                    det_adapter_helper.setup_hooks()
+                except Exception as exc:
+                    logger.warning(f"Wan-safe DeT adapter hook setup failed: {exc}")
+                    det_adapter_helper = None
             if getattr(args, "enable_layer_sync", False):
                 try:
                     from enhancements.layer_sync.helper import LayerSyncHelper
@@ -1900,6 +1985,7 @@ class WanNetworkTrainer:
                 val_epoch_step_sync=val_epoch_step_sync,
                 repa_helper=repa_helper if sara_helper is None else None,
                 sft_alignment_helper=sft_alignment_helper,
+                det_motion_helper=det_motion_helper,
                 moalign_helper=moalign_helper,
                 semfeat_helper=semfeat_helper,
                 reg_helper=reg_helper,
@@ -1919,6 +2005,10 @@ class WanNetworkTrainer:
             repa_helper.remove_hooks()
         if "sft_alignment_helper" in locals() and sft_alignment_helper is not None:
             sft_alignment_helper.remove_hooks()
+        if "det_motion_helper" in locals() and det_motion_helper is not None:
+            det_motion_helper.remove_hooks()
+        if "det_adapter_helper" in locals() and det_adapter_helper is not None:
+            det_adapter_helper.remove_hooks()
         if "moalign_helper" in locals() and moalign_helper is not None:
             moalign_helper.remove_hooks()
         if "reg_helper" in locals() and reg_helper is not None:

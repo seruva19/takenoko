@@ -1296,6 +1296,7 @@ class TrainingCore:
         val_epoch_step_sync: Optional[Tuple[Any, Any]] = None,
         repa_helper: Optional[Any] = None,
         sft_alignment_helper: Optional[Any] = None,
+        det_motion_helper: Optional[Any] = None,
         moalign_helper: Optional[Any] = None,
         semfeat_helper: Optional[Any] = None,
         reg_helper: Optional[Any] = None,
@@ -2399,6 +2400,7 @@ class TrainingCore:
                                     repa_helper if sara_helper is None else None
                                 ),
                                 sft_alignment_helper=sft_alignment_helper,
+                                det_motion_helper=det_motion_helper,
                                 moalign_helper=moalign_helper,
                                 semfeat_helper=semfeat_helper,
                                 bfm_conditioning_helper=self.bfm_conditioning_helper,
@@ -2729,6 +2731,7 @@ class TrainingCore:
                                         target_loi_context=None,
                                         repa_helper=repa_helper,
                                         sft_alignment_helper=sft_alignment_helper,
+                                        det_motion_helper=det_motion_helper,
                                         moalign_helper=moalign_helper,
                                         semfeat_helper=semfeat_helper,
                                         reg_helper=reg_helper,
@@ -2782,6 +2785,7 @@ class TrainingCore:
                             target_loi_context=None,
                             repa_helper=repa_helper,
                             sft_alignment_helper=sft_alignment_helper,
+                            det_motion_helper=det_motion_helper,
                             moalign_helper=moalign_helper,
                             semfeat_helper=semfeat_helper,
                             reg_helper=reg_helper,
@@ -2802,7 +2806,24 @@ class TrainingCore:
                     if not loi_applied:
                         # Start optimizer step timing
                         start_optimizer_step_timing()
+                        det_lr_modulation_active = False
                         try:
+                            if det_motion_helper is not None and getattr(
+                                args, "det_optimizer_modulation_enabled", False
+                            ):
+                                try:
+                                    det_lr_scale = (
+                                        det_motion_helper.apply_optimizer_lr_modulation_before_step(
+                                            optimizer
+                                        )
+                                    )
+                                    det_lr_modulation_active = det_lr_scale is not None
+                                except Exception as det_lr_exc:
+                                    logger.debug(
+                                        "DeT optimizer LR modulation skipped: %s",
+                                        det_lr_exc,
+                                    )
+
                             optimizer.step()
                             update_teacher_if_needed(
                                 self.transition_manager, accelerator, transformer
@@ -2813,8 +2834,19 @@ class TrainingCore:
                                 "parameter groups to the optimizer"
                             )
                             raise e
-                        # End optimizer step timing
-                        end_optimizer_step_timing()
+                        finally:
+                            if det_lr_modulation_active and det_motion_helper is not None:
+                                try:
+                                    det_motion_helper.restore_optimizer_lr_after_step(
+                                        optimizer
+                                    )
+                                except Exception as det_lr_restore_exc:
+                                    logger.debug(
+                                        "DeT optimizer LR restoration skipped: %s",
+                                        det_lr_restore_exc,
+                                    )
+                            # End optimizer step timing
+                            end_optimizer_step_timing()
                     else:
                         optimizer.zero_grad(set_to_none=True)
 
@@ -3055,6 +3087,7 @@ class TrainingCore:
                     noise_scheduler,
                     self.adaptive_manager,
                     self.loss_computer,
+                    det_motion_helper,
                 )
 
                 # Temporal Consistency: logging handled inside integration (no per-step wiring here)

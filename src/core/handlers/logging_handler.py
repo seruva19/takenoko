@@ -27,6 +27,10 @@ from utils.activation_stats import (
     collect_activation_stats,
     get_activation_metrics_after_forward,
 )
+from core.handlers.det_logging_utils import (
+    attach_det_component_logs,
+    log_det_locality_profile_visuals,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +45,21 @@ _lora_stats_initialized = False
 # Activation stats tracker (initialized in wan_network_trainer.py)
 _activation_stats_enabled = False
 
+
+def _log_det_locality_profile_visuals(
+    accelerator: Any,
+    args: argparse.Namespace,
+    det_motion_helper: Optional[Any],
+    global_step: int,
+    logs: Dict[str, float],
+) -> None:
+    log_det_locality_profile_visuals(
+        accelerator=accelerator,
+        args=args,
+        det_motion_helper=det_motion_helper,
+        global_step=global_step,
+        logs=logs,
+    )
 
 def collect_and_log_training_metrics(
     args: argparse.Namespace,
@@ -68,6 +87,7 @@ def collect_and_log_training_metrics(
     noise_scheduler: Any,
     adaptive_manager: Optional[Any],
     loss_computer: Any,
+    det_motion_helper: Optional[Any] = None,
 ) -> None:
     """Collect and log all training metrics to TensorBoard and other trackers.
 
@@ -169,6 +189,7 @@ def collect_and_log_training_metrics(
         logs["loss/self_transcendence"] = float(
             loss_components.self_transcendence_loss.item()
         )
+    attach_det_component_logs(logs, loss_components)
     if getattr(loss_components, "drifting_loss", None) is not None:
         logs["loss/drifting"] = float(loss_components.drifting_loss.item())
     if getattr(loss_components, "drifting_drift_norm_mean", None) is not None:
@@ -359,6 +380,17 @@ def collect_and_log_training_metrics(
         )
 
         _attn_log_helper(accelerator, args, logs, global_step)
+    except Exception:
+        pass
+
+    try:
+        _log_det_locality_profile_visuals(
+            accelerator=accelerator,
+            args=args,
+            det_motion_helper=det_motion_helper,
+            global_step=global_step,
+            logs=logs,
+        )
     except Exception:
         pass
 
@@ -627,3 +659,5 @@ def collect_and_log_training_metrics(
             accelerator.log(activation_metrics, step=global_step)
     except Exception as e:
         logger.debug(f"Activation stats logging error: {e}")
+
+
