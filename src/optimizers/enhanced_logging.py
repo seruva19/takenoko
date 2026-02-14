@@ -39,6 +39,7 @@ class EnhancedOptimizerLogger:
             "SingleDeviceNorMuon": self._log_muon_metrics,
             "SingleDeviceNorMuonWithAuxAdam": self._log_muon_metrics,
             "SingleDeviceManifoldMuonWithAuxAdam": self._log_muon_metrics,
+            "SingleDeviceManoWithAuxAdam": self._log_muon_metrics,
         }
 
     def get_prodigy_d(self, optimizer: Optimizer) -> float:

@@ -455,6 +455,20 @@ class OptimizerManager:
                 logger=logger,
             )
 
+        elif optimizer_type == "Mano".lower():
+            from optimizers.factory.muon_factory import create_mano_optimizer
+
+            optimizer_class, optimizer = create_mano_optimizer(
+                args,
+                transformer,
+                trainable_params,
+                lr,
+                optimizer_kwargs,
+                extract_params=extract_params,
+                log_param_structure=log_param_structure,
+                logger=logger,
+            )
+
         elif optimizer_type == "MuonClip".lower():
             from optimizers.factory.muon_factory import create_muonclip_optimizer
 

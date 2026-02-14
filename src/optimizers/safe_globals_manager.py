@@ -32,6 +32,7 @@ class SafeGlobalsManager:
                 CompressedRelationships,
                 AsyncComputeManager,
             )
+            from optimizers.mano import SingleDeviceManoWithAuxAdam
             from optimizers.riemannion import SingleDeviceRiemannionWithAuxAdam
 
             # Add to PyTorch's safe globals
@@ -47,6 +48,8 @@ class SafeGlobalsManager:
                     CompactStateDict,
                     CompressedRelationships,
                     AsyncComputeManager,
+                    # Mano optimizer classes
+                    SingleDeviceManoWithAuxAdam,
                     # Riemannion optimizer classes
                     SingleDeviceRiemannionWithAuxAdam,
                 ]

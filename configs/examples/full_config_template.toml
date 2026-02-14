@@ -253,6 +253,7 @@ rope_use_float32 = false
 # - "TemporalAdamW": AdamW with temporal gradient smoothing for video training
 # - "Prodigy": Adaptive learning rate optimizer
 # - "AdaMuon": Muon-style orthogonal optimizer with element-wise adaptivity for ≥2D params
+# - "Mano": Restriking manifold optimizer with tangent projection for matrix params + Adam aux params
 # - "GaLoreAdamW", "GaLoreAdamW8bit", "GaLoreAdafactor": GaLore optimizers
 # - "QGaLoreAdamW8bit": Q-GaLore optimizer (requires q-galore-torch)
 # - "IVON": Bayesian optimizer that samples parameters each step (requires ivon_ess)
@@ -270,7 +271,7 @@ optimizer_type = "adamw8bit"
 #
 # Muon-specific arguments:
 # - log_muon_metrics: Enable expensive metric logging (grad consistency, update ratio). Default: False.
-#   Only supported by Muon, AdaMuon, NorMuon, ManifoldMuon, and MuonClip variants.
+#   Only supported by Muon, AdaMuon, NorMuon, ManifoldMuon, MuonClip, and Mano variants.
 #   Setting to True adds CPU-GPU synchronization overhead but provides insights into training dynamics.
 # - ns_steps: Number of Newton-Schulz iterations (default: 5).
 # - nesterov: Enable Nesterov momentum (default: True).
@@ -286,6 +287,21 @@ optimizer_type = "adamw8bit"
 # NorMuon-specific arguments:
 # - beta2: Second moment coefficient (default: 0.95).
 #
+# Mano-specific arguments:
+# - mano_lr: Learning rate for matrix (>=2D) parameters (default: 1e-3).
+# - mano_weight_decay: Weight decay for matrix params (default: weight_decay or 1e-3).
+# - mano_momentum: Tangent momentum coefficient (default: 0.95).
+# - mano_nesterov: Enable Nesterov momentum for tangent projection (default: False).
+# - mano_scale_factor: Update RMS scaling factor (default: 0.2).
+# - mano_eps: Numerical stability epsilon for normalization (default: 1e-8).
+# - mano_adam_lr: Learning rate for auxiliary Adam params (default: learning_rate).
+# - mano_betas: Beta coefficients for auxiliary Adam params (default: (0.9, 0.95)).
+# - mano_adam_eps: Epsilon for auxiliary Adam updates (default: 1e-8).
+# - mano_adam_weight_decay: Optional separate weight decay for auxiliary Adam params (default: mano_weight_decay).
+# - mano_exclude_embeddings: Route nn.Embedding parameters to auxiliary Adam instead of Mano (default: false).
+# - mano_exclude_lm_head: Route transformer.lm_head parameters to auxiliary Adam when present (default: false).
+# - mano_exclude_name_patterns: Optional fnmatch patterns for parameter names routed to auxiliary Adam.
+#
 # ManifoldMuon-specific arguments:
 # - eta: Learning rate on the manifold (default: 0.1).
 # - alpha: Regularization strength (default: 0.01).
@@ -296,6 +312,8 @@ optimizer_type = "adamw8bit"
 # - tau: Clipping threshold for QK-Clip (default: 100.0).
 #
 # optimizer_args = ["log_muon_metrics=True", "ns_steps=5", "weight_decay_type='cautious'"]
+# optimizer_args = ["mano_momentum=0.95", "mano_nesterov=False", "mano_scale_factor=0.2", "mano_betas=(0.9,0.95)"]
+# optimizer_args = ["mano_exclude_embeddings=True", "mano_exclude_lm_head=True", "mano_exclude_name_patterns=['*.head.*']"]
 #
 # Example for GaLore
 # optimizer_args = ["galore_rank=128", "galore_update_proj_gap=200", "galore_scale=0.25", "galore_proj_type='std'", "galore_apply_to='matrix_only'"]
