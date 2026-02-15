@@ -12,7 +12,7 @@ Key properties:
 - Supports discount schedules for temporal credit assignment
 """
 
-from typing import Tuple
+from typing import Callable, Optional, Tuple
 import torch
 import torch.nn as nn
 import numpy as np
@@ -259,6 +259,7 @@ class DirectAlignEngine(nn.Module):
         context,
         seq_len: int,
         branch: str,
+        post_step_callback: Optional[Callable[..., torch.Tensor]] = None,
     ) -> torch.Tensor:
         """
         Recover clean image by running remaining Euler steps to sigma=0.
@@ -273,6 +274,15 @@ class DirectAlignEngine(nn.Module):
             context: List of text embeddings
             seq_len: Sequence length for transformer
             branch: "denoise" or "inversion" (determines recovery direction)
+            post_step_callback: Optional callback invoked after each recovery step.
+                Receives:
+                - latents_before_step
+                - latents_after_step
+                - model_pred
+                - step_idx
+                - sigma_current
+                - sigma_next
+                Must return updated latents_after_step.
 
         Returns:
             Recovered clean latents [B, C, F, H, W]
@@ -319,12 +329,23 @@ class DirectAlignEngine(nn.Module):
             )
             sigma_next_expanded = sigma_next.view(1, 1, 1, 1, 1).expand(B, 1, 1, 1, 1)
 
-            latents_current = self.single_euler_step(
+            latents_next = self.single_euler_step(
                 latents_current,
                 model_pred,
                 sigma_current_expanded,
                 sigma_next_expanded,
                 branch=recovery_branch,
             )
+            if post_step_callback is not None:
+                latents_next = post_step_callback(
+                    latents_before_step=latents_current,
+                    latents_after_step=latents_next,
+                    model_pred=model_pred,
+                    step_idx=step_idx,
+                    sigma_current=sigma_current_expanded,
+                    sigma_next=sigma_next_expanded,
+                )
+
+            latents_current = latents_next
 
         return latents_current

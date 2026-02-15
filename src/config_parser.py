@@ -47,6 +47,7 @@ from configs.motion_disentanglement_config import (
     apply_motion_disentanglement_config,
 )
 from configs.det_motion_transfer_config import apply_det_motion_transfer_config
+from configs.euphonium_config import apply_euphonium_config
 
 
 def create_args_from_config(
@@ -2120,5 +2121,8 @@ def create_args_from_config(
             f"🎯 SRPO training enabled - Reward model: {args.srpo_reward_model_name}, "
             f"Steps: {args.srpo_num_training_steps}, Batch size: {args.srpo_batch_size}"
         )
+
+    # Euphonium-inspired SRPO enhancement (default off)
+    args = apply_euphonium_config(args, config, logger)
 
     return args

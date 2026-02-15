@@ -84,6 +84,32 @@ class SRPOConfig:
     srpo_optical_flow_weight: float = 0.0  # Weight for optical flow smoothness reward
     srpo_motion_quality_weight: float = 0.0  # Weight for motion quality reward
 
+    # Euphonium-inspired SRPO enhancement (default off for behavior preservation)
+    srpo_enable_euphonium: bool = False
+    srpo_euphonium_process_reward_guidance_enabled: bool = False
+    srpo_euphonium_process_reward_model_type: str = "none"
+    srpo_euphonium_process_reward_model_path: str = ""
+    srpo_euphonium_process_reward_model_entry: str = ""
+    srpo_euphonium_process_reward_model_dtype: str = "float32"
+    srpo_euphonium_process_reward_allow_proxy_fallback: bool = True
+    srpo_euphonium_process_reward_gradient_mode: str = "autograd"
+    srpo_euphonium_process_reward_spsa_sigma: float = 0.01
+    srpo_euphonium_process_reward_spsa_num_samples: int = 1
+    srpo_euphonium_process_reward_guidance_scale: float = 0.1
+    srpo_euphonium_process_reward_guidance_kl_beta: float = 0.1
+    srpo_euphonium_process_reward_guidance_eta: float = 1.0
+    srpo_euphonium_process_reward_start_step: int = 0
+    srpo_euphonium_process_reward_end_step: int = -1
+    srpo_euphonium_process_reward_interval: int = 1
+    srpo_euphonium_process_reward_normalize_gradient: bool = True
+    srpo_euphonium_use_delta_t_for_guidance: bool = False
+    srpo_euphonium_process_reward_apply_in_recovery: bool = False
+    srpo_euphonium_process_reward_detach_target: bool = True
+    srpo_euphonium_dual_reward_advantage_mode: str = "none"
+    srpo_euphonium_process_reward_advantage_coef: float = 1.0
+    srpo_euphonium_outcome_reward_advantage_coef: float = 1.0
+    srpo_euphonium_log_interval: int = 50
+
     def __post_init__(self):
         """Validate configuration after initialization."""
         # Validate reward model
@@ -231,6 +257,148 @@ class SRPOConfig:
                 f"srpo_reward_num_frames must be >= 1, got {self.srpo_reward_num_frames}"
             )
 
+        # Validate Euphonium integration settings
+        valid_dual_reward_modes = ["none", "only", "both"]
+        valid_process_model_types = ["none", "torchscript", "python_callable"]
+        valid_process_model_dtypes = ["float32", "bfloat16", "float16"]
+        valid_process_gradient_modes = ["autograd", "spsa"]
+        if self.srpo_euphonium_dual_reward_advantage_mode not in valid_dual_reward_modes:
+            raise ValueError(
+                "Invalid srpo_euphonium_dual_reward_advantage_mode="
+                f"{self.srpo_euphonium_dual_reward_advantage_mode!r}. Must be one of "
+                f"{valid_dual_reward_modes}"
+            )
+        if (
+            self.srpo_euphonium_process_reward_model_type
+            not in valid_process_model_types
+        ):
+            raise ValueError(
+                "Invalid srpo_euphonium_process_reward_model_type="
+                f"{self.srpo_euphonium_process_reward_model_type!r}. Must be one of "
+                f"{valid_process_model_types}"
+            )
+        if (
+            self.srpo_euphonium_process_reward_model_dtype
+            not in valid_process_model_dtypes
+        ):
+            raise ValueError(
+                "Invalid srpo_euphonium_process_reward_model_dtype="
+                f"{self.srpo_euphonium_process_reward_model_dtype!r}. Must be one of "
+                f"{valid_process_model_dtypes}"
+            )
+        if (
+            self.srpo_euphonium_process_reward_gradient_mode
+            not in valid_process_gradient_modes
+        ):
+            raise ValueError(
+                "Invalid srpo_euphonium_process_reward_gradient_mode="
+                f"{self.srpo_euphonium_process_reward_gradient_mode!r}. Must be one of "
+                f"{valid_process_gradient_modes}"
+            )
+        if self.srpo_euphonium_process_reward_spsa_sigma <= 0.0:
+            raise ValueError(
+                "srpo_euphonium_process_reward_spsa_sigma must be > 0, got "
+                f"{self.srpo_euphonium_process_reward_spsa_sigma}"
+            )
+        if self.srpo_euphonium_process_reward_spsa_num_samples <= 0:
+            raise ValueError(
+                "srpo_euphonium_process_reward_spsa_num_samples must be > 0, got "
+                f"{self.srpo_euphonium_process_reward_spsa_num_samples}"
+            )
+        if (
+            self.srpo_euphonium_process_reward_model_type == "torchscript"
+            and self.srpo_euphonium_process_reward_model_path.strip() == ""
+        ):
+            raise ValueError(
+                "srpo_euphonium_process_reward_model_path must be set when "
+                "srpo_euphonium_process_reward_model_type='torchscript'."
+            )
+        if (
+            self.srpo_euphonium_process_reward_model_type == "python_callable"
+            and self.srpo_euphonium_process_reward_model_entry.strip() == ""
+        ):
+            raise ValueError(
+                "srpo_euphonium_process_reward_model_entry must be set when "
+                "srpo_euphonium_process_reward_model_type='python_callable'."
+            )
+        if self.srpo_euphonium_process_reward_guidance_kl_beta <= 0.0:
+            raise ValueError(
+                "srpo_euphonium_process_reward_guidance_kl_beta must be > 0, got "
+                f"{self.srpo_euphonium_process_reward_guidance_kl_beta}"
+            )
+        if self.srpo_euphonium_process_reward_guidance_eta < 0.0:
+            raise ValueError(
+                "srpo_euphonium_process_reward_guidance_eta must be >= 0, got "
+                f"{self.srpo_euphonium_process_reward_guidance_eta}"
+            )
+        if self.srpo_euphonium_process_reward_start_step < 0:
+            raise ValueError(
+                "srpo_euphonium_process_reward_start_step must be >= 0, got "
+                f"{self.srpo_euphonium_process_reward_start_step}"
+            )
+        if (
+            self.srpo_euphonium_process_reward_end_step != -1
+            and self.srpo_euphonium_process_reward_end_step
+            < self.srpo_euphonium_process_reward_start_step
+        ):
+            raise ValueError(
+                "srpo_euphonium_process_reward_end_step must be -1 or >= "
+                f"srpo_euphonium_process_reward_start_step ({self.srpo_euphonium_process_reward_start_step})"
+            )
+        if self.srpo_euphonium_process_reward_interval <= 0:
+            raise ValueError(
+                "srpo_euphonium_process_reward_interval must be > 0, got "
+                f"{self.srpo_euphonium_process_reward_interval}"
+            )
+        if self.srpo_euphonium_process_reward_advantage_coef < 0.0:
+            raise ValueError(
+                "srpo_euphonium_process_reward_advantage_coef must be >= 0, got "
+                f"{self.srpo_euphonium_process_reward_advantage_coef}"
+            )
+        if self.srpo_euphonium_outcome_reward_advantage_coef < 0.0:
+            raise ValueError(
+                "srpo_euphonium_outcome_reward_advantage_coef must be >= 0, got "
+                f"{self.srpo_euphonium_outcome_reward_advantage_coef}"
+            )
+        if self.srpo_euphonium_log_interval <= 0:
+            raise ValueError(
+                f"srpo_euphonium_log_interval must be > 0, got {self.srpo_euphonium_log_interval}"
+            )
+        needs_process_signal = (
+            self.srpo_euphonium_process_reward_guidance_enabled
+            or self.srpo_euphonium_dual_reward_advantage_mode in {"only", "both"}
+        )
+        if (
+            needs_process_signal
+            and self.srpo_euphonium_process_reward_model_type == "none"
+            and not self.srpo_euphonium_process_reward_allow_proxy_fallback
+        ):
+            raise ValueError(
+                "Euphonium process reward guidance/dual mode requires either "
+                "a process reward model backend or "
+                "srpo_euphonium_process_reward_allow_proxy_fallback=true."
+            )
+        if (
+            needs_process_signal
+            and self.srpo_euphonium_process_reward_gradient_mode == "spsa"
+            and self.srpo_euphonium_process_reward_model_type == "none"
+            and self.srpo_euphonium_process_reward_allow_proxy_fallback
+        ):
+            logger.warning(
+                "srpo_euphonium_process_reward_gradient_mode='spsa' is enabled without "
+                "an external process reward model; proxy guidance path will ignore SPSA and use legacy proxy gradient."
+            )
+        if self.srpo_enable_euphonium and (
+            self.srpo_euphonium_dual_reward_advantage_mode in {"only", "both"}
+            and self.srpo_batch_size < 2
+        ):
+            logger.warning(
+                "SRPO Euphonium dual reward mode '%s' works best with srpo_batch_size >= 2 "
+                "(current: %d).",
+                self.srpo_euphonium_dual_reward_advantage_mode,
+                self.srpo_batch_size,
+            )
+
         # Log warning if incompatible settings are detected
         incompatible_flags = []
         if self.srpo_guidance_scale != 1.0:
@@ -283,3 +451,20 @@ def validate_srpo_config(config: SRPOConfig) -> None:
         f"SRPO config summary: {config.srpo_reward_model_name} reward model, "
         f"{config.srpo_num_training_steps} steps, batch_size={config.srpo_batch_size}"
     )
+    if config.srpo_enable_euphonium:
+        logger.info(
+            "SRPO Euphonium enabled: guidance=%s process_model=%s dtype=%s grad_mode=%s spsa_sigma=%.6f spsa_samples=%d scale=%.4f kl_beta=%.4f eta=%.4f recovery_guidance=%s mode=%s process_coef=%.3f outcome_coef=%.3f",
+            config.srpo_euphonium_process_reward_guidance_enabled,
+            config.srpo_euphonium_process_reward_model_type,
+            config.srpo_euphonium_process_reward_model_dtype,
+            config.srpo_euphonium_process_reward_gradient_mode,
+            config.srpo_euphonium_process_reward_spsa_sigma,
+            config.srpo_euphonium_process_reward_spsa_num_samples,
+            config.srpo_euphonium_process_reward_guidance_scale,
+            config.srpo_euphonium_process_reward_guidance_kl_beta,
+            config.srpo_euphonium_process_reward_guidance_eta,
+            config.srpo_euphonium_process_reward_apply_in_recovery,
+            config.srpo_euphonium_dual_reward_advantage_mode,
+            config.srpo_euphonium_process_reward_advantage_coef,
+            config.srpo_euphonium_outcome_reward_advantage_coef,
+        )

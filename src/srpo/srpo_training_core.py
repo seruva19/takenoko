@@ -23,6 +23,15 @@ from srpo.srpo_config_schema import SRPOConfig
 from srpo.srpo_reward_models import create_reward_model
 from srpo.srpo_direct_align import DirectAlignEngine
 from srpo.srpo_video_rewards import VideoRewardAggregator
+from srpo.euphonium_integration import (
+    apply_process_reward_guidance,
+    combine_dual_reward_signal,
+    compute_process_rewards,
+    estimate_spsa_reward_gradient,
+    resolve_guidance_scale,
+    should_apply_process_reward_step,
+)
+from srpo.srpo_process_reward import create_process_reward_model
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +65,8 @@ class SRPOTrainingCore:
         self.vae = vae
         self.text_encoder = text_encoder
         self.args = args
+        self._last_euphonium_metrics: Dict[str, float] = {}
+        self.process_reward_model = None
 
         # Initialize reward model
         reward_dtype = {
@@ -149,6 +160,49 @@ class SRPOTrainingCore:
         logger.info(
             f"Initialized SRPO training with reward model: {srpo_config.srpo_reward_model_name}"
         )
+        if self.srpo_config.srpo_enable_euphonium:
+            needs_process_signal = (
+                self.srpo_config.srpo_euphonium_process_reward_guidance_enabled
+                or self.srpo_config.srpo_euphonium_dual_reward_advantage_mode
+                in {"only", "both"}
+            )
+            if (
+                needs_process_signal
+                and self.srpo_config.srpo_euphonium_process_reward_model_type != "none"
+            ):
+                try:
+                    self.process_reward_model = create_process_reward_model(
+                        model_type=self.srpo_config.srpo_euphonium_process_reward_model_type,
+                        model_path=self.srpo_config.srpo_euphonium_process_reward_model_path,
+                        model_entry=self.srpo_config.srpo_euphonium_process_reward_model_entry,
+                        model_dtype=self.srpo_config.srpo_euphonium_process_reward_model_dtype,
+                        device=accelerator.device,
+                        logger=logger,
+                    )
+                except Exception as exc:
+                    if self.srpo_config.srpo_euphonium_process_reward_allow_proxy_fallback:
+                        logger.warning(
+                            "Failed to initialize SRPO process reward model (%s). "
+                            "Falling back to proxy process reward path.",
+                            exc,
+                        )
+                        self.process_reward_model = None
+                    else:
+                        raise
+            logger.info(
+                "✓ Euphonium SRPO extension active (guidance=%s, mode=%s, process_model=%s, proxy_fallback=%s, grad_mode=%s, spsa_sigma=%.6f, spsa_samples=%d, scale=%.4f, kl_beta=%.4f, eta=%.4f, recovery_guidance=%s)",
+                self.srpo_config.srpo_euphonium_process_reward_guidance_enabled,
+                self.srpo_config.srpo_euphonium_dual_reward_advantage_mode,
+                self.srpo_config.srpo_euphonium_process_reward_model_type,
+                self.srpo_config.srpo_euphonium_process_reward_allow_proxy_fallback,
+                self.srpo_config.srpo_euphonium_process_reward_gradient_mode,
+                self.srpo_config.srpo_euphonium_process_reward_spsa_sigma,
+                self.srpo_config.srpo_euphonium_process_reward_spsa_num_samples,
+                self.srpo_config.srpo_euphonium_process_reward_guidance_scale,
+                self.srpo_config.srpo_euphonium_process_reward_guidance_kl_beta,
+                self.srpo_config.srpo_euphonium_process_reward_guidance_eta,
+                self.srpo_config.srpo_euphonium_process_reward_apply_in_recovery,
+            )
 
     def _encode_prompts(self, prompts: List[str]) -> torch.Tensor:
         """
@@ -468,6 +522,222 @@ class SRPOTrainingCore:
             noisy_latents, model_pred, sigma, sigma_next_expanded, branch=branch
         )
 
+        need_process_reward_signal = (
+            self.srpo_config.srpo_enable_euphonium
+            and self.srpo_config.srpo_euphonium_dual_reward_advantage_mode
+            in {"only", "both"}
+        )
+        euphonium_guidance_applied = False
+        recovery_guidance_steps_applied = 0
+        recovery_process_scores: List[torch.Tensor] = []
+        process_rewards = None
+        process_reward_gradient = None
+        process_reward_source = "none"
+        total_schedule_steps = max(len(self.direct_align_engine.sigma_schedule) - 1, 1)
+        prompt_attention_mask = torch.ones(
+            B,
+            context_tensor.shape[1],
+            device=context_tensor.device,
+            dtype=torch.long,
+        )
+        pooled_prompt_embeds = (
+            context_tensor[:, 0, :]
+            if context_tensor.shape[1] > 0
+            else None
+        )
+
+        def _upgrade_process_source(new_source: str) -> None:
+            nonlocal process_reward_source
+            if new_source == "model":
+                process_reward_source = "model"
+            elif new_source == "proxy" and process_reward_source == "none":
+                process_reward_source = "proxy"
+
+        def _compute_process_model_signal(
+            noisy_latents_for_reward: torch.Tensor,
+            step_timesteps: torch.Tensor,
+            step_idx_for_log: int,
+            stage_name: str,
+        ):
+            if self.process_reward_model is None:
+                return None, None
+            try:
+                gradient_mode = (
+                    self.srpo_config.srpo_euphonium_process_reward_gradient_mode
+                )
+                if gradient_mode == "autograd":
+                    process_scores_local, process_gradient_local = (
+                        self.process_reward_model.compute_reward_and_gradient(
+                            noisy_latents=noisy_latents_for_reward,
+                            timesteps=step_timesteps,
+                            prompt_embeds=context_tensor,
+                            prompt_attention_mask=prompt_attention_mask,
+                            pooled_prompt_embeds=pooled_prompt_embeds,
+                        )
+                    )
+                else:
+                    process_scores_local = self.process_reward_model.compute_reward(
+                        noisy_latents=noisy_latents_for_reward,
+                        timesteps=step_timesteps,
+                        prompt_embeds=context_tensor,
+                        prompt_attention_mask=prompt_attention_mask,
+                        pooled_prompt_embeds=pooled_prompt_embeds,
+                    )
+                    process_gradient_local = estimate_spsa_reward_gradient(
+                        noisy_latents=noisy_latents_for_reward,
+                        sigma=self.srpo_config.srpo_euphonium_process_reward_spsa_sigma,
+                        num_samples=self.srpo_config.srpo_euphonium_process_reward_spsa_num_samples,
+                        reward_score_fn=lambda perturbed_latents: self.process_reward_model.compute_reward(
+                            noisy_latents=perturbed_latents,
+                            timesteps=step_timesteps,
+                            prompt_embeds=context_tensor,
+                            prompt_attention_mask=prompt_attention_mask,
+                            pooled_prompt_embeds=pooled_prompt_embeds,
+                        ),
+                    )
+                _upgrade_process_source("model")
+                return process_scores_local, process_gradient_local
+            except Exception as exc:
+                if not self.srpo_config.srpo_euphonium_process_reward_allow_proxy_fallback:
+                    raise
+                logger.warning(
+                    "Euphonium process reward model computation failed during %s at step_idx=%d: %s. "
+                    "Falling back to proxy path.",
+                    stage_name,
+                    step_idx_for_log,
+                    exc,
+                )
+                return None, None
+
+        if (
+            self.srpo_config.srpo_enable_euphonium
+            and self.srpo_config.srpo_euphonium_process_reward_guidance_enabled
+        ):
+            euphonium_guidance_applied = should_apply_process_reward_step(
+                step_idx=step_idx,
+                total_steps=total_schedule_steps,
+                start_step=self.srpo_config.srpo_euphonium_process_reward_start_step,
+                end_step=self.srpo_config.srpo_euphonium_process_reward_end_step,
+                interval=self.srpo_config.srpo_euphonium_process_reward_interval,
+            )
+
+        if (
+            self.srpo_config.srpo_enable_euphonium
+            and (euphonium_guidance_applied or need_process_reward_signal)
+        ):
+            process_scores, process_reward_gradient = _compute_process_model_signal(
+                noisy_latents_for_reward=noisy_latents,
+                step_timesteps=timesteps,
+                step_idx_for_log=step_idx,
+                stage_name="single_step",
+            )
+            if need_process_reward_signal and process_scores is not None:
+                process_rewards = process_scores.to(
+                    device=noisy_latents.device,
+                    dtype=torch.float32,
+                )
+
+        if euphonium_guidance_applied:
+            reward_gradient = process_reward_gradient
+            if (
+                reward_gradient is None
+                and self.srpo_config.srpo_euphonium_process_reward_allow_proxy_fallback
+            ):
+                # Proxy fallback: steer by negative velocity (legacy local behavior).
+                reward_gradient = -model_pred
+                _upgrade_process_source("proxy")
+            if reward_gradient is not None:
+                delta_t = sigma - sigma_next_expanded
+                latents_after_step = apply_process_reward_guidance(
+                    latents=latents_after_step,
+                    reward_gradient=reward_gradient,
+                    guidance_scale=self.srpo_config.srpo_euphonium_process_reward_guidance_scale,
+                    guidance_kl_beta=self.srpo_config.srpo_euphonium_process_reward_guidance_kl_beta,
+                    guidance_eta=self.srpo_config.srpo_euphonium_process_reward_guidance_eta,
+                    normalize_gradient=self.srpo_config.srpo_euphonium_process_reward_normalize_gradient,
+                    use_delta_t_for_guidance=self.srpo_config.srpo_euphonium_use_delta_t_for_guidance,
+                    delta_t=delta_t,
+                )
+
+        predicted_clean_latents = noisy_latents - sigma * model_pred
+        if (
+            self.srpo_config.srpo_enable_euphonium
+            and need_process_reward_signal
+            and process_rewards is None
+            and self.srpo_config.srpo_euphonium_process_reward_allow_proxy_fallback
+        ):
+            process_rewards = compute_process_rewards(
+                predicted_clean_latents=predicted_clean_latents,
+                clean_latent_target=clean_latents,
+                detach_target=self.srpo_config.srpo_euphonium_process_reward_detach_target,
+            )
+            _upgrade_process_source("proxy")
+
+        recovery_guidance_enabled = (
+            self.srpo_config.srpo_enable_euphonium
+            and self.srpo_config.srpo_euphonium_process_reward_guidance_enabled
+            and self.srpo_config.srpo_euphonium_process_reward_apply_in_recovery
+        )
+
+        def _apply_recovery_guidance(
+            *,
+            latents_before_step: torch.Tensor,
+            latents_after_step: torch.Tensor,
+            model_pred: torch.Tensor,
+            step_idx: int,
+            sigma_current: torch.Tensor,
+            sigma_next: torch.Tensor,
+        ) -> torch.Tensor:
+            nonlocal recovery_guidance_steps_applied
+            if not should_apply_process_reward_step(
+                step_idx=step_idx,
+                total_steps=total_schedule_steps,
+                start_step=self.srpo_config.srpo_euphonium_process_reward_start_step,
+                end_step=self.srpo_config.srpo_euphonium_process_reward_end_step,
+                interval=self.srpo_config.srpo_euphonium_process_reward_interval,
+            ):
+                return latents_after_step
+
+            reward_gradient_local = None
+            process_scores_local = None
+            if self.process_reward_model is not None:
+                step_timesteps = sigma_current.view(B)
+                process_scores_local, reward_gradient_local = _compute_process_model_signal(
+                    noisy_latents_for_reward=latents_before_step,
+                    step_timesteps=step_timesteps,
+                    step_idx_for_log=step_idx,
+                    stage_name="recovery",
+                )
+            if need_process_reward_signal and process_scores_local is not None:
+                recovery_process_scores.append(
+                    process_scores_local.to(
+                        device=noisy_latents.device,
+                        dtype=torch.float32,
+                    )
+                )
+
+            if (
+                reward_gradient_local is None
+                and self.srpo_config.srpo_euphonium_process_reward_allow_proxy_fallback
+            ):
+                reward_gradient_local = -model_pred
+                _upgrade_process_source("proxy")
+            if reward_gradient_local is None:
+                return latents_after_step
+
+            recovery_guidance_steps_applied += 1
+            delta_t_local = sigma_current - sigma_next
+            return apply_process_reward_guidance(
+                latents=latents_after_step,
+                reward_gradient=reward_gradient_local,
+                guidance_scale=self.srpo_config.srpo_euphonium_process_reward_guidance_scale,
+                guidance_kl_beta=self.srpo_config.srpo_euphonium_process_reward_guidance_kl_beta,
+                guidance_eta=self.srpo_config.srpo_euphonium_process_reward_guidance_eta,
+                normalize_gradient=self.srpo_config.srpo_euphonium_process_reward_normalize_gradient,
+                use_delta_t_for_guidance=self.srpo_config.srpo_euphonium_use_delta_t_for_guidance,
+                delta_t=delta_t_local,
+            )
+
         # Step 5: Recover clean image
         # Recovered clean latents of shape [B, C, F, H, W]
         # Note: lambda converts batched tensor to WAN's expected list format
@@ -486,7 +756,20 @@ class SRPOTrainingCore:
             context_list,
             seq_len,
             branch=branch,
+            post_step_callback=(
+                _apply_recovery_guidance if recovery_guidance_enabled else None
+            ),
         )
+        if need_process_reward_signal and recovery_process_scores:
+            recovery_process_rewards = torch.stack(recovery_process_scores, dim=0).mean(
+                dim=0
+            )
+            if process_rewards is None:
+                process_rewards = recovery_process_rewards
+            else:
+                process_rewards = torch.stack(
+                    [process_rewards, recovery_process_rewards], dim=0
+                ).mean(dim=0)
 
         # Step 6: Compute rewards
         # Decode frames for reward computation
@@ -559,13 +842,58 @@ class SRPOTrainingCore:
         else:
             rewards = image_rewards
 
+        reward_signal = rewards
+        if self.srpo_config.srpo_enable_euphonium:
+            reward_signal, euphonium_metrics = combine_dual_reward_signal(
+                outcome_rewards=rewards,
+                process_rewards=process_rewards,
+                mode=self.srpo_config.srpo_euphonium_dual_reward_advantage_mode,
+                process_coef=self.srpo_config.srpo_euphonium_process_reward_advantage_coef,
+                outcome_coef=self.srpo_config.srpo_euphonium_outcome_reward_advantage_coef,
+            )
+            euphonium_metrics["euphonium_guidance_applied"] = float(
+                euphonium_guidance_applied
+            )
+            euphonium_metrics["euphonium_step_index"] = float(step_idx)
+            source_map = {"none": 0.0, "model": 1.0, "proxy": 2.0}
+            euphonium_metrics["euphonium_process_reward_source"] = source_map.get(
+                process_reward_source, 0.0
+            )
+            euphonium_metrics["euphonium_process_model_active"] = float(
+                self.process_reward_model is not None
+            )
+            gradient_mode_map = {"autograd": 1.0, "spsa": 2.0}
+            euphonium_metrics["euphonium_process_gradient_mode"] = gradient_mode_map.get(
+                self.srpo_config.srpo_euphonium_process_reward_gradient_mode,
+                0.0,
+            )
+            euphonium_metrics["euphonium_spsa_num_samples"] = float(
+                self.srpo_config.srpo_euphonium_process_reward_spsa_num_samples
+            )
+            euphonium_metrics["euphonium_recovery_guidance_steps"] = float(
+                recovery_guidance_steps_applied
+            )
+            euphonium_metrics["euphonium_recovery_process_score_steps"] = float(
+                len(recovery_process_scores)
+            )
+            euphonium_metrics["euphonium_guidance_scale_effective"] = float(
+                resolve_guidance_scale(
+                    guidance_scale=self.srpo_config.srpo_euphonium_process_reward_guidance_scale,
+                    guidance_kl_beta=self.srpo_config.srpo_euphonium_process_reward_guidance_kl_beta,
+                    guidance_eta=self.srpo_config.srpo_euphonium_process_reward_guidance_eta,
+                )
+            )
+            self._last_euphonium_metrics = euphonium_metrics
+        else:
+            self._last_euphonium_metrics = {}
+
         # Step 7: Apply discount
         if branch == "denoise":
             discount = self.direct_align_engine.discount_denoise[step_idx]
         else:
             discount = self.direct_align_engine.discount_inversion[step_idx]
 
-        discounted_rewards = discount * rewards
+        discounted_rewards = discount * reward_signal
 
         # Loss is negative reward (we want to maximize reward)
         loss = -discounted_rewards.mean()
@@ -692,9 +1020,45 @@ class SRPOTrainingCore:
 
             # Logging
             if global_step % 10 == 0:
-                logger.info(
-                    f"Step {global_step}/{num_training_steps} | Loss: {loss.item():.4f}"
-                )
+                log_line = f"Step {global_step}/{num_training_steps} | Loss: {loss.item():.4f}"
+                if (
+                    self.srpo_config.srpo_enable_euphonium
+                    and self._last_euphonium_metrics
+                    and global_step % self.srpo_config.srpo_euphonium_log_interval == 0
+                ):
+                    log_line += (
+                        " | Euphonium(mode={mode}, gmode={gmode}, guide={guide:.0f}, rsteps={rsteps:.0f}, "
+                        "src={src:.0f}, model={model:.0f}, gscale={gscale:.4f}, "
+                        "out={out:.4f}, proc={proc:.4f}, signal={signal:.4f})"
+                    ).format(
+                        mode=self.srpo_config.srpo_euphonium_dual_reward_advantage_mode,
+                        gmode=self.srpo_config.srpo_euphonium_process_reward_gradient_mode,
+                        guide=self._last_euphonium_metrics.get(
+                            "euphonium_guidance_applied", 0.0
+                        ),
+                        rsteps=self._last_euphonium_metrics.get(
+                            "euphonium_recovery_guidance_steps", 0.0
+                        ),
+                        src=self._last_euphonium_metrics.get(
+                            "euphonium_process_reward_source", 0.0
+                        ),
+                        model=self._last_euphonium_metrics.get(
+                            "euphonium_process_model_active", 0.0
+                        ),
+                        gscale=self._last_euphonium_metrics.get(
+                            "euphonium_guidance_scale_effective", 0.0
+                        ),
+                        out=self._last_euphonium_metrics.get(
+                            "euphonium_outcome_reward_mean", 0.0
+                        ),
+                        proc=self._last_euphonium_metrics.get(
+                            "euphonium_process_reward_mean", 0.0
+                        ),
+                        signal=self._last_euphonium_metrics.get(
+                            "euphonium_reward_signal_mean", 0.0
+                        ),
+                    )
+                logger.info(log_line)
 
             # Validation
             if global_step % self.srpo_config.srpo_validation_frequency == 0:

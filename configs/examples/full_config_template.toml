@@ -4725,6 +4725,121 @@ srpo_vae_scale_factor = 8
 # Number of channels in WAN latent space
 srpo_latent_channels = 16
 
+# Euphonium extension for SRPO
+# Adds two optional mechanisms:
+# - process reward guided latent update (RGG-style drift steering at selected denoising steps)
+# - dual reward signal mixing (outcome reward + process reward advantages)
+# Dependency: requires enable_srpo_training = true.
+srpo_enable_euphonium = false
+
+# Enable process-reward guidance in the one-step Direct-Align update.
+# When true, applies an extra latent drift term using a process-reward gradient.
+# Dependency: only active when srpo_enable_euphonium = true.
+srpo_euphonium_process_reward_guidance_enabled = false
+
+# Process reward model backend.
+# Options:
+# - "none": no external process model; uses proxy if fallback is enabled.
+# - "torchscript": load a TorchScript checkpoint from srpo_euphonium_process_reward_model_path.
+# - "python_callable": import callable/class from srpo_euphonium_process_reward_model_entry.
+srpo_euphonium_process_reward_model_type = "none"
+
+# Process reward model checkpoint path.
+# Required when srpo_euphonium_process_reward_model_type = "torchscript".
+# Optional for "python_callable" backends that accept checkpoint_path.
+srpo_euphonium_process_reward_model_path = ""
+
+# Python import path for callable backend.
+# Format: "module.submodule:callable_or_class" or "module.submodule.callable_or_class".
+# Required when srpo_euphonium_process_reward_model_type = "python_callable".
+srpo_euphonium_process_reward_model_entry = ""
+
+# Compute dtype used by external process reward model.
+# Options: "float32", "bfloat16", "float16".
+srpo_euphonium_process_reward_model_dtype = "float32"
+
+# If true, fallback to local proxy reward/gradient when external process model load or forward fails.
+# Set false for strict parity experiments that should fail fast without a valid process reward model.
+srpo_euphonium_process_reward_allow_proxy_fallback = true
+
+# Process reward gradient estimation mode.
+# Options:
+# - "autograd": direct backprop through process reward model output w.r.t. latents.
+# - "spsa": zero-order finite-difference estimate in latent space (higher compute cost).
+# Note: if process model backend is "none", proxy guidance path ignores SPSA and uses legacy proxy gradient.
+srpo_euphonium_process_reward_gradient_mode = "autograd"
+
+# Perturbation scale for SPSA latent-space finite differences.
+# Used only when srpo_euphonium_process_reward_gradient_mode = "spsa". Must be > 0.
+srpo_euphonium_process_reward_spsa_sigma = 0.01
+
+# Number of SPSA perturbation samples per guidance step.
+# Used only when srpo_euphonium_process_reward_gradient_mode = "spsa". Must be > 0.
+# 1 is fastest; higher values reduce estimator variance at higher cost.
+srpo_euphonium_process_reward_spsa_num_samples = 1
+
+# Guidance strength for process-reward latent steering.
+# If >= 0: fixed scale. Typical sweep: 0.01, 0.05, 0.1.
+# If < 0: auto scale mode uses eta^2 / (2 * srpo_euphonium_process_reward_guidance_kl_beta).
+# 0.0 disables guidance contribution even if guidance_enabled=true.
+srpo_euphonium_process_reward_guidance_scale = 0.1
+
+# KL beta used when srpo_euphonium_process_reward_guidance_scale < 0.
+# Must be > 0.
+srpo_euphonium_process_reward_guidance_kl_beta = 0.1
+
+# Eta used when srpo_euphonium_process_reward_guidance_scale < 0.
+# Effective auto scale = eta^2 / (2 * kl_beta). Must be >= 0.
+srpo_euphonium_process_reward_guidance_eta = 1.0
+
+# First denoising step index (0-based) where process guidance can be applied.
+# Example: with 16 steps, use 8 to guide only the latter half.
+srpo_euphonium_process_reward_start_step = 0
+
+# Last denoising step boundary (exclusive). Use -1 to allow until the end.
+# Must be -1 or >= srpo_euphonium_process_reward_start_step.
+srpo_euphonium_process_reward_end_step = -1
+
+# Apply guidance every N steps inside [start_step, end_step).
+# Must be >= 1; 1 means every eligible step.
+srpo_euphonium_process_reward_interval = 1
+
+# Normalize process guidance gradient to unit norm before scaling.
+# true: stable magnitude across prompts/batches; false: raw gradient magnitude.
+srpo_euphonium_process_reward_normalize_gradient = true
+
+# Multiply guidance strength by delta_t (sigma step size).
+# Useful when you want guidance to naturally decay with the schedule.
+srpo_euphonium_use_delta_t_for_guidance = false
+
+# Apply process-reward guidance during Direct-Align recovery trajectory steps.
+# false: guide only the sampled one-step update (default behavior-preserving).
+# true: also evaluate guidance on eligible recovery denoising steps.
+srpo_euphonium_process_reward_apply_in_recovery = false
+
+# Detach the clean latent target when computing process reward proxy.
+# true: avoids second-order coupling to rollout target; recommended default.
+srpo_euphonium_process_reward_detach_target = true
+
+# Dual reward signal mode for optimization:
+# - "none": baseline SRPO outcome reward only (default; behavior-preserving)
+# - "only": process reward advantage only
+# - "both": weighted sum of outcome/process advantages
+# Dependency: "only"/"both" are most meaningful with srpo_batch_size >= 2.
+srpo_euphonium_dual_reward_advantage_mode = "none"
+
+# Process advantage coefficient for dual reward mode.
+# Used when mode is "only" or "both". Must be >= 0.
+srpo_euphonium_process_reward_advantage_coef = 1.0
+
+# Outcome advantage coefficient for dual reward mode.
+# Used when mode is "both". Must be >= 0.
+srpo_euphonium_outcome_reward_advantage_coef = 1.0
+
+# Logging interval (steps) for Euphonium SRPO diagnostics.
+# Must be > 0.
+srpo_euphonium_log_interval = 50
+
 # =============================================================================
 # ⚠️ DENSEDPO SETTINGS
 # =============================================================================
