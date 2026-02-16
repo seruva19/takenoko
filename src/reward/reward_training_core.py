@@ -24,6 +24,10 @@ from wan.modules.model import WanModel
 from wan.modules.t5 import T5EncoderModel
 from wan.modules.vae import WanVAE
 from wan.utils.fm_solvers_unipc import FlowUniPCMultistepScheduler
+from enhancements.shortft.reward_integration import (
+    build_shortft_backprop_plan,
+    shortft_plan_to_metrics,
+)
 
 
 logger = get_logger(__name__)
@@ -275,6 +279,57 @@ class RewardTrainingCore:
             getattr(args, "reward_stop_latent_model_input_gradient", False)
         )
 
+        def _build_base_backprop_mask() -> List[bool]:
+            mask = [False] * num_inference_steps
+            if not backprop_enabled:
+                return mask
+
+            if manual_steps is not None:
+                manual = set()
+                for step_val in manual_steps:
+                    try:
+                        idx = int(step_val)
+                    except (TypeError, ValueError):
+                        continue
+                    if 0 <= idx < num_inference_steps:
+                        manual.add(idx)
+                for idx in manual:
+                    mask[idx] = True
+                return mask
+
+            if strategy == "last":
+                mask[num_inference_steps - 1] = True
+                return mask
+
+            if strategy == "tail":
+                start_idx = max(0, num_inference_steps - max(1, tail_k))
+                for idx in range(start_idx, num_inference_steps):
+                    mask[idx] = True
+                return mask
+
+            if strategy == "uniform":
+                interval = max(1, num_inference_steps // max(1, tail_k))
+                for idx in range(0, num_inference_steps, interval):
+                    mask[idx] = True
+                return mask
+
+            if strategy == "random":
+                rs, re = random_range
+                rs = max(0, min(int(rs), num_inference_steps - 1))
+                re = max(rs, min(int(re), num_inference_steps - 1))
+                population = list(range(rs, re + 1))
+                sample_count = min(max(1, tail_k), len(population))
+                selected = set(random.sample(population, k=sample_count))
+                for idx in selected:
+                    mask[idx] = True
+                return mask
+
+            # Unknown strategy fallback preserves the existing default behaviour.
+            start_idx = max(0, num_inference_steps - max(1, tail_k))
+            for idx in range(start_idx, num_inference_steps):
+                mask[idx] = True
+            return mask
+
         # Training
         transformer = accelerator.unwrap_model(transformer)
         transformer.switch_block_swap_for_training()
@@ -306,6 +361,33 @@ class RewardTrainingCore:
                 shift=int(getattr(args, "discrete_flow_shift", 1)),
             )
             timesteps = scheduler.timesteps
+
+            shortft_plan = None
+            if bool(getattr(args, "enable_shortft", False)):
+                shortft_plan = build_shortft_backprop_plan(
+                    args=args,
+                    base_backprop_mask=_build_base_backprop_mask(),
+                    num_inference_steps=num_inference_steps,
+                    global_step=global_step,
+                    max_train_steps=max_steps,
+                )
+                log_interval = int(getattr(args, "shortft_log_interval", 100))
+                if (
+                    shortft_plan is not None
+                    and accelerator.is_main_process
+                    and log_interval > 0
+                    and global_step % log_interval == 0
+                ):
+                    logger.info(
+                        "ShortFT step=%d stage=%d/%d dense_segments=%d/%d backprop_steps=%d/%d",
+                        global_step,
+                        shortft_plan.stage_index + 1,
+                        shortft_plan.stage_count,
+                        shortft_plan.dense_segments,
+                        shortft_plan.total_segments,
+                        shortft_plan.total_backprop_steps,
+                        len(shortft_plan.mask),
+                    )
 
             # Per-step denoising
             for i, t in enumerate(timesteps):
@@ -356,7 +438,9 @@ class RewardTrainingCore:
 
                 # Determine if backprop applies for this step
                 do_backprop = False
-                if backprop_enabled:
+                if shortft_plan is not None:
+                    do_backprop = bool(shortft_plan.mask[i])
+                elif backprop_enabled:
                     if manual_steps is not None:
                         do_backprop = i in manual_steps
                     elif strategy == "last":
@@ -452,10 +536,12 @@ class RewardTrainingCore:
 
             # Tracker logs
             if accelerator.is_main_process and len(accelerator.trackers) > 0:
+                shortft_metrics = shortft_plan_to_metrics(shortft_plan)
                 accelerator.log(
                     {
                         "train_loss": float(loss.detach().item()),
                         "train_reward": float(reward_val.detach().item()),
+                        **shortft_metrics,
                     },
                     step=global_step,
                 )

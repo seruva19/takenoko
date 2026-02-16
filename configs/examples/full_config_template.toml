@@ -4444,6 +4444,40 @@ reward_backprop_random_end_step = 50
 # Stop backprop at the latent model input gradient
 reward_stop_latent_model_input_gradient = false
 
+# ShortFT (Shortcut-based Fine-Tuning): applies a progressive shortcut backprop plan
+# during reward denoising and keeps the standard full denoising chain for inference.
+enable_shortft = false
+
+# Number of denoising-chain segments for progressive ShortFT stages (>= 2).
+# Typical values: 3-6.
+shortft_num_segments = 4
+
+# Steps per ShortFT stage before expanding dense backprop to the next segment.
+# 0 enables auto-scheduling across the remaining max_train_steps.
+# Valid range: >= 0
+shortft_stage_transition_steps = 0
+
+# Global training step at which ShortFT stage progression starts.
+# Before this step, stage 0 is used.
+# Valid range: >= 0
+shortft_start_step = 0
+
+# Number of anchor steps per shortcut segment that retain gradient flow.
+# 1 keeps only the final anchor step in each shortcut segment.
+# Larger values reduce shortcut aggressiveness.
+# Valid range: > 0
+shortft_shortcut_anchor_count = 1
+
+# Dense-segment backprop mode:
+# - "all": backprop every step in currently dense segments (recommended default)
+# - "base": respect reward_backprop_strategy within dense segments
+shortft_dense_backprop_mode = "all"
+
+# Logging interval for ShortFT stage stats (main process only).
+# 0 disables periodic ShortFT logs.
+# Valid range: >= 0
+shortft_log_interval = 100
+
 # =============================================================================
 # POLYLORA PIPELINE SETTINGS 
 # =============================================================================

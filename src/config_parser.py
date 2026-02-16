@@ -30,6 +30,7 @@ from configs.self_transcendence_config import apply_self_transcendence_config
 from configs.mixflow_config import apply_mixflow_config
 from configs.drifting_config import apply_drifting_config
 from configs.reward_vcd_config import apply_reward_vcd_config
+from configs.shortft_config import apply_shortft_config
 from configs.video_consistency_distance import (
     apply_video_consistency_distance_config,
 )
@@ -579,6 +580,7 @@ def create_args_from_config(
     args.reward_stop_latent_model_input_gradient = config.get(
         "reward_stop_latent_model_input_gradient", False
     )
+    apply_shortft_config(args, config, logger)
     args = apply_reward_vcd_config(args, config, logger)
 
     from polylora.config import apply_polylora_to_args
