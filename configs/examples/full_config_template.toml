@@ -4318,6 +4318,93 @@ save_control_videos = true
 control_video_save_dir = "tmp/control_videos"
 
 # =============================================================================
+# ⚠️ FLEXAM TRAINING CONDITIONING
+# =============================================================================
+#
+# Composes a control latent (tracking/mask/reference/extra control) and concatenates it to noisy model input channels during training.
+# Reuses the same control-concat model patch as Control LoRA. Uncompatible with control LoRA and IC-LoRA.
+
+# Master switch for FlexAM-style train-time conditioning.
+enable_flexam_training = false
+
+# Weight applied to control_signal-derived control latents.
+# - 0.0 disables direct control_signal contribution.
+# - 1.0 keeps original magnitude.
+flexam_control_weight = 1.0
+
+# Weight for mask-guided inpaint-style conditioning derived from mask_signal.
+# Requires dataset-provided mask_signal (or this term is skipped).
+flexam_mask_weight = 0.0
+
+# Weight for reference-frame conditioning expanded across all frames.
+flexam_reference_weight = 0.0
+
+# Source used for reference-frame conditioning:
+# - "latents_first_frame": first frame from clean latents
+# - "noisy_first_frame": first frame from current noisy model input
+# - "control_first_frame": first frame from control latents (if available)
+flexam_reference_source = "latents_first_frame"
+
+# Dropout probability for reference conditioning in [0,1].
+# 0.0 always uses reference, 1.0 always drops reference.
+flexam_reference_dropout_p = 0.0
+
+# Optional extra control tensor contribution from an arbitrary batch key.
+# Set weight > 0 and provide a valid key to enable.
+flexam_additional_control_weight = 0.0
+
+# Key for additional control tensor contribution.
+flexam_additional_control_key = ""
+
+# Optional multi-key extra controls for pure LoRA training.
+# Can be set as an array, e.g. ["depth_signal", "camera_signal"].
+# The legacy single key above is still honored; both are merged.
+flexam_additional_control_keys = []
+
+# How to merge multiple additional controls:
+# - "sum": preserves aggregate magnitude (can get stronger with more keys)
+# - "mean": normalizes magnitude by key count
+flexam_additional_control_reduce = "sum"
+
+# Optional timestep-density scaling for model-side timesteps.
+# This scales timesteps per sample before model forward only.
+flexam_use_density_timestep_scaling = false
+
+# Batch key used to read per-sample density when scaling is enabled.
+# If missing, flexam_density_default is used.
+flexam_density_batch_key = "density"
+
+# Default density value used when the batch key is absent.
+flexam_density_default = 1.0
+
+# Minimum density value (must be > 0).
+flexam_density_min = 0.25
+
+# Maximum density value (must be >= min).
+flexam_density_max = 4.0
+
+# Optional global schedule applied to all FlexAM control term weights.
+# - "constant": no scaling (effective scale = 1.0 always)
+# - "linear_ramp": linearly ramps from min_scale to max_scale
+# - "cosine_ramp": cosine-smoothed ramp from min_scale to max_scale
+flexam_weight_schedule = "constant"
+
+# Ramp window (inclusive behavior):
+# - step <= start_step: min_scale
+# - step >= end_step: max_scale
+# If end_step <= start_step, max_scale is used.
+flexam_schedule_start_step = 0
+
+# End step for ramp (inclusive behavior).
+flexam_schedule_end_step = 0
+
+# Minimum scale for ramp (inclusive behavior).
+flexam_schedule_min_scale = 0.0
+
+# Maximum scale for ramp (inclusive behavior).
+flexam_schedule_max_scale = 1.0
+
+# =============================================================================
 # ⚠️ REWARD LORA TRAINING SETTINGS
 # =============================================================================
 

@@ -31,6 +31,7 @@ from configs.mixflow_config import apply_mixflow_config
 from configs.drifting_config import apply_drifting_config
 from configs.reward_vcd_config import apply_reward_vcd_config
 from configs.shortft_config import apply_shortft_config
+from configs.flexam_config import apply_flexam_config
 from configs.video_consistency_distance import (
     apply_video_consistency_distance_config,
 )
@@ -760,6 +761,9 @@ def create_args_from_config(
     args.save_control_videos = config.get("save_control_videos", False)
     args.control_video_save_all = config.get("control_video_save_all", False)
     args.control_video_save_dir = config.get("control_video_save_dir", "control_videos")
+
+    # FlexAM-style train-time conditioning (inference-neutral, default off)
+    apply_flexam_config(args, config, logger)
 
     # IC-LoRA settings (separate network module, train-only path)
     parse_ic_lora_config(config, args, logger)

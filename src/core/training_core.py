@@ -73,6 +73,10 @@ from enhancements.ic_lora.training_integration import (
     prepare_ic_lora_model_input,
     should_skip_ic_lora_batch,
 )
+from enhancements.flexam_training.training_integration import (
+    is_flexam_training_enabled,
+    prepare_flexam_conditioning,
+)
 
 from enhancements.slider.slider_integration import compute_slider_loss_if_enabled
 import utils.fluxflow_augmentation as fluxflow_augmentation
@@ -330,6 +334,7 @@ class TrainingCore:
         self._last_mixflow_stats: Optional[Dict[str, float]] = None
         self.stablevm_target_helper: Optional[StableVMTargetHelper] = None
         self._last_stablevm_target_metrics: Dict[str, torch.Tensor] = {}
+        self._last_flexam_metrics: Dict[str, float] = {}
 
         # Weight EMA tracking (initialized when enabled)
         self.weight_ema: Optional[ExponentialMovingAverage] = None
@@ -555,6 +560,16 @@ class TrainingCore:
             except Exception:
                 setattr(loss_components, key, value)
 
+    def _attach_flexam_metrics(self, loss_components: Any) -> None:
+        metrics = self._last_flexam_metrics
+        if not metrics:
+            return
+        try:
+            setattr(loss_components, "flexam_metrics", dict(metrics))
+        except Exception:
+            if isinstance(loss_components, dict):
+                loss_components["flexam_metrics"] = dict(metrics)
+
     def initialize_stable_velocity_target(self, args: argparse.Namespace) -> None:
         """Initialize StableVM train-time target helper from parsed args."""
         self._last_stablevm_target_metrics = {}
@@ -618,6 +633,7 @@ class TrainingCore:
         _ = return_intermediate, override_target
         if apply_stable_velocity_target:
             self._last_stablevm_target_metrics = {}
+        self._last_flexam_metrics = {}
 
         current_logging_level = getattr(args, "logging_level", "INFO").upper()
         perturbed_latents_for_target = latents.clone()  # Start with a clone
@@ -720,13 +736,19 @@ class TrainingCore:
             for t in context:
                 t.requires_grad_(True)
 
-        # Control LoRA processing (aligned with reference implementation)
+        flexam_enabled = is_flexam_training_enabled(args)
+
+        # Control preprocessing (aligned with reference implementation)
         control_latents = None
-        if hasattr(args, "enable_control_lora") and args.enable_control_lora:
+        use_control_preprocessing = bool(
+            getattr(args, "enable_control_lora", False) or flexam_enabled
+        )
+        if use_control_preprocessing:
             # Log that control LoRA is engaged
-            logger.info(
-                "Р РѓР Р‡Р С›Р С— Control LoRA processing engaged in training loop"
-            )
+            if getattr(args, "enable_control_lora", False):
+                logger.info("Control LoRA processing engaged in training loop")
+            elif flexam_enabled:
+                logger.info("FlexAM training conditioning engaged in training loop")
 
             # Pass VAE to control signal processing (must be provided by training loop)
             vae = (
@@ -734,10 +756,15 @@ class TrainingCore:
                 if control_signal_processor
                 else None
             )
-            if vae is None:
-                logger.error(
-                    "VAE not available for control LoRA training - this will cause training to fail"
-                )
+            if vae is None and "control_signal" not in batch:
+                if getattr(args, "enable_control_lora", False):
+                    logger.error(
+                        "VAE not available for control preprocessing and batch has no latent control_signal."
+                    )
+                elif flexam_enabled:
+                    logger.debug(
+                        "FlexAM conditioning: no VAE and no latent control_signal; proceeding with non-control terms."
+                    )
 
             control_latents = (
                 control_signal_processor.process_control_signal(
@@ -747,9 +774,10 @@ class TrainingCore:
                 else None
             )
 
-            # If control signal could not be generated, fall back to using the image
-            # latents themselves (same behaviour as V1 implementation).
-            if control_latents is None:
+            # If control signal could not be generated:
+            # - Control LoRA path keeps legacy fallback (clone latents).
+            # - FlexAM path defers to helper composition (can still use masks/references).
+            if control_latents is None and getattr(args, "enable_control_lora", False):
                 logger.warning(
                     "No control signal or pixels found; using image latents as control signal fallback"
                 )
@@ -857,7 +885,11 @@ class TrainingCore:
                 if accelerator.is_main_process:
                     logger.warning("MixFlow interpolation failed, using base input: %s", exc)
 
-        # Prepare model input with control signal if control LoRA is enabled
+        model_timesteps = timesteps
+
+        # Prepare model input with control signal if control LoRA is enabled.
+        # FlexAM mode also uses channel-concat conditioning, but with a composed
+        # control tensor that may blend tracking/mask/reference signals.
         if hasattr(args, "enable_control_lora") and args.enable_control_lora:
             if control_latents is not None:
                 control_latents = control_latents.to(
@@ -893,6 +925,36 @@ class TrainingCore:
                 model_input = torch.cat(
                     [noisy_model_input, zero_control], dim=concat_dim
                 )
+        elif flexam_enabled:
+            flexam_result = prepare_flexam_conditioning(
+                args=args,
+                batch=batch,
+                latents=latents,
+                noisy_model_input=noisy_model_input,
+                timesteps=timesteps,
+                control_latents=control_latents,
+                network_dtype=network_dtype,
+                global_step=global_step,
+            )
+            composed_control = flexam_result.control_latents.to(
+                device=noisy_model_input.device,
+                dtype=noisy_model_input.dtype,
+            )
+            concat_dim = getattr(args, "control_concatenation_dim", None)
+            if concat_dim is None:
+                concat_dim = 1 if noisy_model_input.dim() == 5 else 0
+            else:
+                if noisy_model_input.dim() == 5 and concat_dim in (0, -2):
+                    concat_dim = 1
+                else:
+                    ndim = noisy_model_input.dim()
+                    if not isinstance(concat_dim, int) or not (-ndim <= concat_dim < ndim):
+                        concat_dim = 1 if ndim == 5 else 0
+                    else:
+                        concat_dim = concat_dim % ndim
+            model_input = torch.cat([noisy_model_input, composed_control], dim=concat_dim)
+            model_timesteps = flexam_result.model_timesteps
+            self._last_flexam_metrics = dict(flexam_result.metrics)
         else:
             model_input = noisy_model_input
 
@@ -997,7 +1059,7 @@ class TrainingCore:
 
             model_pred = model(
                 model_input,
-                t=timesteps,
+                t=model_timesteps,
                 context=context,
                 clip_fea=None,
                 seq_len=seq_len,
@@ -2432,6 +2494,7 @@ class TrainingCore:
                             self._attach_stable_velocity_target_metrics(
                                 loss_components
                             )
+                            self._attach_flexam_metrics(loss_components)
 
                             if (
                                 self.error_recycling_helper is not None

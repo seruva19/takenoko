@@ -352,6 +352,20 @@ def collect_and_log_training_metrics(
         logs["reflexflow/weight_mean"] = float(
             loss_components.reflexflow_weight_mean.item()
         )
+    flexam_metrics = getattr(loss_components, "flexam_metrics", None)
+    if isinstance(flexam_metrics, dict):
+        for key, value in flexam_metrics.items():
+            if value is None:
+                continue
+            if isinstance(value, torch.Tensor):
+                if value.numel() == 0:
+                    continue
+                logs[key] = float(value.detach().float().mean().item())
+            else:
+                try:
+                    logs[key] = float(value)
+                except Exception:
+                    continue
 
     # Optionally compute extra training metrics periodically
     try:

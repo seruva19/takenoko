@@ -633,8 +633,11 @@ class ModelManager:
         # apply network to DiT
         network.apply_to(None, transformer, apply_text_encoder=False, apply_unet=True)
 
-        # Modify model for control LoRA if enabled
-        if hasattr(args, "enable_control_lora") and args.enable_control_lora:
+        # Modify model input channels for control-concat conditioning.
+        # FlexAM training reuses the same channel-concat path as Control LoRA.
+        if bool(getattr(args, "enable_control_lora", False)) or bool(
+            getattr(args, "enable_flexam_training", False)
+        ):
             self.modify_model_for_control_lora(transformer, args)
 
         # Optionally create ControlNet module (parallel network) if enabled
@@ -953,9 +956,11 @@ class ModelManager:
             logger.info(f"casting model to {dit_weight_dtype}")
             transformer.to(dit_weight_dtype)
 
-        # Apply control LoRA modifications if needed (centralized entry point)
-        if hasattr(args, "enable_control_lora") and args.enable_control_lora:
-            logger.info("Applying control LoRA model modifications...")
+        # Apply control-concat model modifications if needed.
+        if bool(getattr(args, "enable_control_lora", False)) or bool(
+            getattr(args, "enable_flexam_training", False)
+        ):
+            logger.info("Applying control-concat model modifications...")
             self.modify_model_for_control_lora(transformer, args)
 
         # Set appropriate training/eval mode
