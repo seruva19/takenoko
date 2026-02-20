@@ -401,7 +401,7 @@ lr_scheduler_args = ''
 # Network module to train: "networks.lora_wan", "networks.ic_lora_wan", "networks.riemann_lora_wan", "networks.control_lora_wan",
 # "networks.reward_lora", "networks.vae_wan", "lycoris.kohya", "networks.t_lora", "networks.tc_lora_wan", "networks.moc_lora",
 # "networks.mhc_lora", "networks.singlora_wan", "networks.wan_finetune", "networks.slider_lora_wan",
-# "networks.relora_wan", "networks.adalora_wan"
+# "networks.relora_wan", "networks.adalora_wan", "networks.mora_wan"
 # The module defines trainable adapters and is imported dynamically by the trainer.
 network_module = "networks.lora_wan"
 
@@ -466,6 +466,20 @@ network_alpha = 32
 #   "adalora_beta1=0.85",
 #   "adalora_beta2=0.85",
 #   "adalora_orth_reg_weight=0.0"
+# ]
+
+# MoRA (high-rank update with deterministic projection/expansion, training-only)
+# Requires: network_module = "networks.mora_wan"
+# - mora_enabled: bool (default true when network_module is networks.mora_wan)
+# - mora_type: int in {1, 2, 3, 4, 6} (default 1)
+#   type 6 enables RoPE-style mixing before rank aggregation.
+# - mora_merge_chunk_size: int >= 1 (default 64)
+#   Controls chunk size used when materializing merge delta weights.
+# Example:
+# network_args = [
+#   "mora_enabled=true",
+#   "mora_type=1",
+#   "mora_merge_chunk_size=64"
 # ]
 
 # IC-LoRA (requires network_module = "networks.ic_lora_wan")

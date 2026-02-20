@@ -152,3 +152,4 @@ Keep in mind that work on some features is not yet complete due to time and hard
 | [PiSSA](https://github.com/GraphPKU/PiSSA) | repo | - Principal/residual decomposition | [GraphPKU](https://github.com/GraphPKU) | Apache 2.0 | see also [paper](https://arxiv.org/abs/2404.02948) |
 | [sd-scripts (pr)](https://github.com/kohya-ss/sd-scripts/pull/2001) | repo | - PiSSA initialization and integration patterns | [rockerBOO](https://github.com/rockerBOO) | Apache 2.0 | |
 | [AdaLoRA](https://github.com/QingruZhang/AdaLoRA) | repo | - Adaptive rank-budget allocation workflow<br>- Rank-importance scoring and masking flow | [QingruZhang](https://github.com/QingruZhang) | MIT | see also [paper](https://arxiv.org/abs/2303.10512) |
+| [MoRA](https://github.com/kongds/MoRA) | repo | - High-rank square adapter update<br>- Type-based projection/expansion mapping | [kongds](https://github.com/kongds) |  | see also [paper](https://arxiv.org/abs/2405.12130) |
