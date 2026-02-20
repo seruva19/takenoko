@@ -5386,6 +5386,87 @@ memflow_guidance_top_k = 3
 memflow_guidance_min_frames = 2
 
 # =============================================================================
+# ⚠️ UFO TEMPORAL STABILIZATION
+# =============================================================================
+# Enable UFO-style static video synthesis for image datasets during latent caching.
+# - false (default): preserve current behavior (images stay single-frame latents)
+# - true: repeat each image into a static clip with `ufo_static_target_frames`
+enable_ufo_static_image_training = false
+
+# Number of repeated frames generated from each image when UFO static synthesis is enabled.
+# Must be >= 2. Typical values: 9, 13, 17.
+# Larger values strengthen temporal regularization but increase cache/training cost.
+ufo_static_target_frames = 17
+
+# Enable UFO-style static video synthesis for video datasets during latent caching.
+# - false (default): keep original video motion
+# - true: select one source frame per clip and repeat to `ufo_static_target_frames`
+# Useful when training a consistency-focused adapter from mixed data.
+enable_ufo_static_video_training = false
+
+# Source frame used when staticizing videos:
+# - "middle" (default): use middle frame (UFO StaticVideoDataset behavior)
+# - "first": use first frame
+# - "last": use last frame
+ufo_static_video_source_frame = "middle"
+
+# Enable UFO-style frame noise sharing during training noise sampling.
+# - false (default): standard iid frame noise
+# - true: blend iid noise with shared-in-time noise using ufo_noise_share_in_frames_ratio
+# Effective only when latent tensors have temporal dimension F > 1.
+enable_ufo_noise_share_in_frames = true
+
+# Mixing ratio for shared frame noise in [0.0, 1.0].
+# - 0.0: iid noise only
+# - 1.0: fully shared frame noise
+# Recommended starting range: 0.3 to 0.7
+ufo_noise_share_in_frames_ratio = 0.5
+
+# Noise sharing mode:
+# - "autoregressive" (default): n_t = r*n_(t-1) + (1-r)*eps_t
+# - "shared_first": blend each frame with frame-0 shared noise
+ufo_noise_share_mode = "autoregressive"
+
+# Enable UFO-style motion-sub auxiliary loss (frame-delta matching) during training.
+# - false (default): disabled
+# - true: adds an auxiliary term on temporal differences between prediction/target
+# Effective only when model prediction has temporal dimension F > 1.
+enable_ufo_motion_sub_loss = true
+
+# Weight for UFO motion-sub auxiliary loss in [0.0, 1.0].
+# Blend formula: final = (1-ratio)*base_loss + ratio*motion_sub_loss
+# Recommended starting range: 0.1 to 0.4
+ufo_motion_sub_loss_ratio = 0.2
+
+# Optional LoRA module targeting helper for UFO-style temporal-attention emphasis.
+# - false (default): leave network_args unchanged
+# - true: inject temporal-attention regex patterns into network_args for networks.lora_wan
+enable_ufo_temporal_attn_lora_targeting = true
+
+# Targeting mode when UFO temporal-attention helper is enabled:
+# - "augment" (default): appends patterns to extra_include_patterns (safe additive behavior)
+# - "strict": writes include_patterns (can narrow modules to temporal-attention-heavy subset)
+ufo_temporal_attn_lora_targeting_mode = "augment"
+
+# Regex list used by the temporal-attention targeting helper.
+# Applied to network_args as either include_patterns or extra_include_patterns depending on mode.
+ufo_temporal_attn_include_patterns = [
+    ".*temporal.*(attn|attention).*",
+    ".*attn_temporal.*",
+    ".*time_mix.*",
+]
+
+# Optional runtime inference profile export for UFO-trained adapters.
+# - false (default): no extra UFO inference hints are exported
+# - true: checkpoints include UFO runtime metadata and write `ufo_inference_profile.json`
+# This does not modify inference behavior automatically; it only exports guidance.
+enable_ufo_runtime_inference_profile = false
+
+# Recommended LoRA multiplier to use at runtime inference for UFO-trained adapters.
+# Typical UFO guidance range: 0.05 to 0.20.
+ufo_inference_lora_multiplier = 0.15
+
+# =============================================================================
 # ⚠️ EQUIVDM CONSISTENT NOISE
 # =============================================================================
 # Enable EquiVDM-style temporally consistent noise for LoRA video training.

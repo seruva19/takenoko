@@ -1727,6 +1727,35 @@ class TrainingCore:
                         noise = self.immiscible_noise_helper.sample_noise(latents)
                     else:
                         noise = torch.randn_like(latents)
+                    if (
+                        getattr(args, "enable_ufo_noise_share_in_frames", False)
+                        and noise.dim() == 5
+                        and noise.shape[2] > 1
+                    ):
+                        noise_share_ratio = float(
+                            getattr(args, "ufo_noise_share_in_frames_ratio", 0.5)
+                        )
+                        noise_share_ratio = max(0.0, min(1.0, noise_share_ratio))
+                        if noise_share_ratio > 0.0:
+                            noise_share_mode = str(
+                                getattr(args, "ufo_noise_share_mode", "autoregressive")
+                            ).lower()
+                            if noise_share_mode == "shared_first":
+                                shared_noise = noise[:, :, :1, :, :].expand(
+                                    -1, -1, noise.shape[2], -1, -1
+                                )
+                                noise = (
+                                    (1.0 - noise_share_ratio) * noise
+                                    + noise_share_ratio * shared_noise
+                                )
+                            else:
+                                for frame_idx in range(1, noise.shape[2]):
+                                    prev_noise = noise[:, :, frame_idx - 1, :, :]
+                                    curr_noise = noise[:, :, frame_idx, :, :]
+                                    noise[:, :, frame_idx, :, :] = (
+                                        noise_share_ratio * prev_noise
+                                        + (1.0 - noise_share_ratio) * curr_noise
+                                    )
                     if self.temporal_pyramid_helper is not None:
                         noise = self.temporal_pyramid_helper.align_noise(latents, noise)
 

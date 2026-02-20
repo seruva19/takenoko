@@ -112,6 +112,8 @@ class LossComponents:
         The dispersive (InfoNCE-style) loss component, if enabled.
     optical_flow_loss: Optional[torch.Tensor]
         The optical flow consistency loss, if enabled.
+    ufo_motion_sub_loss: Optional[torch.Tensor]
+        UFO-style frame-delta consistency loss, if enabled.
     layer_sync_loss: Optional[torch.Tensor]
         The LayerSync self-alignment projection loss, if enabled.
     layer_sync_similarity: Optional[torch.Tensor]
@@ -324,6 +326,7 @@ class LossComponents:
     blank_prompt_loss: Optional[torch.Tensor] = None
     dispersive_loss: Optional[torch.Tensor] = None
     optical_flow_loss: Optional[torch.Tensor] = None
+    ufo_motion_sub_loss: Optional[torch.Tensor] = None
     layer_sync_loss: Optional[torch.Tensor] = None
     layer_sync_similarity: Optional[torch.Tensor] = None
     internal_guidance_loss: Optional[torch.Tensor] = None
@@ -1153,6 +1156,31 @@ class TrainingLossComputer:
                     directional_value.size(0), -1
                 ).mean(dim=1)
             loss = loss + transition_directional_weight * directional_value.mean()
+
+        # ---- Optional UFO motion-sub loss (training-only) ----
+        ufo_motion_sub_loss_value: Optional[torch.Tensor] = None
+        if (
+            getattr(args, "enable_ufo_motion_sub_loss", False)
+            and model_pred.dim() == 5
+            and model_pred.shape[2] > 2
+        ):
+            try:
+                motion_sub_ratio = float(getattr(args, "ufo_motion_sub_loss_ratio", 0.25))
+                motion_sub_ratio = max(0.0, min(1.0, motion_sub_ratio))
+                if motion_sub_ratio > 0.0:
+                    base_objective = loss
+                    model_pred_nd = model_pred.to(network_dtype)
+                    target_nd = base_target.to(network_dtype)
+                    model_delta = model_pred_nd[:, :, 1:, :, :] - model_pred_nd[:, :, :-1, :, :]
+                    target_delta = target_nd[:, :, 1:, :, :] - target_nd[:, :, :-1, :, :]
+                    ufo_motion_sub_loss = F.mse_loss(model_delta, target_delta)
+                    loss = (
+                        base_objective * (1.0 - motion_sub_ratio)
+                        + ufo_motion_sub_loss * motion_sub_ratio
+                    )
+                    ufo_motion_sub_loss_value = ufo_motion_sub_loss.detach()
+            except Exception as e:
+                logger.warning("UFO motion-sub loss computation failed: %s", e)
 
         base_loss = loss
 
@@ -2354,6 +2382,7 @@ class TrainingLossComputer:
             blank_prompt_loss=bpp_loss_value,
             dispersive_loss=dispersive_loss_value,
             optical_flow_loss=optical_flow_loss_value,
+            ufo_motion_sub_loss=ufo_motion_sub_loss_value,
             layer_sync_loss=layer_sync_loss_value,
             layer_sync_similarity=layer_sync_similarity_value,
             internal_guidance_loss=internal_guidance_loss_value,

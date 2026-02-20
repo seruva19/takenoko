@@ -50,6 +50,7 @@ from configs.motion_disentanglement_config import (
 )
 from configs.det_motion_transfer_config import apply_det_motion_transfer_config
 from configs.euphonium_config import apply_euphonium_config
+from configs.ufo_config import apply_ufo_config
 
 
 def create_args_from_config(
@@ -494,6 +495,7 @@ def create_args_from_config(
     apply_delta_time_sampling_config(args, config, logger)
     apply_motion_disentanglement_config(args, config, logger)
     apply_det_motion_transfer_config(args, config, logger)
+    apply_ufo_config(args, config, logger)
 
     apply_relora_config(args, config, logger)
     apply_internal_guidance_config(args, config, logger)

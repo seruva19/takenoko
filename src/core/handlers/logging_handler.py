@@ -172,6 +172,8 @@ def collect_and_log_training_metrics(
         )
     if loss_components.optical_flow_loss is not None:
         logs["loss/optical_flow"] = float(loss_components.optical_flow_loss.item())
+    if getattr(loss_components, "ufo_motion_sub_loss", None) is not None:
+        logs["loss/ufo_motion_sub"] = float(loss_components.ufo_motion_sub_loss.item())
     if getattr(loss_components, "video_consistency_distance_loss", None) is not None:
         logs["loss/vcd"] = float(loss_components.video_consistency_distance_loss.item())
     if getattr(loss_components, "layer_sync_loss", None) is not None:

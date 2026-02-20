@@ -866,6 +866,38 @@ class CheckpointManager:
                 metadata_to_save["ic_lora_concat_mode"] = str(
                     getattr(args, "ic_lora_concat_mode", "reference_target_frames")
                 )
+            if bool(getattr(args, "enable_ufo_runtime_inference_profile", False)):
+                rec_multiplier = float(
+                    getattr(args, "ufo_inference_lora_multiplier", 0.15)
+                )
+                metadata_to_save["takenoko_ufo_runtime_profile_enabled"] = "true"
+                metadata_to_save["takenoko_ufo_recommended_lora_multiplier"] = str(
+                    rec_multiplier
+                )
+                metadata_to_save["takenoko_ufo_recommended_lora_multiplier_range"] = (
+                    "0.05-0.20"
+                )
+                metadata_to_save["takenoko_ufo_runtime_note"] = (
+                    "UFO runtime profile is advisory only; set LoRA multiplier manually at inference."
+                )
+
+                try:
+                    profile_path = os.path.join(args.output_dir, "ufo_inference_profile.json")
+                    profile_payload = {
+                        "enabled": True,
+                        "recommended_lora_multiplier": rec_multiplier,
+                        "recommended_range": [0.05, 0.20],
+                        "checkpoint_name": ckpt_name,
+                        "global_step": int(steps),
+                        "epoch": int(epoch_no),
+                        "note": "Advisory only. Apply this multiplier manually at inference runtime.",
+                    }
+                    with open(profile_path, "w", encoding="utf-8") as f:
+                        json.dump(profile_payload, f, indent=2)
+                except Exception as e:
+                    logger.warning(
+                        "Failed to write UFO inference profile sidecar JSON: %s", e
+                    )
 
             title = (
                 args.metadata_title

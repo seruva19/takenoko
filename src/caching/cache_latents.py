@@ -210,8 +210,41 @@ def encode_and_save_batch(
 ):
     """Encode and save a batch of items using WAN VAE"""
     contents = torch.stack([torch.from_numpy(item.content) for item in batch])
-    if len(contents.shape) == 4:
+    is_image_batch = len(contents.shape) == 4
+    is_video_batch = len(contents.shape) == 5
+    ufo_repeat_frames = 1
+
+    def _staticize_video_tensor(video_tensor: torch.Tensor) -> torch.Tensor:
+        """Convert BFHWC video clips to static clips by repeating a selected frame."""
+        if args is None or not bool(getattr(args, "enable_ufo_static_video_training", False)):
+            return video_tensor
+        target_frames = int(getattr(args, "ufo_static_target_frames", 17))
+        source_mode = str(getattr(args, "ufo_static_video_source_frame", "middle")).lower()
+        frame_count = int(video_tensor.shape[1])
+        if frame_count < 1:
+            return video_tensor
+        if source_mode == "first":
+            source_idx = 0
+        elif source_mode == "last":
+            source_idx = frame_count - 1
+        else:
+            source_idx = frame_count // 2
+        source_frame = video_tensor[:, source_idx : source_idx + 1, :, :, :]
+        if target_frames > 1:
+            return source_frame.repeat(1, target_frames, 1, 1, 1)
+        return source_frame
+
+    if is_image_batch:
         contents = contents.unsqueeze(1)  # B, H, W, C -> B, F, H, W, C
+        if args is not None and bool(
+            getattr(args, "enable_ufo_static_image_training", False)
+        ):
+            ufo_repeat_frames = int(getattr(args, "ufo_static_target_frames", 17))
+            if ufo_repeat_frames > 1:
+                contents = contents.repeat(1, ufo_repeat_frames, 1, 1, 1)
+    elif is_video_batch:
+        contents = _staticize_video_tensor(contents)
+        ufo_repeat_frames = int(contents.shape[1])
 
     contents = contents.permute(0, 4, 1, 2, 3).contiguous()  # B, C, F, H, W
     contents = contents.to(vae.device, dtype=vae.dtype)
@@ -244,6 +277,12 @@ def encode_and_save_batch(
             control_contents = control_contents.unsqueeze(
                 1
             )  # B, H, W, C -> B, F, H, W, C
+            if ufo_repeat_frames > 1:
+                control_contents = control_contents.repeat(
+                    1, ufo_repeat_frames, 1, 1, 1
+                )
+        elif len(control_contents.shape) == 5:
+            control_contents = _staticize_video_tensor(control_contents)
 
         control_contents = control_contents.permute(
             0, 4, 1, 2, 3
