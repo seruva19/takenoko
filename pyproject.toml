@@ -29,6 +29,7 @@ dependencies = [
   "omegaconf>=2.3.0",
   "opencv-python==4.10.0.84",
   "optimum-quanto>=0.2.7",
+  "peft>=0.18.1",
   "pillow>=10.2.0",
   "pillow-avif-plugin>=1.5.2",
   "pillow-jxl-plugin>=1.3.4",
