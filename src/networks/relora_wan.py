@@ -1,5 +1,4 @@
 import ast
-import math
 import weakref
 from typing import List, Optional, cast
 
@@ -102,14 +101,7 @@ class ReLoRAModule(LoRAModule):
             org_module.weight.data.copy_(org_weight.to(org_module.weight.dtype))
 
         # Reinitialize LoRA weights after merge
-        if self.split_dims is None:
-            torch.nn.init.kaiming_uniform_(self.lora_down.weight, a=math.sqrt(5))
-            torch.nn.init.zeros_(self.lora_up.weight)
-        else:
-            for lora_down in self.lora_down:
-                torch.nn.init.kaiming_uniform_(lora_down.weight, a=math.sqrt(5))
-            for lora_up in self.lora_up:
-                torch.nn.init.zeros_(lora_up.weight)
+        self.reinitialize_lora_from_org_weight(org_module.weight)
 
 
 class ReLoRANetwork(LoRANetwork):
@@ -198,6 +190,32 @@ def create_arch_network(
     except Exception:
         ggpo_beta = None
 
+    initialize = kwargs.get("initialize", "kaiming")
+    if initialize is None:
+        initialize = "kaiming"
+    initialize = str(initialize).strip().lower()
+    pissa_niter = kwargs.get("pissa_niter", None)
+    if pissa_niter is not None:
+        try:
+            pissa_niter = int(pissa_niter)
+            if pissa_niter <= 0:
+                pissa_niter = None
+        except Exception:
+            pissa_niter = None
+    if initialize.startswith("pissa_niter_"):
+        if pissa_niter is None:
+            try:
+                pissa_niter = int(initialize.rsplit("_", 1)[-1])
+            except Exception:
+                pissa_niter = None
+        initialize = "pissa"
+    elif initialize == "pissa_niter":
+        initialize = "pissa"
+    elif initialize in {"", "default"}:
+        initialize = "kaiming"
+    elif initialize != "pissa":
+        initialize = "kaiming"
+
     network = ReLoRANetwork(
         WAN_TARGET_REPLACE_MODULES,
         "relora_unet",
@@ -216,6 +234,8 @@ def create_arch_network(
         verbose=verbose,
         ggpo_sigma=cast(Optional[float], ggpo_sigma),
         ggpo_beta=cast(Optional[float], ggpo_beta),
+        initialize=initialize,
+        pissa_niter=cast(Optional[int], pissa_niter),
     )
 
     loraplus_lr_ratio = kwargs.get("loraplus_lr_ratio", None)

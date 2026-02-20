@@ -40,6 +40,8 @@ class LoRAModule(torch.nn.Module):
         rank_dropout=None,
         module_dropout=None,
         split_dims: Optional[List[int]] = None,
+        initialize: Optional[str] = None,
+        pissa_niter: Optional[int] = None,
         # LoRA-GGPO parameters (optional)
         ggpo_sigma: Optional[float] = None,
         ggpo_beta: Optional[float] = None,
@@ -66,6 +68,18 @@ class LoRAModule(torch.nn.Module):
 
         self.lora_dim = lora_dim
         self.split_dims = split_dims
+        self.initialize = (
+            str(initialize).strip().lower()
+            if initialize is not None and str(initialize).strip() != ""
+            else "kaiming"
+        )
+        self.pissa_niter: Optional[int] = None
+        if pissa_niter is not None:
+            try:
+                parsed_niter = int(pissa_niter)
+                self.pissa_niter = parsed_niter if parsed_niter > 0 else None
+            except Exception:
+                self.pissa_niter = None
 
         if split_dims is None:
             if org_module.__class__.__name__ == "Conv2d":
@@ -81,9 +95,6 @@ class LoRAModule(torch.nn.Module):
             else:
                 self.lora_down = torch.nn.Linear(in_dim, self.lora_dim, bias=False)  # type: ignore
                 self.lora_up = torch.nn.Linear(self.lora_dim, out_dim, bias=False)  # type: ignore
-
-            torch.nn.init.kaiming_uniform_(self.lora_down.weight, a=math.sqrt(5))
-            torch.nn.init.zeros_(self.lora_up.weight)
         else:
             # conv2d not supported
             assert (
@@ -105,10 +116,6 @@ class LoRAModule(torch.nn.Module):
                     for split_dim in split_dims
                 ]
             )
-            for lora_down in self.lora_down:
-                torch.nn.init.kaiming_uniform_(lora_down.weight, a=math.sqrt(5))  # type: ignore
-            for lora_up in self.lora_up:
-                torch.nn.init.zeros_(lora_up.weight)  # type: ignore
 
         if type(alpha) == torch.Tensor:
             alpha = alpha.detach().float().numpy()  # without casting, bf16 causes error
@@ -122,6 +129,9 @@ class LoRAModule(torch.nn.Module):
         self.dropout = dropout
         self.rank_dropout = rank_dropout
         self.module_dropout = module_dropout
+
+        # Initialize adapter parameters (default Kaiming+zero; optional PiSSA SVD).
+        self.reinitialize_lora_from_org_weight(org_module.weight)  # type: ignore[arg-type]
 
         # === GGPO setup ===
         self.ggpo_sigma: Optional[float] = (
@@ -169,6 +179,203 @@ class LoRAModule(torch.nn.Module):
     @property
     def dtype(self) -> torch.dtype:
         return next(self.parameters()).dtype
+
+    @torch.no_grad()
+    def _init_kaiming_zero(self) -> None:
+        if self.split_dims is None:
+            torch.nn.init.kaiming_uniform_(self.lora_down.weight, a=math.sqrt(5))
+            torch.nn.init.zeros_(self.lora_up.weight)
+            return
+
+        for lora_down in self.lora_down:
+            torch.nn.init.kaiming_uniform_(lora_down.weight, a=math.sqrt(5))  # type: ignore
+        for lora_up in self.lora_up:
+            torch.nn.init.zeros_(lora_up.weight)  # type: ignore
+
+    @torch.no_grad()
+    def _compute_pissa_factors(
+        self, weight_2d: Tensor, rank: int
+    ) -> tuple[Tensor, Tensor, Tensor]:
+        rows = int(weight_2d.shape[0])
+        cols = int(weight_2d.shape[1])
+        rank_eff = max(0, min(int(rank), rows, cols))
+        work = weight_2d.to(torch.float32)
+
+        if rank_eff <= 0:
+            up = torch.zeros((rows, rank), dtype=torch.float32, device=work.device)
+            down = torch.zeros((rank, cols), dtype=torch.float32, device=work.device)
+            return up, down, work
+
+        if self.pissa_niter is not None:
+            u, s, v = torch.svd_lowrank(work, q=rank_eff, niter=self.pissa_niter)
+            v_h = v.transpose(0, 1)
+        else:
+            u, s, v_h = torch.linalg.svd(work, full_matrices=False)
+            u = u[:, :rank_eff]
+            s = s[:rank_eff]
+            v_h = v_h[:rank_eff, :]
+
+        s_sqrt = torch.sqrt(torch.clamp(s, min=0.0))
+        up_eff = u * s_sqrt.unsqueeze(0)
+        down_eff = s_sqrt.unsqueeze(1) * v_h
+        residual = work - (up_eff @ down_eff)
+
+        if rank_eff < rank:
+            up = torch.zeros((rows, rank), dtype=torch.float32, device=work.device)
+            down = torch.zeros((rank, cols), dtype=torch.float32, device=work.device)
+            up[:, :rank_eff] = up_eff
+            down[:rank_eff, :] = down_eff
+            return up, down, residual
+
+        return up_eff, down_eff, residual
+
+    @torch.no_grad()
+    def _init_pissa(self, org_weight: Tensor) -> bool:
+        if not isinstance(org_weight, Tensor):
+            logger.warning("PiSSA init skipped for %s: missing base weight", self.lora_name)
+            return False
+        if not torch.is_floating_point(org_weight):
+            logger.warning(
+                "PiSSA init skipped for %s: non-floating base weight dtype=%s",
+                self.lora_name,
+                org_weight.dtype,
+            )
+            return False
+
+        if self.split_dims is None:
+            if isinstance(self.lora_down, nn.Conv2d) and isinstance(self.lora_up, nn.Conv2d):
+                base_2d = org_weight.detach().to(torch.float32).flatten(1)
+                up_2d, down_2d, residual_2d = self._compute_pissa_factors(
+                    base_2d, int(self.lora_dim)
+                )
+                self.lora_up.weight.data.copy_(
+                    up_2d.reshape(self.lora_up.weight.shape).to(
+                        device=self.lora_up.weight.device,
+                        dtype=self.lora_up.weight.dtype,
+                    )
+                )
+                self.lora_down.weight.data.copy_(
+                    down_2d.reshape(self.lora_down.weight.shape).to(
+                        device=self.lora_down.weight.device,
+                        dtype=self.lora_down.weight.dtype,
+                    )
+                )
+                org_weight.data.copy_(
+                    residual_2d.reshape(org_weight.shape).to(
+                        device=org_weight.device,
+                        dtype=org_weight.dtype,
+                    )
+                )
+                return True
+
+            if isinstance(self.lora_down, nn.Linear) and isinstance(self.lora_up, nn.Linear):
+                base_2d = org_weight.detach().to(torch.float32)
+                up_2d, down_2d, residual_2d = self._compute_pissa_factors(
+                    base_2d, int(self.lora_dim)
+                )
+                self.lora_up.weight.data.copy_(
+                    up_2d.to(
+                        device=self.lora_up.weight.device,
+                        dtype=self.lora_up.weight.dtype,
+                    )
+                )
+                self.lora_down.weight.data.copy_(
+                    down_2d.to(
+                        device=self.lora_down.weight.device,
+                        dtype=self.lora_down.weight.dtype,
+                    )
+                )
+                org_weight.data.copy_(
+                    residual_2d.to(device=org_weight.device, dtype=org_weight.dtype)
+                )
+                return True
+
+            logger.warning(
+                "PiSSA init skipped for %s: unsupported LoRA module types (%s, %s)",
+                self.lora_name,
+                type(self.lora_down).__name__,
+                type(self.lora_up).__name__,
+            )
+            return False
+
+        try:
+            base = org_weight.detach().to(torch.float32)
+            if base.ndim != 2:
+                logger.warning(
+                    "PiSSA init skipped for %s: split mode expects 2D base weight",
+                    self.lora_name,
+                )
+                return False
+
+            in_dim = int(base.shape[1])
+            residual = base.clone()
+            row_start = 0
+            for idx, split_dim in enumerate(self.split_dims):
+                row_end = row_start + int(split_dim)
+                chunk = residual[row_start:row_end, :]
+                up_chunk, down_chunk, residual_chunk = self._compute_pissa_factors(
+                    chunk, int(self.lora_dim)
+                )
+                self.lora_up[idx].weight.data.copy_(  # type: ignore[index]
+                    up_chunk.to(
+                        device=self.lora_up[idx].weight.device,  # type: ignore[index]
+                        dtype=self.lora_up[idx].weight.dtype,  # type: ignore[index]
+                    )
+                )
+                self.lora_down[idx].weight.data.copy_(  # type: ignore[index]
+                    down_chunk.reshape(int(self.lora_dim), in_dim).to(
+                        device=self.lora_down[idx].weight.device,  # type: ignore[index]
+                        dtype=self.lora_down[idx].weight.dtype,  # type: ignore[index]
+                    )
+                )
+                residual[row_start:row_end, :] = residual_chunk
+                row_start = row_end
+
+            org_weight.data.copy_(residual.to(device=org_weight.device, dtype=org_weight.dtype))
+            return True
+        except Exception:
+            logger.exception("PiSSA init failed for split LoRA module %s", self.lora_name)
+            return False
+
+    @torch.no_grad()
+    def reinitialize_lora_from_org_weight(self, org_weight: Optional[Tensor] = None) -> None:
+        init_mode = self.initialize
+        if init_mode.startswith("pissa_niter_"):
+            init_mode = "pissa"
+            if self.pissa_niter is None:
+                try:
+                    parsed_niter = int(self.initialize.rsplit("_", 1)[-1])
+                    self.pissa_niter = parsed_niter if parsed_niter > 0 else None
+                except Exception:
+                    self.pissa_niter = None
+
+        if init_mode == "default":
+            init_mode = "kaiming"
+
+        if init_mode == "pissa":
+            if org_weight is None:
+                logger.warning(
+                    "PiSSA init fallback for %s: original module weight is unavailable",
+                    self.lora_name,
+                )
+                self._init_kaiming_zero()
+                return
+            if self._init_pissa(org_weight):
+                if self.dropout is not None and float(self.dropout) > 0.0:
+                    logger.warning(
+                        "PiSSA adapter %s uses dropout=%s; paper recommends dropout=0.",
+                        self.lora_name,
+                        self.dropout,
+                    )
+                return
+            logger.warning(
+                "PiSSA init fallback to Kaiming+zero for module %s",
+                self.lora_name,
+            )
+            self._init_kaiming_zero()
+            return
+
+        self._init_kaiming_zero()
 
     @torch.no_grad()
     def _initialize_org_weight_norm_estimate(self, org_weight: Tensor) -> None:
@@ -615,6 +822,36 @@ def create_network(
     except Exception:
         ggpo_beta = None
 
+    # LoRA initialization mode:
+    # - "kaiming" (default): current Takenoko behavior
+    # - "pissa": exact SVD PiSSA initialization
+    # - "pissa_niter_<k>": fast SVD PiSSA initialization using k subspace iterations
+    initialize = kwargs.get("initialize", "kaiming")
+    if initialize is None:
+        initialize = "kaiming"
+    initialize = str(initialize).strip().lower()
+    pissa_niter = kwargs.get("pissa_niter", None)
+    if pissa_niter is not None:
+        try:
+            pissa_niter = int(pissa_niter)
+            if pissa_niter <= 0:
+                pissa_niter = None
+        except Exception:
+            pissa_niter = None
+    if initialize.startswith("pissa_niter_"):
+        if pissa_niter is None:
+            try:
+                pissa_niter = int(initialize.rsplit("_", 1)[-1])
+            except Exception:
+                pissa_niter = None
+        initialize = "pissa"
+    elif initialize == "pissa_niter":
+        initialize = "pissa"
+    elif initialize in {"", "default"}:
+        initialize = "kaiming"
+    elif initialize != "pissa":
+        initialize = "kaiming"
+
     network = LoRANetwork(
         target_replace_modules,
         prefix,
@@ -635,6 +872,8 @@ def create_network(
         verbose=verbose,
         ggpo_sigma=cast(Optional[float], ggpo_sigma),
         ggpo_beta=cast(Optional[float], ggpo_beta),
+        initialize=initialize,
+        pissa_niter=cast(Optional[int], pissa_niter),
     )
 
     loraplus_lr_ratio = kwargs.get("loraplus_lr_ratio", None)
@@ -683,6 +922,8 @@ class LoRANetwork(torch.nn.Module):
         # LoRA-GGPO parameters
         ggpo_sigma: Optional[float] = None,
         ggpo_beta: Optional[float] = None,
+        initialize: str = "kaiming",
+        pissa_niter: Optional[int] = None,
     ) -> None:
         super().__init__()
         self.multiplier = multiplier
@@ -704,6 +945,8 @@ class LoRANetwork(torch.nn.Module):
         self.ggpo_beta: Optional[float] = (
             float(ggpo_beta) if ggpo_beta is not None else None
         )
+        self.initialize = str(initialize).strip().lower() if initialize else "kaiming"
+        self.pissa_niter = pissa_niter
 
         self.loraplus_lr_ratio = None
         # self.loraplus_unet_lr_ratio = None
@@ -718,6 +961,11 @@ class LoRANetwork(torch.nn.Module):
             logger.info(
                 f"neuron dropout: p={self.dropout}, rank dropout: p={self.rank_dropout}, module dropout: p={self.module_dropout}"
             )
+            if self.initialize == "pissa":
+                logger.info(
+                    "LoRA initialization: PiSSA (niter=%s)",
+                    self.pissa_niter if self.pissa_niter is not None else "exact",
+                )
             # if self.conv_lora_dim is not None:
             #     logger.info(
             #         f"apply LoRA to Conv2d with kernel size (3,3). dim (rank): {self.conv_lora_dim}, alpha: {self.conv_alpha}"
@@ -866,6 +1114,8 @@ class LoRANetwork(torch.nn.Module):
                                 dropout=dropout,
                                 rank_dropout=rank_dropout,
                                 module_dropout=module_dropout,
+                                initialize=self.initialize,
+                                pissa_niter=self.pissa_niter,
                                 ggpo_sigma=self.ggpo_sigma,
                                 ggpo_beta=self.ggpo_beta,
                             )

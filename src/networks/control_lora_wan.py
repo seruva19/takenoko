@@ -39,6 +39,8 @@ class ControlLoRAModule(LoRAModule):
         rank_dropout=None,
         module_dropout=None,
         split_dims: Optional[List[int]] = None,
+        initialize: Optional[str] = None,
+        pissa_niter: Optional[int] = None,
         control_config: Optional[Dict] = None,
     ):
         super().__init__(
@@ -51,6 +53,8 @@ class ControlLoRAModule(LoRAModule):
             rank_dropout,
             module_dropout,
             split_dims,
+            initialize=initialize,
+            pissa_niter=pissa_niter,
         )
 
         self.control_config = control_config or {}
@@ -200,30 +204,34 @@ class ControlLoRANetwork(LoRANetwork):
         include_patterns: Optional[List[str]] = None,
         verbose: Optional[bool] = False,
         control_config: Optional[Dict] = None,
+        initialize: str = "kaiming",
+        pissa_niter: Optional[int] = None,
     ) -> None:
         # Store control config for use in module creation
         self.control_config = control_config or {}
 
         # Call parent constructor with modified module_class
         super().__init__(
-            target_replace_modules,
-            prefix,
-            text_encoders,
-            unet,
-            multiplier,
-            lora_dim,
-            alpha,
-            dropout,
-            rank_dropout,
-            module_dropout,
-            conv_lora_dim,
-            conv_alpha,
-            module_class,
-            modules_dim,
-            modules_alpha,
-            exclude_patterns,
-            include_patterns,
-            verbose,
+            target_replace_modules=target_replace_modules,
+            prefix=prefix,
+            text_encoders=text_encoders,
+            unet=unet,
+            multiplier=multiplier,
+            lora_dim=lora_dim,
+            alpha=alpha,
+            dropout=dropout,
+            rank_dropout=rank_dropout,
+            module_dropout=module_dropout,
+            conv_lora_dim=conv_lora_dim,
+            conv_alpha=conv_alpha,
+            module_class=module_class,
+            modules_dim=modules_dim,
+            modules_alpha=modules_alpha,
+            exclude_patterns=exclude_patterns,
+            include_patterns=include_patterns,
+            verbose=verbose,
+            initialize=initialize,
+            pissa_niter=pissa_niter,
         )
 
         # Override module creation to pass control_config
@@ -694,6 +702,8 @@ def create_control_network(
     exclude_patterns = kwargs.get("exclude_patterns", None)
     include_patterns = kwargs.get("include_patterns", None)
     verbose = kwargs.get("verbose", False)
+    initialize = kwargs.get("initialize", "kaiming")
+    pissa_niter = kwargs.get("pissa_niter", None)
 
     # too many arguments ( ^ω^)･･･
     network = ControlLoRANetwork(
@@ -713,6 +723,8 @@ def create_control_network(
         include_patterns=include_patterns,
         verbose=verbose,
         control_config=control_config,
+        initialize=initialize,
+        pissa_niter=pissa_niter,
     )
 
     loraplus_lr_ratio = kwargs.get("loraplus_lr_ratio", None)

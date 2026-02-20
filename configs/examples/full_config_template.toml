@@ -424,6 +424,8 @@ network_alpha = 32
 # - conv_dim / conv_alpha: Conv2d LoRA rank/alpha
 # - loraplus_lr_ratio: LoRA+ lr scaling for lora_up
 # - ggpo_sigma / ggpo_beta: LoRA-GGPO regularization
+# - initialize: "kaiming" (default), "pissa", or "pissa_niter_<k>"
+# - pissa_niter: optional int > 0 (alternative to initialize=pissa_niter_<k>)
 # - verbose: log selected/skippped modules
 # Lycoris example is in wan21_lycoris.toml
 # network_args = '' 
@@ -434,6 +436,13 @@ network_alpha = 32
 # LoRA-GGPO regularization (perturbs Linear LoRA weights during training):
 # Parsed by `takenoko.create_args_from_config` into args.ggpo_sigma/ggpo_beta for the loss hooks.
 # network_args = ["ggpo_sigma=0.03", "ggpo_beta=0.01"]
+
+# PiSSA initialization (SVD-based LoRA init with residual base decomposition):
+# - "initialize=pissa" uses exact SVD (slowest, most accurate)
+# - "initialize=pissa_niter_4" uses fast randomized SVD with 4 subspace iterations
+# - optional "pissa_niter=4" can be used with "initialize=pissa"
+# Recommended with network_dropout = 0 to match PiSSA paper/PEFT defaults.
+# network_args = ["initialize=pissa_niter_4"]
 
 # IC-LoRA (requires network_module = "networks.ic_lora_wan")
 # Example:
