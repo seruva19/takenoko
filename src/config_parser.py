@@ -52,6 +52,7 @@ from configs.det_motion_transfer_config import apply_det_motion_transfer_config
 from configs.euphonium_config import apply_euphonium_config
 from configs.ufo_config import apply_ufo_config
 from configs.pissa_config import apply_pissa_config
+from configs.adalora_config import apply_adalora_config
 
 
 def create_args_from_config(
@@ -470,6 +471,7 @@ def create_args_from_config(
         args.network_args = []
 
     apply_pissa_config(args, config, logger)
+    apply_adalora_config(args, config, logger)
 
     # Extract LoRA-GGPO parameters from network_args (e.g., "ggpo_sigma=0.03")
     args.ggpo_sigma = None

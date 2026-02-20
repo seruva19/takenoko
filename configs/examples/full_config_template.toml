@@ -401,7 +401,7 @@ lr_scheduler_args = ''
 # Network module to train: "networks.lora_wan", "networks.ic_lora_wan", "networks.riemann_lora_wan", "networks.control_lora_wan",
 # "networks.reward_lora", "networks.vae_wan", "lycoris.kohya", "networks.t_lora", "networks.tc_lora_wan", "networks.moc_lora",
 # "networks.mhc_lora", "networks.singlora_wan", "networks.wan_finetune", "networks.slider_lora_wan",
-# "networks.relora_wan"
+# "networks.relora_wan", "networks.adalora_wan"
 # The module defines trainable adapters and is imported dynamically by the trainer.
 network_module = "networks.lora_wan"
 
@@ -443,6 +443,30 @@ network_alpha = 32
 # - optional "pissa_niter=4" can be used with "initialize=pissa"
 # Recommended with network_dropout = 0 to match PiSSA paper/PEFT defaults.
 # network_args = ["initialize=pissa_niter_4"]
+
+# AdaLoRA (adaptive rank allocation, training-only)
+# Requires: network_module = "networks.adalora_wan"
+# - adalora_enabled: bool (default true when network_module is networks.adalora_wan)
+# - adalora_init_rank: int >= 1 (default network_dim)
+# - adalora_target_rank: int >= 1 and <= adalora_init_rank (default init_rank/2)
+# - adalora_tinit: int >= 0 (default 0)
+# - adalora_tfinal: int >= 0 (default 0)
+# - adalora_delta_t: int >= 1 (default 100)
+# - adalora_beta1: float in [0, 1) (default 0.85)
+# - adalora_beta2: float in [0, 1) (default 0.85)
+# - adalora_orth_reg_weight: float >= 0 (default 0.0, uses orthogonality regularization)
+# Example:
+# network_args = [
+#   "adalora_enabled=true",
+#   "adalora_init_rank=32",
+#   "adalora_target_rank=8",
+#   "adalora_tinit=500",
+#   "adalora_tfinal=1000",
+#   "adalora_delta_t=100",
+#   "adalora_beta1=0.85",
+#   "adalora_beta2=0.85",
+#   "adalora_orth_reg_weight=0.0"
+# ]
 
 # IC-LoRA (requires network_module = "networks.ic_lora_wan")
 # Example:
