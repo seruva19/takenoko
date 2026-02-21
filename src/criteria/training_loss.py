@@ -318,6 +318,8 @@ class LossComponents:
         Mean exposure-bias magnitude used to construct FC weights.
     reflexflow_weight_mean: Optional[torch.Tensor]
         Mean FC reweighting factor.
+    s2d_loss: Optional[torch.Tensor]
+        Selective Spectral Decay regularization loss (if enabled).
     """
 
     total_loss: torch.Tensor
@@ -429,6 +431,7 @@ class LossComponents:
     reflexflow_fc_loss: Optional[torch.Tensor] = None
     reflexflow_exposure_bias_mean: Optional[torch.Tensor] = None
     reflexflow_weight_mean: Optional[torch.Tensor] = None
+    s2d_loss: Optional[torch.Tensor] = None
 
 
 class TrainingLossComputer:
@@ -448,6 +451,7 @@ class TrainingLossComputer:
         self._masked_training_manager: Optional[MaskedTrainingManager] = None
         self._cached_blank_prompt_embeds: Dict[torch.device, torch.Tensor] = {}
         self._vcd_loss_helper: Optional[Any] = None
+        self._s2d_regularizer: Optional[Any] = None
 
     def _get_vcd_loss_helper(self, args: Any, device: torch.device) -> Optional[Any]:
         if not getattr(args, "enable_video_consistency_distance", False):
@@ -466,6 +470,15 @@ class TrainingLossComputer:
             except Exception:
                 pass
         return self._vcd_loss_helper
+
+    def _get_s2d_regularizer(self, args: Any) -> Optional[Any]:
+        if not getattr(args, "enable_s2d", False):
+            return None
+        if self._s2d_regularizer is None:
+            from enhancements.s2d_regularization.helper import S2DRegularizer
+
+            self._s2d_regularizer = S2DRegularizer(args)
+        return self._s2d_regularizer
 
     # ---- Internal helpers ----
     def _compute_seq_len(self, latents: torch.Tensor) -> int:
@@ -774,6 +787,7 @@ class TrainingLossComputer:
         bfm_semfeat_loss_value: Optional[torch.Tensor] = None
         bfm_semfeat_similarity_value: Optional[torch.Tensor] = None
         bfm_frn_loss_value: Optional[torch.Tensor] = None
+        s2d_loss_value: Optional[torch.Tensor] = None
 
         if getattr(args, "enable_blockwise_flow_matching", False) and getattr(
             args, "bfm_use_segment_objective", True
@@ -2276,6 +2290,21 @@ class TrainingLossComputer:
                 logger.warning(f"Blank prompt preservation loss failed: {e}")
                 bpp_loss_value = None
 
+        # ---- Optional S2D (Selective Spectral Decay) regularization ----
+        if getattr(args, "enable_s2d", False):
+            try:
+                s2d_regularizer = self._get_s2d_regularizer(args)
+                if s2d_regularizer is not None and network is not None:
+                    s2d_loss = s2d_regularizer.compute_loss(
+                        network=network,
+                        global_step=global_step,
+                    )
+                    if s2d_loss is not None:
+                        loss = loss + s2d_loss
+                        s2d_loss_value = s2d_loss.detach()
+            except Exception as e:
+                logger.warning("S2D regularization failed: %s", e)
+
         # ---- Optional Orthogonal LoRA regularization (T-LoRA orthogonal mode) ----
         ortho_p_val: Optional[torch.Tensor] = None
         ortho_q_val: Optional[torch.Tensor] = None
@@ -2433,6 +2462,7 @@ class TrainingLossComputer:
             reflexflow_fc_loss=reflexflow_fc_loss_value,
             reflexflow_exposure_bias_mean=reflexflow_exposure_bias_mean_value,
             reflexflow_weight_mean=reflexflow_weight_mean_value,
+            s2d_loss=s2d_loss_value,
         )
 
     @torch.no_grad()

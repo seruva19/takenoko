@@ -312,6 +312,8 @@ def collect_and_log_training_metrics(
         logs["crepa_similarity"] = float(loss_components.crepa_similarity.item())
     if getattr(loss_components, "wanvideo_cfm_loss", None) is not None:
         logs["loss/wanvideo_cfm"] = float(loss_components.wanvideo_cfm_loss.item())
+    if getattr(loss_components, "s2d_loss", None) is not None:
+        logs["loss/s2d"] = float(loss_components.s2d_loss.item())
     if getattr(loss_components, "mhc_identity_reg", None) is not None:
         logs["loss/mhc_identity_reg"] = float(
             loss_components.mhc_identity_reg.item()

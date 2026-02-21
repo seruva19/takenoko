@@ -1312,6 +1312,59 @@ dispersive_loss_metric = "l2_sq"
 # Optional: pool spatial tokens per frame before dispersion ("none" or "frame_mean")
 dispersive_loss_pooling = "none"
 
+# =============================================================================
+# ⚠️ S2D (SELECTIVE SPECTRAL DECAY) SETTINGS
+# =============================================================================
+
+# Enable S2D auxiliary spectral regularization.
+enable_s2d = false
+
+# Decay strength lambda (>= 0).
+s2d_decay_lambda = 0.0005
+
+# Power n for selective spectral decay (> 1).
+s2d_power_n = 2.0
+
+# Selectivity threshold tau in (0, 1]. Higher values target only strongly dominated spectra.
+s2d_pcdr_tau = 0.95
+
+# Selection mode:
+# - "pcdr_activation" (paper-like): selects layers/components from activation-driven PCDR.
+# - "sigma_mass": fallback approximation using only singular-value mass.
+# - "pcdr_dense_full_svd": strict mode; runs full dense SVD on effective base+LoRA weight
+#   (closest to original paper intent, but significantly heavier).
+s2d_selection_mode = "pcdr_activation"
+
+# PCDR variant for "pcdr_activation":
+# - "outlier_neuron": use per-sample max-|activation| neuron pathway
+# - "projection_mass": use singular projection mass only (faster approximation)
+s2d_pcdr_variant = "outlier_neuron"
+
+# Maximum number of dominant singular components to regularize (>= 1).
+s2d_k_max = 3
+
+# Refresh interval in training steps for amortized spectral component updates (>= 1).
+s2d_update_interval = 100
+
+# Max activation vectors retained per layer for PCDR estimation (>= 1).
+s2d_activation_samples = 512
+
+# Max activation vectors sampled from each hook call (>= 1).
+s2d_hook_batch_samples = 64
+
+# Optional cap on number of LoRA modules processed (0 = all eligible modules).
+s2d_max_modules = 0
+
+# If true, falls back to k_max when threshold is not reached.
+s2d_selection_fallback_to_kmax = false
+
+# Include text encoder LoRA modules in S2D regularization.
+s2d_include_text_encoder = false
+
+# Use absolute component responses when applying cached spectral directions.
+# Keeps regularization sign-stable between refresh steps.
+s2d_use_abs_response = true
+
 # ============================================================================
 # ⚠️ BLOCKWISE FLOW MATCHING SETTINGS
 # ============================================================================
