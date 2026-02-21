@@ -324,6 +324,7 @@ class BucketBatchManager:
         control_signal_present = []  # Tracks per-item control/reference availability
         mask_signals = []  # Collect mask signals for the batch
         pixels_list = []  # Collect original (or resized) pixel tensors
+        lorweb_analogy_boxes = []  # Optional per-sample [3,4] boxes for A/A'/B panels
         svi_y_anchor_latents = []  # Collect optional SVI y anchor latents
         concept_ids = []
         dataset_indices = []
@@ -523,6 +524,12 @@ class BucketBatchManager:
             if item_info.content is not None:
                 # item_info.content is an np.ndarray resized to bucket resolution
                 arr = item_info.content  # (H,W,C) for images, (F,H,W,C) for videos
+                if arr.ndim == 3:
+                    h, w = arr.shape[0], arr.shape[1]
+                elif arr.ndim == 4:
+                    h, w = arr.shape[1], arr.shape[2]
+                else:
+                    h, w = 0, 0
                 if arr.ndim == 3:  # single image -> create dummy frame dim F=1
                     tensor = (
                         torch.from_numpy(arr).permute(2, 0, 1).unsqueeze(1)
@@ -535,6 +542,48 @@ class BucketBatchManager:
                 # Normalize to [-1,1] like reference implementation
                 tensor = tensor.float().div(127.5).sub(1.0)
                 pixels_list.append(tensor)
+                boxes_required = bool(
+                    getattr(item_info, "lorweb_analogy_boxes_required", False)
+                )
+                boxes_normalized = bool(
+                    getattr(item_info, "lorweb_analogy_boxes_normalized", False)
+                )
+                custom_boxes = None
+                for attr_name in ("lorweb_analogy_boxes", "analogy_boxes"):
+                    candidate = getattr(item_info, attr_name, None)
+                    if candidate is not None:
+                        try:
+                            candidate_tensor = torch.as_tensor(
+                                candidate,
+                                dtype=torch.float32,
+                            )
+                            if candidate_tensor.shape == (3, 4):
+                                custom_boxes = candidate_tensor
+                                break
+                        except Exception:
+                            custom_boxes = None
+                if custom_boxes is not None and boxes_normalized:
+                    custom_boxes = custom_boxes * torch.tensor(
+                        [float(w), float(h), float(w), float(h)],
+                        dtype=torch.float32,
+                    )
+                if custom_boxes is None and h > 1 and w > 1:
+                    h2 = h // 2
+                    w2 = w // 2
+                    custom_boxes = torch.tensor(
+                        [
+                            [0.0, 0.0, float(w2), float(h2)],  # A
+                            [float(w2), 0.0, float(w), float(h2)],  # A'
+                            [0.0, float(h2), float(w2), float(h)],  # B
+                        ],
+                        dtype=torch.float32,
+                    )
+                if custom_boxes is None and boxes_required:
+                    raise ValueError(
+                        "LoRWeB analogy boxes are required for this dataset item "
+                        f"but could not be derived (item_key={item_info.item_key!r})."
+                    )
+                lorweb_analogy_boxes.append(custom_boxes)
 
         for key in batch_tensor_data.keys():
             if key not in varlen_keys:
@@ -597,6 +646,18 @@ class BucketBatchManager:
             # Our pixels_list contains CFHW tensors, which is correct
             # Store as individual tensors to match reference collate_batch format
             batch_tensor_data["pixels"] = pixels_list
+            if any(b is not None for b in lorweb_analogy_boxes):
+                ref_box = next((b for b in lorweb_analogy_boxes if b is not None), None)
+                if ref_box is not None:
+                    stacked_boxes = []
+                    for box in lorweb_analogy_boxes:
+                        if box is None:
+                            stacked_boxes.append(ref_box.clone())
+                        else:
+                            stacked_boxes.append(box)
+                    batch_tensor_data["lorweb_analogy_boxes"] = torch.stack(
+                        stacked_boxes, dim=0
+                    )
 
         # Add item_info to batch for control video caching
         batch_tensor_data["item_info"] = bucket[start:end]

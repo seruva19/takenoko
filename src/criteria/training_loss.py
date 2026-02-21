@@ -300,6 +300,10 @@ class LossComponents:
         The mHC-LoRA identity regularization loss component, if enabled.        
     mhc_entropy_reg: Optional[torch.Tensor]
         The mHC-LoRA mixing entropy regularization loss component, if enabled.  
+    lorweb_entropy_reg: Optional[torch.Tensor]
+        LoRWeB entropy-target regularization loss component, if enabled.
+    lorweb_diversity_reg: Optional[torch.Tensor]
+        LoRWeB basis-usage diversity regularization loss component, if enabled.
     physics_motion_loss: Optional[torch.Tensor]
         Physics-guided motion loss (composite), if enabled.
     physics_motion_translation_loss: Optional[torch.Tensor]
@@ -422,6 +426,8 @@ class LossComponents:
     ortho_reg_q: Optional[torch.Tensor] = None
     mhc_identity_reg: Optional[torch.Tensor] = None
     mhc_entropy_reg: Optional[torch.Tensor] = None
+    lorweb_entropy_reg: Optional[torch.Tensor] = None
+    lorweb_diversity_reg: Optional[torch.Tensor] = None
     physics_motion_loss: Optional[torch.Tensor] = None
     physics_motion_translation_loss: Optional[torch.Tensor] = None
     physics_motion_rotation_loss: Optional[torch.Tensor] = None
@@ -2404,6 +2410,58 @@ class TrainingLossComputer:
         except Exception as e:
             logger.warning(f"mHC-LoRA entropy regularization failed: {e}")
 
+        # ---- Optional LoRWeB entropy/diversity regularization ----
+        lorweb_entropy_val: Optional[torch.Tensor] = None
+        lorweb_diversity_val: Optional[torch.Tensor] = None
+        try:
+            if network is not None and hasattr(network, "unet_loras"):
+                entropy_lam = float(getattr(network, "lorweb_entropy_reg_lambda", 0.0))
+                entropy_target = getattr(network, "lorweb_entropy_reg_target", None)
+                diversity_lam = float(
+                    getattr(network, "lorweb_diversity_reg_lambda", 0.0)
+                )
+
+                if entropy_lam > 0.0:
+                    entropy_sum: Optional[torch.Tensor] = None
+                    entropy_count = 0
+                    for lora in getattr(network, "unet_loras", []):
+                        if hasattr(lora, "mixing_entropy"):
+                            try:
+                                ent = lora.mixing_entropy()  # type: ignore[attr-defined]
+                            except Exception:
+                                ent = None
+                            if ent is not None:
+                                entropy_sum = ent if entropy_sum is None else entropy_sum + ent
+                                entropy_count += 1
+                    if entropy_sum is not None and entropy_count > 0:
+                        avg_entropy = entropy_sum / float(entropy_count)
+                        if entropy_target is None:
+                            basis_size = int(getattr(network, "lorweb_basis_size", 1))
+                            entropy_target = math.log(max(basis_size, 1))
+                        target_tensor = avg_entropy.new_tensor(float(entropy_target))
+                        entropy_loss = (avg_entropy - target_tensor) ** 2
+                        loss = loss + entropy_lam * entropy_loss
+                        lorweb_entropy_val = entropy_loss.detach()
+
+                if diversity_lam > 0.0:
+                    diversity_sum: Optional[torch.Tensor] = None
+                    diversity_count = 0
+                    for lora in getattr(network, "unet_loras", []):
+                        if hasattr(lora, "usage_diversity_regularization"):
+                            try:
+                                div = lora.usage_diversity_regularization()  # type: ignore[attr-defined]
+                            except Exception:
+                                div = None
+                            if div is not None:
+                                diversity_sum = div if diversity_sum is None else diversity_sum + div
+                                diversity_count += 1
+                    if diversity_sum is not None and diversity_count > 0:
+                        diversity_loss = diversity_sum / float(diversity_count)
+                        loss = loss + diversity_lam * diversity_loss
+                        lorweb_diversity_val = diversity_loss.detach()
+        except Exception as e:
+            logger.warning(f"LoRWeB regularization failed: {e}")
+
         return LossComponents(
             total_loss=loss,
             base_loss=base_loss.detach(),
@@ -2453,6 +2511,8 @@ class TrainingLossComputer:
             ortho_reg_q=ortho_q_val,
             mhc_identity_reg=mhc_identity_val,
             mhc_entropy_reg=mhc_entropy_val,
+            lorweb_entropy_reg=lorweb_entropy_val,
+            lorweb_diversity_reg=lorweb_diversity_val,
             physics_motion_loss=physics_motion_loss_value,
             physics_motion_translation_loss=physics_motion_translation_value,
             physics_motion_rotation_loss=physics_motion_rotation_value,

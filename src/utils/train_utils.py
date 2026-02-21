@@ -2,6 +2,7 @@ import argparse
 
 import os
 import shutil
+import inspect
 
 import accelerate
 
@@ -561,14 +562,30 @@ def prepare_accelerator(args: argparse.Namespace) -> Accelerator:
             dynamic=args.dynamo_dynamic,
         )
 
-    accelerator = Accelerator(
-        gradient_accumulation_steps=args.gradient_accumulation_steps,
-        mixed_precision=args.mixed_precision,
-        log_with=log_with,
-        project_dir=logging_dir,
-        dynamo_plugin=dynamo_plugin,
-        kwargs_handlers=kwargs_handlers,
-    )
+    accelerator_kwargs = {
+        "gradient_accumulation_steps": args.gradient_accumulation_steps,
+        "mixed_precision": args.mixed_precision,
+        "log_with": log_with,
+        "project_dir": logging_dir,
+        "kwargs_handlers": kwargs_handlers,
+    }
+
+    # Backward compatibility across accelerate versions.
+    # Some versions do not expose `dynamo_plugin` on Accelerator.__init__.
+    supported_params = set(inspect.signature(Accelerator.__init__).parameters.keys())
+    if dynamo_plugin is not None:
+        if "dynamo_plugin" in supported_params:
+            accelerator_kwargs["dynamo_plugin"] = dynamo_plugin
+        else:
+            logger.warning(
+                "Accelerate version does not support `dynamo_plugin`; "
+                "falling back without TorchDynamo integration."
+            )
+
+    if "project_dir" not in supported_params:
+        accelerator_kwargs.pop("project_dir", None)
+
+    accelerator = Accelerator(**accelerator_kwargs)
     return accelerator
 
 

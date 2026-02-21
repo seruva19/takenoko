@@ -2074,6 +2074,42 @@ class TrainingCore:
                                 unwrapped_net.set_mhc_timestep(timesteps)
                         except Exception:
                             pass
+                    try:
+                        if unwrapped_net is None:
+                            unwrapped_net = accelerator.unwrap_model(network)
+                        if hasattr(unwrapped_net, "set_lorweb_runtime_condition"):
+                            control_signal = None
+                            pixels = None
+                            analogy_boxes = None
+                            if isinstance(batch, dict):
+                                maybe_control = batch.get("control_signal")
+                                if isinstance(maybe_control, torch.Tensor):
+                                    control_signal = maybe_control.to(
+                                        device=latents_for_dit.device
+                                    )
+                                maybe_pixels = batch.get("pixels")
+                                if isinstance(maybe_pixels, list) and len(maybe_pixels) > 0:
+                                    tensor_pixels = [p for p in maybe_pixels if isinstance(p, torch.Tensor)]
+                                    if len(tensor_pixels) == len(maybe_pixels):
+                                        pixels = torch.stack(tensor_pixels, dim=0).to(
+                                            device=latents_for_dit.device
+                                        )
+                                elif isinstance(maybe_pixels, torch.Tensor):
+                                    pixels = maybe_pixels.to(device=latents_for_dit.device)
+                                maybe_boxes = batch.get("lorweb_analogy_boxes")
+                                if isinstance(maybe_boxes, torch.Tensor):
+                                    analogy_boxes = maybe_boxes.to(
+                                        device=latents_for_dit.device
+                                    )
+                            unwrapped_net.set_lorweb_runtime_condition(
+                                latents=latents_for_dit,
+                                control_signal=control_signal,
+                                pixels=pixels,
+                                analogy_boxes=analogy_boxes,
+                                timesteps=timesteps,
+                            )
+                    except Exception:
+                        pass
 
                     if weighting is None:
                         weighting = compute_loss_weighting_for_sd3(

@@ -400,7 +400,7 @@ lr_scheduler_args = ''
 
 # Network module to train: "networks.lora_wan", "networks.ic_lora_wan", "networks.riemann_lora_wan", "networks.control_lora_wan",
 # "networks.reward_lora", "networks.vae_wan", "lycoris.kohya", "networks.t_lora", "networks.tc_lora_wan", "networks.moc_lora",
-# "networks.mhc_lora", "networks.singlora_wan", "networks.wan_finetune", "networks.slider_lora_wan",
+# "networks.mhc_lora", "networks.lorweb_lora_wan", "networks.singlora_wan", "networks.wan_finetune", "networks.slider_lora_wan",
 # "networks.relora_wan", "networks.adalora_wan", "networks.mora_wan", "networks.vera_wan"
 # The module defines trainable adapters and is imported dynamically by the trainer.
 network_module = "networks.lora_wan"
@@ -724,6 +724,91 @@ network_alpha = 32
 #   "mhc_identity_reg_power=1.0",
 #   "mhc_entropy_reg_lambda=0.0",
 #   "mhc_entropy_reg_target=null"
+# ]
+
+# LoRWeB-LoRA (LoRA basis + query-conditioned mixing)
+# Activated when network_module = "networks.lorweb_lora_wan".
+# This keeps standard LoRA behavior shape-compatible while replacing each adapter with:
+# - a basis of N rank-r LoRA components
+# - learned key vectors
+# - a query projection that predicts per-sample mixing coefficients
+# Parameters:
+# - lorweb_basis_size: number of basis adapters N (int >= 1, default 32)
+# - lorweb_keys_dim: key/query inner dimension d (int >= 1, default 128)
+# - lorweb_heads: number of attention heads for mixing logits (int >= 1, default 1)
+#   Must divide lorweb_keys_dim.
+# - lorweb_softmax: use softmax-normalized coefficients (bool, default true)
+#   false uses tanh logits and supports signed mixing.
+# - lorweb_mixing_coeffs_type: "mean" (default) or "sum"
+# - lorweb_query_projection_type: "linear" (default) or "none"
+#   "none" requires query dim == lorweb_keys_dim.
+# - lorweb_query_pooling: "avg" (default) or "max" token pooling for internal query.
+# - lorweb_query_mode: token query extraction mode for internal-query path.
+#   Supported:
+#   "all_tokens" (default), "first_half", "last_half", "first_three_quarters",
+#   "aa'bb'", "caa'bb'", "caa'b", "caa'".
+# - lorweb_query_l2_normalize: L2-normalize query and keys before logits (bool, default false)
+# - lorweb_external_query: enable runtime external query vector path (bool, default false)
+# - lorweb_external_query_dim: expected external query dimension before optional triplet concat (int >= 1, default 128)
+# - lorweb_external_query_mode: external query construction mode when lorweb_external_query=true.
+#   Supported:
+#   "global" (default), "triplet_concat", "aa'bb'", "caa'bb'", "caa'b", "caa'",
+#   "paa'b", "paa'b3", "ca'-ca", "ca'-ca+cb", "cat-aa'b", "cat-paa'b", "cat-paa'b3".
+# - lorweb_runtime_source: external query source when enabled: "auto" (default),
+#   "pixels", "latents", or "control_signal"
+# - lorweb_external_query_encoder: external frozen image encoder for query extraction
+#   "none" (default), "clip", or "siglip2"
+# - lorweb_external_query_model_name: optional huggingface model id for encoder (default "")
+# - lorweb_external_query_image_size: resize target for encoder input (int >= 8, default 224)
+# - lorweb_external_query_cache: cache external encoder embeddings by image hash (bool, default false)
+# - lorweb_external_query_cache_size: max cache entries when cache is enabled (int >= 1, default 512)
+# - lorweb_external_query_encode_batch_size: encoder forward chunk size (int >= 0, 0 = full batch)
+# - lorweb_external_query_autocast_dtype: "none" (default), "fp16", or "bf16" for encoder forward autocast
+# - lorweb_external_query_encoder_offload_interval: move encoder back to CPU every N encode calls (int >= 0, 0 disables)
+# - lorweb_video_query_frame_strategy: frame selection for video sources:
+#   "mean" (default), "first", "middle", "last", "motion_weighted"
+# - lorweb_entropy_reg_lambda: entropy-target regularization weight (float >= 0, default 0.0)
+# - lorweb_entropy_reg_target: optional entropy target; null/none defaults to log(basis_size)
+# - lorweb_diversity_reg_lambda: basis-usage diversity regularization weight (float >= 0, default 0.0)
+# - lorweb_layer_stats_limit: emit per-layer entropy/max stats for first N LoRWeB modules (int >= 0, default 0)
+# - lorweb_topk_basis: emit top-k basis usage indices/coeffs in logs (int >= 0, default 0)
+# - lorweb_mix_log_interval: scalar stats log interval in steps (int >= 1, default 100)
+# - lorweb_mix_histogram_interval: histogram log interval in steps (int >= 1, default 500)
+# - lorweb_mix_warn_entropy_min: warn if entropy drops below this value (float >= 0, default 0.05)
+# - lorweb_mix_warn_max_coeff_max: warn if max coeff rises above this value (float in [0,1], default 0.95)
+# Example:
+# network_args = [
+#   "lorweb_basis_size=32",
+#   "lorweb_keys_dim=128",
+#   "lorweb_heads=1",
+#   "lorweb_softmax=true",
+#   "lorweb_mixing_coeffs_type=mean",
+#   "lorweb_query_projection_type=linear",
+#   "lorweb_query_pooling=avg",
+#   "lorweb_query_mode=all_tokens",
+#   "lorweb_query_l2_normalize=false",
+#   "lorweb_external_query=false",
+#   "lorweb_external_query_dim=128",
+#   "lorweb_external_query_mode=global",
+#   "lorweb_runtime_source=auto",
+#   "lorweb_external_query_encoder=none",
+#   "lorweb_external_query_model_name=",
+#   "lorweb_external_query_image_size=224",
+#   "lorweb_external_query_cache=false",
+#   "lorweb_external_query_cache_size=512",
+#   "lorweb_external_query_encode_batch_size=0",
+#   "lorweb_external_query_autocast_dtype=none",
+#   "lorweb_external_query_encoder_offload_interval=0",
+#   "lorweb_video_query_frame_strategy=mean",
+#   "lorweb_entropy_reg_lambda=0.0",
+#   "lorweb_entropy_reg_target=null",
+#   "lorweb_diversity_reg_lambda=0.0",
+#   "lorweb_layer_stats_limit=0",
+#   "lorweb_topk_basis=0",
+#   "lorweb_mix_log_interval=100",
+#   "lorweb_mix_histogram_interval=500",
+#   "lorweb_mix_warn_entropy_min=0.05",
+#   "lorweb_mix_warn_max_coeff_max=0.95"
 # ]
 
 # SingLoRA-specific parameters
@@ -6967,6 +7052,23 @@ sequence_batches_report_names = false
 # Masks should be binary: 0 = unmasked regions, 255 = masked regions
 # For videos: masks can be per-frame or single mask applied to all frames       
 # mask_path = "/path/to/mask/images"
+
+# Optional LoRWeB panel boxes for [A, A', B], as [[x0,y0,x1,y1], ...].
+# These are consumed when network_module = "networks.lorweb_lora_wan" and
+# lorweb_runtime_source includes pixels/control_signal/auto.
+# Coordinates are pixel-space by default unless normalized=true.
+# lorweb_analogy_boxes = [
+#   [0.0, 0.0, 256.0, 256.0],      # A
+#   [256.0, 0.0, 512.0, 256.0],    # A'
+#   [0.0, 256.0, 256.0, 512.0],    # B
+# ]
+
+# Treat lorweb_analogy_boxes as normalized [0,1] XYXY if true.
+# lorweb_analogy_boxes_normalized = false
+
+# If true, dataloader raises when analogy boxes cannot be derived for a sample.
+# Default false falls back to quadrant boxes when pixels are available.
+# lorweb_analogy_boxes_required = false
 
 # Optional concept metadata used for contrastive attention separation.
 # concept_id defaults to dataset index if omitted.

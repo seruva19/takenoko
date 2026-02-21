@@ -322,6 +322,14 @@ def collect_and_log_training_metrics(
         logs["loss/mhc_entropy_reg"] = float(
             loss_components.mhc_entropy_reg.item()
         )
+    if getattr(loss_components, "lorweb_entropy_reg", None) is not None:
+        logs["loss/lorweb_entropy_reg"] = float(
+            loss_components.lorweb_entropy_reg.item()
+        )
+    if getattr(loss_components, "lorweb_diversity_reg", None) is not None:
+        logs["loss/lorweb_diversity_reg"] = float(
+            loss_components.lorweb_diversity_reg.item()
+        )
     mhc_stats = None
     mhc_log_interval = int(getattr(args, "mhc_mix_log_interval", 100))
     mhc_hist_interval = int(getattr(args, "mhc_mix_histogram_interval", 500))
@@ -340,6 +348,26 @@ def collect_and_log_training_metrics(
                 logs.update(mhc_stats)
         except Exception:
             mhc_stats = None
+    lorweb_stats = None
+    lorweb_log_interval = int(getattr(args, "lorweb_mix_log_interval", 100))
+    lorweb_hist_interval = int(getattr(args, "lorweb_mix_histogram_interval", 500))
+    lorweb_should_log = (
+        getattr(args, "network_module", "") == "networks.lorweb_lora_wan"
+        and global_step % lorweb_log_interval == 0
+    )
+    lorweb_should_hist = (
+        getattr(args, "network_module", "") == "networks.lorweb_lora_wan"
+        and global_step % lorweb_hist_interval == 0
+    )
+    if (lorweb_should_log or lorweb_should_hist) and hasattr(
+        network, "get_lorweb_mixing_stats"
+    ):
+        try:
+            lorweb_stats = network.get_lorweb_mixing_stats()
+            if isinstance(lorweb_stats, dict) and lorweb_should_log:
+                logs.update(lorweb_stats)
+        except Exception:
+            lorweb_stats = None
     if getattr(loss_components, "memflow_guidance_loss", None) is not None:
         logs["loss/memflow_guidance"] = float(
             loss_components.memflow_guidance_loss.item()
@@ -526,6 +554,48 @@ def collect_and_log_training_metrics(
                         if tracker.name == "tensorboard":
                             tracker.writer.add_histogram(
                                 "mhc/mixing_weights",
+                                hist_data.detach().cpu(),
+                                global_step,
+                            )
+                            break
+            except Exception:
+                pass
+
+    # LoRWeB mixing histograms and collapse warnings
+    if lorweb_stats is not None and (lorweb_should_log or lorweb_should_hist):
+        try:
+            warn_entropy_min = float(
+                getattr(args, "lorweb_mix_warn_entropy_min", 0.05)
+            )
+            warn_max_coeff_max = float(
+                getattr(args, "lorweb_mix_warn_max_coeff_max", 0.95)
+            )
+            entropy_val = float(lorweb_stats.get("lorweb/mixing_entropy", math.nan))
+            max_coeff_val = float(
+                lorweb_stats.get("lorweb/mixing_max_coeff", math.nan)
+            )
+            if not math.isnan(entropy_val) and entropy_val < warn_entropy_min:
+                logger.warning(
+                    "LoRWeB mixing entropy low: %.4f < %.4f",
+                    entropy_val,
+                    warn_entropy_min,
+                )
+            if not math.isnan(max_coeff_val) and max_coeff_val > warn_max_coeff_max:
+                logger.warning(
+                    "LoRWeB mixing max coeff high: %.4f > %.4f",
+                    max_coeff_val,
+                    warn_max_coeff_max,
+                )
+        except Exception:
+            pass
+        if lorweb_should_hist and hasattr(network, "get_lorweb_mixing_histogram"):
+            try:
+                hist_data = network.get_lorweb_mixing_histogram()
+                if isinstance(hist_data, torch.Tensor) and hist_data.numel() > 0:
+                    for tracker in accelerator.trackers:
+                        if tracker.name == "tensorboard":
+                            tracker.writer.add_histogram(
+                                "lorweb/mixing_weights",
                                 hist_data.detach().cpu(),
                                 global_step,
                             )

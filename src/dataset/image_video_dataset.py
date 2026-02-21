@@ -89,6 +89,9 @@ class BaseDataset(torch.utils.data.Dataset):
         sequence_batches_pattern: Optional[str] = None,
         sequence_batches_validate_names: bool = False,
         sequence_batches_report_names: bool = False,
+        lorweb_analogy_boxes: Optional[list[list[float]]] = None,
+        lorweb_analogy_boxes_normalized: bool = False,
+        lorweb_analogy_boxes_required: bool = False,
     ):
         # TODO: REFACTOR - Hardcoded default resolution should be configurable
         self.resolution = resolution
@@ -113,6 +116,9 @@ class BaseDataset(torch.utils.data.Dataset):
         self.sequence_batches_pattern = sequence_batches_pattern
         self.sequence_batches_validate_names = bool(sequence_batches_validate_names)
         self.sequence_batches_report_names = bool(sequence_batches_report_names)
+        self.lorweb_analogy_boxes = lorweb_analogy_boxes
+        self.lorweb_analogy_boxes_normalized = bool(lorweb_analogy_boxes_normalized)
+        self.lorweb_analogy_boxes_required = bool(lorweb_analogy_boxes_required)
         self.seed = None
         self.current_epoch = 0
         self.shared_epoch: Optional["Synchronized[int]"] = (
@@ -216,6 +222,21 @@ class BaseDataset(torch.utils.data.Dataset):
             item_info.concept_id = self.concept_id
         if getattr(item_info, "concept_name", None) is None:
             item_info.concept_name = self.concept_name
+        if (
+            getattr(item_info, "lorweb_analogy_boxes", None) is None
+            and self.lorweb_analogy_boxes is not None
+        ):
+            item_info.lorweb_analogy_boxes = [
+                [float(v) for v in box] for box in self.lorweb_analogy_boxes
+            ]
+        if getattr(item_info, "lorweb_analogy_boxes_normalized", None) is None:
+            item_info.lorweb_analogy_boxes_normalized = bool(
+                self.lorweb_analogy_boxes_normalized
+            )
+        if getattr(item_info, "lorweb_analogy_boxes_required", None) is None:
+            item_info.lorweb_analogy_boxes_required = bool(
+                self.lorweb_analogy_boxes_required
+            )
 
     def _propagate_dataset_metadata(self) -> None:
         manager = getattr(self, "batch_manager", None)
@@ -245,6 +266,11 @@ class BaseDataset(torch.utils.data.Dataset):
             "num_repeats": self.num_repeats,
             "enable_bucket": bool(self.enable_bucket),
             "bucket_no_upscale": bool(self.bucket_no_upscale),
+            "lorweb_analogy_boxes_configured": self.lorweb_analogy_boxes is not None,
+            "lorweb_analogy_boxes_normalized": bool(
+                self.lorweb_analogy_boxes_normalized
+            ),
+            "lorweb_analogy_boxes_required": bool(self.lorweb_analogy_boxes_required),
         }
         return metadata
 
@@ -593,6 +619,9 @@ class ImageDataset(BaseDataset):
         sequence_batches_pattern: Optional[str] = None,
         sequence_batches_validate_names: bool = False,
         sequence_batches_report_names: bool = False,
+        lorweb_analogy_boxes: Optional[list[list[float]]] = None,
+        lorweb_analogy_boxes_normalized: bool = False,
+        lorweb_analogy_boxes_required: bool = False,
     ):
         super().__init__(
             resolution=resolution,
@@ -615,6 +644,9 @@ class ImageDataset(BaseDataset):
             sequence_batches_pattern=sequence_batches_pattern,
             sequence_batches_validate_names=sequence_batches_validate_names,
             sequence_batches_report_names=sequence_batches_report_names,
+            lorweb_analogy_boxes=lorweb_analogy_boxes,
+            lorweb_analogy_boxes_normalized=lorweb_analogy_boxes_normalized,
+            lorweb_analogy_boxes_required=lorweb_analogy_boxes_required,
         )
 
         self.image_directory = image_directory
@@ -1313,6 +1345,9 @@ class VideoDataset(BaseDataset):
         sequence_batches_pattern: Optional[str] = None,
         sequence_batches_validate_names: bool = False,
         sequence_batches_report_names: bool = False,
+        lorweb_analogy_boxes: Optional[list[list[float]]] = None,
+        lorweb_analogy_boxes_normalized: bool = False,
+        lorweb_analogy_boxes_required: bool = False,
     ):
         super().__init__(
             resolution=resolution,
@@ -1335,6 +1370,9 @@ class VideoDataset(BaseDataset):
             sequence_batches_pattern=sequence_batches_pattern,
             sequence_batches_validate_names=sequence_batches_validate_names,
             sequence_batches_report_names=sequence_batches_report_names,
+            lorweb_analogy_boxes=lorweb_analogy_boxes,
+            lorweb_analogy_boxes_normalized=lorweb_analogy_boxes_normalized,
+            lorweb_analogy_boxes_required=lorweb_analogy_boxes_required,
         )
 
         self.video_directory = video_directory

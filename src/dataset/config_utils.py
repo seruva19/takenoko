@@ -63,6 +63,9 @@ class BaseDatasetParams:
     sequence_batches_pattern: Optional[str] = None  # Regex for sequence grouping
     sequence_batches_validate_names: bool = False  # Fail fast on naming mismatch
     sequence_batches_report_names: bool = False  # Log mismatches without abort
+    lorweb_analogy_boxes: Optional[list[list[float]]] = None  # Optional dataset-level A/A'/B boxes
+    lorweb_analogy_boxes_normalized: bool = False  # Treat boxes as normalized [0,1] XYXY when true
+    lorweb_analogy_boxes_required: bool = False  # Fail if per-item panels cannot be derived
 
 
 @dataclass
@@ -182,6 +185,9 @@ class ConfigSanitizer:
         "sequence_batches_pattern": str,
         "sequence_batches_validate_names": bool,
         "sequence_batches_report_names": bool,
+        "lorweb_analogy_boxes": list,
+        "lorweb_analogy_boxes_normalized": bool,
+        "lorweb_analogy_boxes_required": bool,
     }
     IMAGE_DATASET_DISTINCT_SCHEMA = {
         "image_directory": str,
@@ -442,6 +448,50 @@ class BlueprintGenerator:
                         logger.info(
                             f"📐 Auto-enabled dimension-constrained mode for resolution {res_value}"
                         )
+
+        # LoRWeB analogy metadata contract validation.
+        if "lorweb_analogy_boxes" in params:
+            boxes = params.get("lorweb_analogy_boxes")
+            normalized = bool(params.get("lorweb_analogy_boxes_normalized", False))
+            if boxes is not None:
+                if not isinstance(boxes, list) or len(boxes) != 3:
+                    raise ValueError(
+                        "lorweb_analogy_boxes must be a list of exactly 3 boxes "
+                        "for [A, A', B]."
+                    )
+                validated_boxes: list[list[float]] = []
+                for idx, box in enumerate(boxes):
+                    if not isinstance(box, (list, tuple)) or len(box) != 4:
+                        raise ValueError(
+                            f"lorweb_analogy_boxes[{idx}] must be [x0, y0, x1, y1]."
+                        )
+                    try:
+                        x0, y0, x1, y1 = [float(v) for v in box]
+                    except Exception as exc:
+                        raise ValueError(
+                            f"lorweb_analogy_boxes[{idx}] must contain numeric XYXY coordinates."
+                        ) from exc
+                    if not (x0 < x1 and y0 < y1):
+                        raise ValueError(
+                            f"lorweb_analogy_boxes[{idx}] must satisfy x0<x1 and y0<y1."
+                        )
+                    if normalized and (
+                        x0 < 0.0
+                        or y0 < 0.0
+                        or x1 > 1.0
+                        or y1 > 1.0
+                    ):
+                        raise ValueError(
+                            "lorweb_analogy_boxes_normalized=true requires coordinates within [0,1]."
+                        )
+                    validated_boxes.append([x0, y0, x1, y1])
+                # Enforce ordering contract: A (top-left-ish), A' (top-right-ish), B (bottom-left-ish)
+                a_box, atag_box, b_box = validated_boxes
+                if not (a_box[0] <= atag_box[0] and a_box[1] <= b_box[1]):
+                    raise ValueError(
+                        "lorweb_analogy_boxes must be ordered as [A, A', B] with A preceding A' horizontally and B vertically."
+                    )
+                params["lorweb_analogy_boxes"] = validated_boxes
 
         return param_klass(**params)
 

@@ -29,6 +29,9 @@ class ItemInfo:
         dataset_index: Optional[int] = None,
         concept_id: Optional[int] = None,
         concept_name: Optional[str] = None,
+        lorweb_analogy_boxes: Optional[list[list[float]]] = None,
+        lorweb_analogy_boxes_normalized: Optional[bool] = None,
+        lorweb_analogy_boxes_required: Optional[bool] = None,
     ) -> None:
         self.item_key = item_key
         self.caption = caption
@@ -47,6 +50,9 @@ class ItemInfo:
         self.dataset_index = dataset_index
         self.concept_id = concept_id
         self.concept_name = concept_name
+        self.lorweb_analogy_boxes = lorweb_analogy_boxes
+        self.lorweb_analogy_boxes_normalized = lorweb_analogy_boxes_normalized
+        self.lorweb_analogy_boxes_required = lorweb_analogy_boxes_required
 
     def __str__(self) -> str:
         return (
