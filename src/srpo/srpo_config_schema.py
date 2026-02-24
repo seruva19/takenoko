@@ -9,6 +9,7 @@ It is instantiated from argparse.Namespace during config loading.
 from dataclasses import dataclass
 from typing import List, Optional
 import logging
+import math
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +84,39 @@ class SRPOConfig:
     )
     srpo_optical_flow_weight: float = 0.0  # Weight for optical flow smoothness reward
     srpo_motion_quality_weight: float = 0.0  # Weight for motion quality reward
+
+    # Self-Paced GRPO-inspired co-evolving reward mixing (default off)
+    srpo_enable_self_paced_reward: bool = False
+    srpo_self_paced_visual_threshold: float = 0.75
+    srpo_self_paced_temporal_threshold: float = 0.75
+    srpo_self_paced_semantic_threshold: float = 0.75
+    srpo_self_paced_softmax_beta: float = 5.0
+    srpo_self_paced_sparsity_lambda: float = 0.5
+    srpo_self_paced_sigmoid_scale: float = 8.0
+    srpo_self_paced_visual_scale: float = 1.0
+    srpo_self_paced_temporal_scale: float = 1.0
+    srpo_self_paced_semantic_scale: float = 1.0
+    srpo_self_paced_enable_advantage_norm: bool = True
+    srpo_self_paced_advantage_norm_eps: float = 1e-6
+    srpo_self_paced_use_grpo_clip_objective: bool = False
+    srpo_self_paced_grpo_clip_eps: float = 1e-4
+    srpo_self_paced_policy_std: float = 1.0
+    srpo_self_paced_apply_discount_to_grpo: bool = True
+    srpo_self_paced_use_lagged_old_policy: bool = True
+    srpo_self_paced_old_policy_update_interval: int = 1
+    srpo_self_paced_old_policy_offload_cpu: bool = True
+    srpo_self_paced_logprob_mode: str = "action_gaussian"
+    srpo_self_paced_enable_offline_threshold_calibration: bool = False
+    srpo_self_paced_offline_calibration_steps: int = 12
+    srpo_self_paced_offline_calibration_batch_size: int = 0
+    srpo_self_paced_offline_calibration_update_network: bool = False
+    srpo_self_paced_enable_prompt_curriculum: bool = False
+    srpo_self_paced_stage1_visual_prompt_suffix: str = ""
+    srpo_self_paced_stage3_semantic_prompt_suffix: str = ""
+    srpo_self_paced_auto_calibrate_thresholds: bool = False
+    srpo_self_paced_threshold_calibration_factor: float = 0.7
+    srpo_self_paced_threshold_calibration_warmup_steps: int = 50
+    srpo_self_paced_threshold_calibration_momentum: float = 0.9
 
     # Euphonium-inspired SRPO enhancement (default off for behavior preservation)
     srpo_enable_euphonium: bool = False
@@ -256,6 +290,120 @@ class SRPOConfig:
             raise ValueError(
                 f"srpo_reward_num_frames must be >= 1, got {self.srpo_reward_num_frames}"
             )
+
+        # Validate self-paced reward mixing settings
+        if self.srpo_enable_self_paced_reward:
+            if self.srpo_self_paced_softmax_beta <= 0.0:
+                raise ValueError(
+                    "srpo_self_paced_softmax_beta must be > 0, got "
+                    f"{self.srpo_self_paced_softmax_beta}"
+                )
+            if self.srpo_self_paced_sigmoid_scale <= 0.0:
+                raise ValueError(
+                    "srpo_self_paced_sigmoid_scale must be > 0, got "
+                    f"{self.srpo_self_paced_sigmoid_scale}"
+                )
+            if self.srpo_self_paced_advantage_norm_eps <= 0.0:
+                raise ValueError(
+                    "srpo_self_paced_advantage_norm_eps must be > 0, got "
+                    f"{self.srpo_self_paced_advantage_norm_eps}"
+                )
+            if not (0.0 < self.srpo_self_paced_grpo_clip_eps <= 1.0):
+                raise ValueError(
+                    "srpo_self_paced_grpo_clip_eps must be in (0, 1], got "
+                    f"{self.srpo_self_paced_grpo_clip_eps}"
+                )
+            if self.srpo_self_paced_policy_std <= 0.0:
+                raise ValueError(
+                    "srpo_self_paced_policy_std must be > 0, got "
+                    f"{self.srpo_self_paced_policy_std}"
+                )
+            if self.srpo_self_paced_old_policy_update_interval < 1:
+                raise ValueError(
+                    "srpo_self_paced_old_policy_update_interval must be >= 1, got "
+                    f"{self.srpo_self_paced_old_policy_update_interval}"
+                )
+            if self.srpo_self_paced_logprob_mode not in (
+                "action_gaussian",
+                "latent_error_proxy",
+            ):
+                raise ValueError(
+                    "srpo_self_paced_logprob_mode must be 'action_gaussian' or "
+                    f"'latent_error_proxy', got {self.srpo_self_paced_logprob_mode!r}"
+                )
+            if self.srpo_self_paced_offline_calibration_steps < 1:
+                raise ValueError(
+                    "srpo_self_paced_offline_calibration_steps must be >= 1, got "
+                    f"{self.srpo_self_paced_offline_calibration_steps}"
+                )
+            if self.srpo_self_paced_offline_calibration_batch_size < 0:
+                raise ValueError(
+                    "srpo_self_paced_offline_calibration_batch_size must be >= 0, got "
+                    f"{self.srpo_self_paced_offline_calibration_batch_size}"
+                )
+            if self.srpo_self_paced_visual_scale < 0.0:
+                raise ValueError(
+                    "srpo_self_paced_visual_scale must be >= 0, got "
+                    f"{self.srpo_self_paced_visual_scale}"
+                )
+            if self.srpo_self_paced_temporal_scale < 0.0:
+                raise ValueError(
+                    "srpo_self_paced_temporal_scale must be >= 0, got "
+                    f"{self.srpo_self_paced_temporal_scale}"
+                )
+            if self.srpo_self_paced_semantic_scale < 0.0:
+                raise ValueError(
+                    "srpo_self_paced_semantic_scale must be >= 0, got "
+                    f"{self.srpo_self_paced_semantic_scale}"
+                )
+            if (
+                self.srpo_self_paced_visual_scale
+                + self.srpo_self_paced_temporal_scale
+                + self.srpo_self_paced_semantic_scale
+                <= 0.0
+            ):
+                raise ValueError(
+                    "At least one self-paced reward scale must be > 0 "
+                    "(srpo_self_paced_visual_scale / temporal_scale / semantic_scale)."
+                )
+            threshold_values = [
+                self.srpo_self_paced_visual_threshold,
+                self.srpo_self_paced_temporal_threshold,
+                self.srpo_self_paced_semantic_threshold,
+            ]
+            for threshold_name, threshold_value in zip(
+                (
+                    "srpo_self_paced_visual_threshold",
+                    "srpo_self_paced_temporal_threshold",
+                    "srpo_self_paced_semantic_threshold",
+                ),
+                threshold_values,
+            ):
+                if not math.isfinite(float(threshold_value)):
+                    raise ValueError(f"{threshold_name} must be finite, got {threshold_value}")
+            if self.srpo_batch_size < 2:
+                logger.warning(
+                    "Self-Paced SRPO is enabled with srpo_batch_size=%d. "
+                    "Batch-size 1 has weak group-relative statistics.",
+                    self.srpo_batch_size,
+                )
+                if self.srpo_self_paced_enable_advantage_norm:
+                    logger.warning(
+                        "Self-Paced SRPO advantage normalization is enabled with batch_size=1; "
+                        "normalization may be skipped when variance is near zero."
+                    )
+            if self.srpo_self_paced_threshold_calibration_warmup_steps < 1:
+                raise ValueError(
+                    "srpo_self_paced_threshold_calibration_warmup_steps must be >= 1, got "
+                    f"{self.srpo_self_paced_threshold_calibration_warmup_steps}"
+                )
+            if not (
+                0.0 <= self.srpo_self_paced_threshold_calibration_momentum < 1.0
+            ):
+                raise ValueError(
+                    "srpo_self_paced_threshold_calibration_momentum must be in [0,1), got "
+                    f"{self.srpo_self_paced_threshold_calibration_momentum}"
+                )
 
         # Validate Euphonium integration settings
         valid_dual_reward_modes = ["none", "only", "both"]
@@ -451,6 +599,37 @@ def validate_srpo_config(config: SRPOConfig) -> None:
         f"SRPO config summary: {config.srpo_reward_model_name} reward model, "
         f"{config.srpo_num_training_steps} steps, batch_size={config.srpo_batch_size}"
     )
+    if config.srpo_enable_self_paced_reward:
+        logger.info(
+            "SRPO Self-Paced reward enabled: thresholds=(%.3f, %.3f, %.3f), beta=%.3f, lambda=%.3f, "
+            "sigmoid_scale=%.3f, scales=(%.3f, %.3f, %.3f), advantage_norm=%s, eps=%.2e, "
+            "grpo_clip=%s, clip_eps=%.6f, policy_std=%.4f, lagged_old=%s, old_update=%d, offload_cpu=%s, "
+            "logprob_mode=%s, prompt_curriculum=%s, auto_calibrate=%s, offline_calibration=%s/%d batch=%d update=%s",
+            config.srpo_self_paced_visual_threshold,
+            config.srpo_self_paced_temporal_threshold,
+            config.srpo_self_paced_semantic_threshold,
+            config.srpo_self_paced_softmax_beta,
+            config.srpo_self_paced_sparsity_lambda,
+            config.srpo_self_paced_sigmoid_scale,
+            config.srpo_self_paced_visual_scale,
+            config.srpo_self_paced_temporal_scale,
+            config.srpo_self_paced_semantic_scale,
+            config.srpo_self_paced_enable_advantage_norm,
+            config.srpo_self_paced_advantage_norm_eps,
+            config.srpo_self_paced_use_grpo_clip_objective,
+            config.srpo_self_paced_grpo_clip_eps,
+            config.srpo_self_paced_policy_std,
+            config.srpo_self_paced_use_lagged_old_policy,
+            config.srpo_self_paced_old_policy_update_interval,
+            config.srpo_self_paced_old_policy_offload_cpu,
+            config.srpo_self_paced_logprob_mode,
+            config.srpo_self_paced_enable_prompt_curriculum,
+            config.srpo_self_paced_auto_calibrate_thresholds,
+            config.srpo_self_paced_enable_offline_threshold_calibration,
+            config.srpo_self_paced_offline_calibration_steps,
+            config.srpo_self_paced_offline_calibration_batch_size,
+            config.srpo_self_paced_offline_calibration_update_network,
+        )
     if config.srpo_enable_euphonium:
         logger.info(
             "SRPO Euphonium enabled: guidance=%s process_model=%s dtype=%s grad_mode=%s spsa_sigma=%.6f spsa_samples=%d scale=%.4f kl_beta=%.4f eta=%.4f recovery_guidance=%s mode=%s process_coef=%.3f outcome_coef=%.3f",

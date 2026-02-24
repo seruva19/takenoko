@@ -11,7 +11,8 @@ This module orchestrates the complete SRPO training pipeline:
 This is a STANDALONE training loop - it does NOT inherit from TrainingCore.
 """
 
-from typing import Dict, List, Any
+from typing import Any, Dict, List
+import copy
 import torch
 import torch.nn as nn
 from torch.cuda.amp import autocast
@@ -22,7 +23,11 @@ import random
 from srpo.srpo_config_schema import SRPOConfig
 from srpo.srpo_reward_models import create_reward_model
 from srpo.srpo_direct_align import DirectAlignEngine
-from srpo.srpo_video_rewards import VideoRewardAggregator
+from srpo.srpo_video_rewards import TemporalConsistencyReward, VideoRewardAggregator
+from srpo.srpo_self_paced_reward import (
+    SelfPacedRewardMixer,
+    compute_grpo_clipped_objective,
+)
 from srpo.euphonium_integration import (
     apply_process_reward_guidance,
     combine_dual_reward_signal,
@@ -66,7 +71,10 @@ class SRPOTrainingCore:
         self.text_encoder = text_encoder
         self.args = args
         self._last_euphonium_metrics: Dict[str, float] = {}
+        self._last_self_paced_metrics: Dict[str, float] = {}
         self.process_reward_model = None
+        self._old_policy_network_state: Dict[str, torch.Tensor] | None = None
+        self._old_policy_snapshot_step: int = -1
 
         # Initialize reward model
         reward_dtype = {
@@ -97,6 +105,29 @@ class SRPOTrainingCore:
             logger.info(f"✓ Video-specific rewards enabled")
         else:
             self.video_reward_aggregator = None
+
+        self.self_paced_reward_mixer = None
+        self.self_paced_temporal_reward = None
+        if srpo_config.srpo_enable_self_paced_reward:
+            self.self_paced_reward_mixer = SelfPacedRewardMixer(
+                visual_threshold=srpo_config.srpo_self_paced_visual_threshold,
+                temporal_threshold=srpo_config.srpo_self_paced_temporal_threshold,
+                semantic_threshold=srpo_config.srpo_self_paced_semantic_threshold,
+                softmax_beta=srpo_config.srpo_self_paced_softmax_beta,
+                sparsity_lambda=srpo_config.srpo_self_paced_sparsity_lambda,
+                sigmoid_scale=srpo_config.srpo_self_paced_sigmoid_scale,
+                enable_advantage_norm=srpo_config.srpo_self_paced_enable_advantage_norm,
+                advantage_norm_eps=srpo_config.srpo_self_paced_advantage_norm_eps,
+                auto_calibrate_thresholds=srpo_config.srpo_self_paced_auto_calibrate_thresholds,
+                threshold_calibration_factor=srpo_config.srpo_self_paced_threshold_calibration_factor,
+                threshold_calibration_warmup_steps=srpo_config.srpo_self_paced_threshold_calibration_warmup_steps,
+                threshold_calibration_momentum=srpo_config.srpo_self_paced_threshold_calibration_momentum,
+            )
+            self.self_paced_temporal_reward = TemporalConsistencyReward(
+                device=accelerator.device,
+                dtype=reward_dtype,
+            )
+            logger.info("✓ Self-Paced SRPO reward mixing enabled")
 
         # Initialize Direct-Align engine
         self.direct_align_engine = DirectAlignEngine(
@@ -160,6 +191,13 @@ class SRPOTrainingCore:
         logger.info(
             f"Initialized SRPO training with reward model: {srpo_config.srpo_reward_model_name}"
         )
+        if (
+            self.srpo_config.srpo_enable_self_paced_reward
+            and self.srpo_config.srpo_self_paced_use_grpo_clip_objective
+            and self.srpo_config.srpo_self_paced_use_lagged_old_policy
+        ):
+            self._refresh_old_policy_snapshot(step_idx=0)
+            logger.info("✓ Initialized lagged old-policy snapshot for GRPO clipping")
         if self.srpo_config.srpo_enable_euphonium:
             needs_process_signal = (
                 self.srpo_config.srpo_euphonium_process_reward_guidance_enabled
@@ -203,6 +241,195 @@ class SRPOTrainingCore:
                 self.srpo_config.srpo_euphonium_process_reward_guidance_eta,
                 self.srpo_config.srpo_euphonium_process_reward_apply_in_recovery,
             )
+
+    @staticmethod
+    def _append_prompt_suffix(prompts: List[str], suffix: str) -> List[str]:
+        """Append non-empty suffix to prompts."""
+        cleaned_suffix = str(suffix).strip()
+        if not cleaned_suffix:
+            return list(prompts)
+        return [f"{prompt}. {cleaned_suffix}" for prompt in prompts]
+
+    def _compute_policy_log_prob_proxy(
+        self,
+        *,
+        predicted_clean_latents: torch.Tensor,
+        clean_latent_target: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Compute a per-sample pseudo log-probability for GRPO-style clipping.
+
+        Uses a Gaussian proxy over predicted clean latents:
+        log p ~ -||x_pred - x_target||^2 / (2 * sigma_policy^2).
+        """
+        policy_std = float(self.srpo_config.srpo_self_paced_policy_std)
+        variance = max(policy_std * policy_std, 1e-12)
+        mse = (
+            (predicted_clean_latents - clean_latent_target.detach())
+            .pow(2)
+            .mean(dim=(1, 2, 3, 4))
+        )
+        return -0.5 * mse / variance
+
+    def _compute_action_log_prob(
+        self,
+        *,
+        action: torch.Tensor,
+        mean: torch.Tensor,
+        policy_std: float,
+    ) -> torch.Tensor:
+        """Compute per-sample Gaussian log-prob for action under mean/std."""
+        variance = max(policy_std * policy_std, 1e-12)
+        squared_error = (action - mean).pow(2).mean(dim=(1, 2, 3, 4))
+        return -0.5 * squared_error / variance
+
+    def _capture_network_state_snapshot(
+        self, *, offload_cpu: bool
+    ) -> Dict[str, torch.Tensor]:
+        """Capture a cloned copy of LoRA network state."""
+        snapshot: Dict[str, torch.Tensor] = {}
+        for key, value in self.network.state_dict().items():
+            cloned = value.detach().clone()
+            if offload_cpu:
+                cloned = cloned.cpu()
+            snapshot[key] = cloned
+        return snapshot
+
+    def _load_network_state_snapshot(self, snapshot: Dict[str, torch.Tensor]) -> None:
+        """Load a previously captured LoRA network state snapshot."""
+        self.network.load_state_dict(snapshot, strict=True)
+
+    def _refresh_old_policy_snapshot(self, *, step_idx: int) -> None:
+        """Refresh lagged old-policy snapshot from current LoRA network state."""
+        self._old_policy_network_state = self._capture_network_state_snapshot(
+            offload_cpu=self.srpo_config.srpo_self_paced_old_policy_offload_cpu
+        )
+        self._old_policy_snapshot_step = int(step_idx)
+
+    def _predict_with_old_policy_snapshot(
+        self,
+        *,
+        noisy_latents: torch.Tensor,
+        timesteps: torch.Tensor,
+        context_list: List[torch.Tensor],
+        seq_len: int,
+    ) -> torch.Tensor | None:
+        """Predict model output using lagged old-policy LoRA snapshot."""
+        if (
+            not self.srpo_config.srpo_self_paced_use_lagged_old_policy
+            or self._old_policy_network_state is None
+        ):
+            return None
+        current_state = self._capture_network_state_snapshot(offload_cpu=False)
+        try:
+            self._load_network_state_snapshot(self._old_policy_network_state)
+            latents_list = [noisy_latents[i] for i in range(noisy_latents.shape[0])]
+            with torch.no_grad():
+                with autocast(enabled=True, dtype=self.transformer.dtype):
+                    old_model_pred_list = self.transformer(
+                        latents_list,
+                        t=timesteps,
+                        context=context_list,
+                        seq_len=seq_len,
+                    )
+            return torch.stack(old_model_pred_list, dim=0)
+        finally:
+            self._load_network_state_snapshot(current_state)
+
+    def _run_offline_threshold_calibration(
+        self,
+        *,
+        all_prompts: List[str],
+        num_frames: int,
+        height: int,
+        width: int,
+        batch_size: int,
+    ) -> None:
+        """Run pre-pass threshold calibration before the main training loop."""
+        if not (
+            self.srpo_config.srpo_enable_self_paced_reward
+            and self.srpo_config.srpo_self_paced_enable_offline_threshold_calibration
+            and self.self_paced_reward_mixer is not None
+        ):
+            return
+
+        calibration_steps = self.srpo_config.srpo_self_paced_offline_calibration_steps
+        calibration_batch_size = self.srpo_config.srpo_self_paced_offline_calibration_batch_size
+        if calibration_batch_size <= 0:
+            calibration_batch_size = batch_size
+        calibration_batch_size = min(calibration_batch_size, len(all_prompts))
+
+        update_network = self.srpo_config.srpo_self_paced_offline_calibration_update_network
+        logger.info(
+            "Running offline self-paced threshold calibration (steps=%d, batch=%d, update_network=%s).",
+            calibration_steps,
+            calibration_batch_size,
+            update_network,
+        )
+
+        original_network_state = None
+        original_optimizer_state = None
+        if update_network:
+            original_network_state = self._capture_network_state_snapshot(offload_cpu=True)
+            original_optimizer_state = copy.deepcopy(self.optimizer.state_dict())
+
+        stage_means: List[torch.Tensor] = []
+        for _ in range(calibration_steps):
+            prompts = random.sample(all_prompts, calibration_batch_size)
+            if update_network:
+                self.optimizer.zero_grad()
+                loss = self._compute_srpo_loss(prompts, num_frames, height, width)
+                self.accelerator.backward(loss)
+                self.optimizer.step()
+            else:
+                with torch.no_grad():
+                    _ = self._compute_srpo_loss(prompts, num_frames, height, width)
+
+            stage_means.append(
+                torch.tensor(
+                    [
+                        self._last_self_paced_metrics.get("self_paced_mean_visual", 0.0),
+                        self._last_self_paced_metrics.get("self_paced_mean_temporal", 0.0),
+                        self._last_self_paced_metrics.get("self_paced_mean_semantic", 0.0),
+                    ],
+                    dtype=torch.float32,
+                )
+            )
+
+        if update_network and original_network_state is not None and original_optimizer_state is not None:
+            self._load_network_state_snapshot(original_network_state)
+            self.optimizer.load_state_dict(original_optimizer_state)
+            self.optimizer.zero_grad()
+
+        if not stage_means:
+            logger.warning("Offline calibration produced no stage means; thresholds unchanged.")
+            return
+
+        stacked = torch.stack(stage_means, dim=0)
+        calibration_factor = self.srpo_config.srpo_self_paced_threshold_calibration_factor
+        if update_network and stacked.shape[0] >= 2:
+            start = stacked[0]
+            end = stacked[-1]
+            gain = torch.relu(end - start)
+            calibrated = start + calibration_factor * gain
+        else:
+            calibrated = calibration_factor * stacked.mean(dim=0)
+
+        self.self_paced_reward_mixer.thresholds = [
+            float(calibrated[0].item()),
+            float(calibrated[1].item()),
+            float(calibrated[2].item()),
+        ]
+        self.srpo_config.srpo_self_paced_visual_threshold = self.self_paced_reward_mixer.thresholds[0]
+        self.srpo_config.srpo_self_paced_temporal_threshold = self.self_paced_reward_mixer.thresholds[1]
+        self.srpo_config.srpo_self_paced_semantic_threshold = self.self_paced_reward_mixer.thresholds[2]
+
+        logger.info(
+            "Offline calibration updated thresholds to (visual=%.4f, temporal=%.4f, semantic=%.4f).",
+            self.self_paced_reward_mixer.thresholds[0],
+            self.self_paced_reward_mixer.thresholds[1],
+            self.self_paced_reward_mixer.thresholds[2],
+        )
 
     def _encode_prompts(self, prompts: List[str]) -> torch.Tensor:
         """
@@ -500,6 +727,19 @@ class SRPOTrainingCore:
             noisy_latents[i] for i in range(B)
         ]  # List of [C, F, H, W] tensors
 
+        old_model_pred = None
+        if (
+            self.self_paced_reward_mixer is not None
+            and self.srpo_config.srpo_self_paced_use_grpo_clip_objective
+            and self.srpo_config.srpo_self_paced_use_lagged_old_policy
+        ):
+            old_model_pred = self._predict_with_old_policy_snapshot(
+                noisy_latents=noisy_latents,
+                timesteps=timesteps,
+                context_list=context_list,
+                seq_len=seq_len,
+            )
+
         with autocast(enabled=True, dtype=self.transformer.dtype):
             model_pred_list = self.transformer(
                 latents_list,
@@ -660,6 +900,9 @@ class SRPOTrainingCore:
                 )
 
         predicted_clean_latents = noisy_latents - sigma * model_pred
+        old_predicted_clean_latents = None
+        if old_model_pred is not None:
+            old_predicted_clean_latents = noisy_latents - sigma * old_model_pred
         if (
             self.srpo_config.srpo_enable_euphonium
             and need_process_reward_signal
@@ -772,75 +1015,126 @@ class SRPOTrainingCore:
                 ).mean(dim=0)
 
         # Step 6: Compute rewards
-        # Decode frames for reward computation
         num_reward_frames = self.srpo_config.srpo_reward_num_frames
         recovered_images = self._decode_latents_to_images(
             recovered_latents, num_reward_frames
         )
-
-        # Compute image-based rewards
-        if num_reward_frames == 1:
-            # Single frame: use standard image reward
-            image_rewards = self.reward_model.compute_srp_rewards(
-                recovered_images,  # [B, C, H, W]
+        visual_prompts = prompts
+        semantic_prompts = prompts
+        if (
+            self.self_paced_reward_mixer is not None
+            and self.srpo_config.srpo_self_paced_enable_prompt_curriculum
+        ):
+            visual_prompts = self._append_prompt_suffix(
                 prompts,
+                self.srpo_config.srpo_self_paced_stage1_visual_prompt_suffix,
+            )
+            semantic_prompts = self._append_prompt_suffix(
+                prompts,
+                self.srpo_config.srpo_self_paced_stage3_semantic_prompt_suffix,
+            )
+
+        def _aggregate_frame_rewards(frame_rewards: torch.Tensor) -> torch.Tensor:
+            aggregation = self.srpo_config.srpo_reward_aggregation
+            if aggregation == "mean":
+                return frame_rewards.mean(dim=1)
+            if aggregation == "min":
+                return frame_rewards.min(dim=1)[0]
+            if aggregation == "max":
+                return frame_rewards.max(dim=1)[0]
+            if aggregation == "weighted":
+                weights = torch.linspace(
+                    0.5, 1.0, frame_rewards.shape[1], device=frame_rewards.device
+                )
+                weights = weights / weights.sum()
+                return (frame_rewards * weights.unsqueeze(0)).sum(dim=1)
+            return frame_rewards.mean(dim=1)
+
+        if num_reward_frames == 1:
+            visual_rewards = self.reward_model.compute_rewards(
+                recovered_images,  # [B, C, H, W]
+                visual_prompts,
+            )
+            semantic_rewards = self.reward_model.compute_srp_rewards(
+                recovered_images,
+                semantic_prompts,
                 positive_words=self.srpo_config.srpo_srp_positive_words,
                 negative_words=self.srpo_config.srpo_srp_negative_words,
                 k=self.srpo_config.srpo_srp_control_weight,
             )
         else:
-            # Multi-frame: compute rewards per frame and aggregate
-            frame_rewards = []
+            frame_visual_rewards = []
+            frame_semantic_rewards = []
             for frame_idx in range(num_reward_frames):
-                frame_images = recovered_images[:, frame_idx, :, :, :]  # [B, C, H, W]
-                frame_reward = self.reward_model.compute_srp_rewards(
+                frame_images = recovered_images[:, frame_idx, :, :, :]
+                frame_visual_reward = self.reward_model.compute_rewards(
+                    frame_images, visual_prompts
+                )
+                frame_semantic_reward = self.reward_model.compute_srp_rewards(
                     frame_images,
-                    prompts,
+                    semantic_prompts,
                     positive_words=self.srpo_config.srpo_srp_positive_words,
                     negative_words=self.srpo_config.srpo_srp_negative_words,
                     k=self.srpo_config.srpo_srp_control_weight,
                 )
-                frame_rewards.append(frame_reward)
+                frame_visual_rewards.append(frame_visual_reward)
+                frame_semantic_rewards.append(frame_semantic_reward)
 
-            # Aggregate frame rewards
-            frame_rewards = torch.stack(frame_rewards, dim=1)  # [B, num_frames]
+            visual_rewards = _aggregate_frame_rewards(
+                torch.stack(frame_visual_rewards, dim=1)
+            )
+            semantic_rewards = _aggregate_frame_rewards(
+                torch.stack(frame_semantic_rewards, dim=1)
+            )
 
-            aggregation = self.srpo_config.srpo_reward_aggregation
-            if aggregation == "mean":
-                image_rewards = frame_rewards.mean(dim=1)
-            elif aggregation == "min":
-                image_rewards = frame_rewards.min(dim=1)[0]
-            elif aggregation == "max":
-                image_rewards = frame_rewards.max(dim=1)[0]
-            elif aggregation == "weighted":
-                # Weighted average: more weight to later frames
-                weights = torch.linspace(
-                    0.5, 1.0, num_reward_frames, device=frame_rewards.device
-                )
-                weights = weights / weights.sum()
-                image_rewards = (frame_rewards * weights.unsqueeze(0)).sum(dim=1)
-            else:
-                image_rewards = frame_rewards.mean(dim=1)
-
-        # Add video-specific rewards if enabled
-        if self.video_reward_aggregator is not None:
-            # Reshape for video rewards: need [B, C, F, H, W]
-            # recovered_latents is already in this format
-            # Decode ALL frames for video-specific rewards
+        all_frames = None
+        if self.video_reward_aggregator is not None or self.self_paced_temporal_reward is not None:
             with torch.no_grad():
                 all_frames = self._decode_latents_to_images(
                     recovered_latents,
-                    num_frames=recovered_latents.shape[2],  # Decode all frames
+                    num_frames=recovered_latents.shape[2],
                 )
-                # all_frames: [B, F, C, H, W] -> need [B, C, F, H, W]
-                all_frames = all_frames.permute(0, 2, 1, 3, 4)
+                all_frames = all_frames.permute(0, 2, 1, 3, 4)  # [B, C, F, H, W]
 
-                video_rewards = self.video_reward_aggregator.compute_reward(all_frames)
-
-            # Combine image and video rewards
-            rewards = image_rewards + video_rewards
+        if self.video_reward_aggregator is not None and all_frames is not None:
+            video_rewards = self.video_reward_aggregator.compute_reward(all_frames)
+            rewards = semantic_rewards + video_rewards
         else:
-            rewards = image_rewards
+            rewards = semantic_rewards
+
+        self._last_self_paced_metrics = {}
+        if self.self_paced_reward_mixer is not None:
+            temporal_rewards = torch.zeros_like(semantic_rewards)
+            if self.self_paced_temporal_reward is not None and all_frames is not None:
+                temporal_rewards = self.self_paced_temporal_reward.compute_reward(all_frames)
+            scaled_visual = (
+                visual_rewards.to(dtype=torch.float32)
+                * self.srpo_config.srpo_self_paced_visual_scale
+            )
+            scaled_temporal = (
+                temporal_rewards.to(dtype=torch.float32)
+                * self.srpo_config.srpo_self_paced_temporal_scale
+            )
+            scaled_semantic = (
+                semantic_rewards.to(dtype=torch.float32)
+                * self.srpo_config.srpo_self_paced_semantic_scale
+            )
+            rewards, self._last_self_paced_metrics = self.self_paced_reward_mixer.mix(
+                visual_rewards=scaled_visual,
+                temporal_rewards=scaled_temporal,
+                semantic_rewards=scaled_semantic,
+            )
+            if self.srpo_config.srpo_self_paced_auto_calibrate_thresholds:
+                calibration_metrics = self.self_paced_reward_mixer.update_thresholds(
+                    means=torch.stack(
+                        [
+                            scaled_visual.mean(),
+                            scaled_temporal.mean(),
+                            scaled_semantic.mean(),
+                        ]
+                    )
+                )
+                self._last_self_paced_metrics.update(calibration_metrics)
 
         reward_signal = rewards
         if self.srpo_config.srpo_enable_euphonium:
@@ -893,10 +1187,74 @@ class SRPOTrainingCore:
         else:
             discount = self.direct_align_engine.discount_inversion[step_idx]
 
-        discounted_rewards = discount * reward_signal
+        if (
+            self.self_paced_reward_mixer is not None
+            and self.srpo_config.srpo_self_paced_use_grpo_clip_objective
+        ):
+            logprob_mode = self.srpo_config.srpo_self_paced_logprob_mode
+            lagged_old_active = (
+                self.srpo_config.srpo_self_paced_use_lagged_old_policy
+                and old_model_pred is not None
+            )
 
-        # Loss is negative reward (we want to maximize reward)
-        loss = -discounted_rewards.mean()
+            if logprob_mode == "action_gaussian":
+                policy_std = float(self.srpo_config.srpo_self_paced_policy_std)
+                sampled_action = (
+                    model_pred + policy_std * torch.randn_like(model_pred)
+                ).detach()
+                current_log_prob = self._compute_action_log_prob(
+                    action=sampled_action,
+                    mean=model_pred,
+                    policy_std=policy_std,
+                )
+                if lagged_old_active:
+                    old_log_prob = self._compute_action_log_prob(
+                        action=sampled_action,
+                        mean=old_model_pred.detach(),
+                        policy_std=policy_std,
+                    ).detach()
+                else:
+                    old_log_prob = current_log_prob.detach()
+            else:
+                current_log_prob = self._compute_policy_log_prob_proxy(
+                    predicted_clean_latents=predicted_clean_latents,
+                    clean_latent_target=clean_latents,
+                )
+                if lagged_old_active and old_predicted_clean_latents is not None:
+                    old_log_prob = self._compute_policy_log_prob_proxy(
+                        predicted_clean_latents=old_predicted_clean_latents,
+                        clean_latent_target=clean_latents,
+                    ).detach()
+                else:
+                    old_log_prob = current_log_prob.detach()
+
+            objective, grpo_metrics = compute_grpo_clipped_objective(
+                current_log_prob=current_log_prob,
+                old_log_prob=old_log_prob,
+                advantages=reward_signal.to(dtype=torch.float32),
+                clip_eps=self.srpo_config.srpo_self_paced_grpo_clip_eps,
+            )
+            if self.srpo_config.srpo_self_paced_apply_discount_to_grpo:
+                objective = objective * discount
+            self._last_self_paced_metrics.update(grpo_metrics)
+            self._last_self_paced_metrics["self_paced_grpo_enabled"] = 1.0
+            self._last_self_paced_metrics["self_paced_old_policy_lagged_active"] = (
+                1.0 if lagged_old_active else 0.0
+            )
+            self._last_self_paced_metrics["self_paced_old_policy_snapshot_step"] = float(
+                self._old_policy_snapshot_step
+            )
+            self._last_self_paced_metrics["self_paced_logprob_mode"] = (
+                1.0 if logprob_mode == "action_gaussian" else 2.0
+            )
+            loss = -objective.mean()
+        else:
+            discounted_rewards = discount * reward_signal
+            # Loss is negative reward (we want to maximize reward)
+            loss = -discounted_rewards.mean()
+            if self.self_paced_reward_mixer is not None:
+                self._last_self_paced_metrics["self_paced_grpo_enabled"] = 0.0
+                self._last_self_paced_metrics["self_paced_old_policy_lagged_active"] = 0.0
 
         return loss
 
@@ -966,6 +1324,14 @@ class SRPOTrainingCore:
 
         logger.info(f"Loaded {len(all_prompts)} prompts for training")
 
+        self._run_offline_threshold_calibration(
+            all_prompts=all_prompts,
+            num_frames=num_frames,
+            height=height,
+            width=width,
+            batch_size=batch_size,
+        )
+
         # Training loop
         global_step = starting_step
         self.optimizer.zero_grad()
@@ -1016,11 +1382,60 @@ class SRPOTrainingCore:
             self.optimizer.step()
             self.optimizer.zero_grad()
 
+            if (
+                self.srpo_config.srpo_enable_self_paced_reward
+                and self.srpo_config.srpo_self_paced_use_grpo_clip_objective
+                and self.srpo_config.srpo_self_paced_use_lagged_old_policy
+            ):
+                next_step_index = global_step + 1
+                if (
+                    next_step_index
+                    % self.srpo_config.srpo_self_paced_old_policy_update_interval
+                    == 0
+                ):
+                    self._refresh_old_policy_snapshot(step_idx=next_step_index)
+
             global_step += 1
 
             # Logging
             if global_step % 10 == 0:
                 log_line = f"Step {global_step}/{num_training_steps} | Loss: {loss.item():.4f}"
+                if (
+                    self.srpo_config.srpo_enable_self_paced_reward
+                    and self._last_self_paced_metrics
+                ):
+                    log_line += (
+                        " | SelfPaced(w=({wv:.2f},{wt:.2f},{ws:.2f}), "
+                        "mix={mix:.4f}, norm={norm:.0f}, grpo={grpo:.0f}, ratio={ratio:.4f}, lagged={lagged:.0f}, lpmode={lpmode:.0f})"
+                    ).format(
+                        wv=self._last_self_paced_metrics.get(
+                            "self_paced_weight_visual", 0.0
+                        ),
+                        wt=self._last_self_paced_metrics.get(
+                            "self_paced_weight_temporal", 0.0
+                        ),
+                        ws=self._last_self_paced_metrics.get(
+                            "self_paced_weight_semantic", 0.0
+                        ),
+                        mix=self._last_self_paced_metrics.get(
+                            "self_paced_mixed_reward_mean", 0.0
+                        ),
+                        norm=self._last_self_paced_metrics.get(
+                            "self_paced_advantage_norm_applied", 0.0
+                        ),
+                        grpo=self._last_self_paced_metrics.get(
+                            "self_paced_grpo_enabled", 0.0
+                        ),
+                        ratio=self._last_self_paced_metrics.get(
+                            "self_paced_grpo_ratio_mean", 1.0
+                        ),
+                        lagged=self._last_self_paced_metrics.get(
+                            "self_paced_old_policy_lagged_active", 0.0
+                        ),
+                        lpmode=self._last_self_paced_metrics.get(
+                            "self_paced_logprob_mode", 0.0
+                        ),
+                    )
                 if (
                     self.srpo_config.srpo_enable_euphonium
                     and self._last_euphonium_metrics
@@ -1096,46 +1511,106 @@ class SRPOTrainingCore:
             # Decode frames for reward computation
             num_reward_frames = self.srpo_config.srpo_reward_num_frames
             images = self._decode_latents_to_images(clean_latents, num_reward_frames)
+            visual_prompts = validation_prompts
+            semantic_prompts = validation_prompts
+            if (
+                self.self_paced_reward_mixer is not None
+                and self.srpo_config.srpo_self_paced_enable_prompt_curriculum
+            ):
+                visual_prompts = self._append_prompt_suffix(
+                    validation_prompts,
+                    self.srpo_config.srpo_self_paced_stage1_visual_prompt_suffix,
+                )
+                semantic_prompts = self._append_prompt_suffix(
+                    validation_prompts,
+                    self.srpo_config.srpo_self_paced_stage3_semantic_prompt_suffix,
+                )
 
-            # Compute rewards (same logic as training)
-            if num_reward_frames == 1:
-                rewards = self.reward_model.compute_rewards(images, validation_prompts)
-            else:
-                # Multi-frame rewards
-                frame_rewards = []
-                for frame_idx in range(num_reward_frames):
-                    frame_images = images[:, frame_idx, :, :, :]
-                    frame_reward = self.reward_model.compute_rewards(
-                        frame_images, validation_prompts
-                    )
-                    frame_rewards.append(frame_reward)
-
-                frame_rewards = torch.stack(frame_rewards, dim=1)
-
+            def _aggregate_frame_rewards(frame_rewards: torch.Tensor) -> torch.Tensor:
                 aggregation = self.srpo_config.srpo_reward_aggregation
                 if aggregation == "mean":
-                    rewards = frame_rewards.mean(dim=1)
-                elif aggregation == "min":
-                    rewards = frame_rewards.min(dim=1)[0]
-                elif aggregation == "max":
-                    rewards = frame_rewards.max(dim=1)[0]
-                elif aggregation == "weighted":
+                    return frame_rewards.mean(dim=1)
+                if aggregation == "min":
+                    return frame_rewards.min(dim=1)[0]
+                if aggregation == "max":
+                    return frame_rewards.max(dim=1)[0]
+                if aggregation == "weighted":
                     weights = torch.linspace(
-                        0.5, 1.0, num_reward_frames, device=frame_rewards.device
+                        0.5, 1.0, frame_rewards.shape[1], device=frame_rewards.device
                     )
                     weights = weights / weights.sum()
-                    rewards = (frame_rewards * weights.unsqueeze(0)).sum(dim=1)
-                else:
-                    rewards = frame_rewards.mean(dim=1)
+                    return (frame_rewards * weights.unsqueeze(0)).sum(dim=1)
+                return frame_rewards.mean(dim=1)
 
-            # Add video-specific rewards if enabled
-            if self.video_reward_aggregator is not None:
+            if num_reward_frames == 1:
+                visual_rewards = self.reward_model.compute_rewards(images, visual_prompts)
+                semantic_rewards = self.reward_model.compute_srp_rewards(
+                    images,
+                    semantic_prompts,
+                    positive_words=self.srpo_config.srpo_srp_positive_words,
+                    negative_words=self.srpo_config.srpo_srp_negative_words,
+                    k=self.srpo_config.srpo_srp_control_weight,
+                )
+            else:
+                frame_visual_rewards = []
+                frame_semantic_rewards = []
+                for frame_idx in range(num_reward_frames):
+                    frame_images = images[:, frame_idx, :, :, :]
+                    frame_visual_rewards.append(
+                        self.reward_model.compute_rewards(frame_images, visual_prompts)
+                    )
+                    frame_semantic_rewards.append(
+                        self.reward_model.compute_srp_rewards(
+                            frame_images,
+                            semantic_prompts,
+                            positive_words=self.srpo_config.srpo_srp_positive_words,
+                            negative_words=self.srpo_config.srpo_srp_negative_words,
+                            k=self.srpo_config.srpo_srp_control_weight,
+                        )
+                    )
+                visual_rewards = _aggregate_frame_rewards(
+                    torch.stack(frame_visual_rewards, dim=1)
+                )
+                semantic_rewards = _aggregate_frame_rewards(
+                    torch.stack(frame_semantic_rewards, dim=1)
+                )
+
+            rewards = visual_rewards
+            all_frames = None
+            if self.video_reward_aggregator is not None or self.self_paced_temporal_reward is not None:
                 all_frames = self._decode_latents_to_images(
                     clean_latents, num_frames=clean_latents.shape[2]
                 )
                 all_frames = all_frames.permute(0, 2, 1, 3, 4)  # [B, C, F, H, W]
+
+            if self.video_reward_aggregator is not None and all_frames is not None:
                 video_rewards = self.video_reward_aggregator.compute_reward(all_frames)
                 rewards = rewards + video_rewards
+
+            if self.self_paced_reward_mixer is not None:
+                temporal_rewards = torch.zeros_like(semantic_rewards)
+                if self.self_paced_temporal_reward is not None and all_frames is not None:
+                    temporal_rewards = self.self_paced_temporal_reward.compute_reward(all_frames)
+                rewards, validation_self_paced_metrics = self.self_paced_reward_mixer.mix(
+                    visual_rewards=(
+                        visual_rewards.to(dtype=torch.float32)
+                        * self.srpo_config.srpo_self_paced_visual_scale
+                    ),
+                    temporal_rewards=(
+                        temporal_rewards.to(dtype=torch.float32)
+                        * self.srpo_config.srpo_self_paced_temporal_scale
+                    ),
+                    semantic_rewards=(
+                        semantic_rewards.to(dtype=torch.float32)
+                        * self.srpo_config.srpo_self_paced_semantic_scale
+                    ),
+                )
+                logger.info(
+                    "Validation Self-Paced weights: visual=%.3f temporal=%.3f semantic=%.3f",
+                    validation_self_paced_metrics.get("self_paced_weight_visual", 0.0),
+                    validation_self_paced_metrics.get("self_paced_weight_temporal", 0.0),
+                    validation_self_paced_metrics.get("self_paced_weight_semantic", 0.0),
+                )
 
             logger.info(
                 f"Validation rewards: {rewards.mean().item():.4f} "

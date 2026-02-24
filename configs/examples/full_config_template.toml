@@ -5042,6 +5042,120 @@ srpo_optical_flow_weight = 0.0
 # Weight for overall motion quality (balanced movement)
 srpo_motion_quality_weight = 0.0  # Weight for overall motion quality (balanced movement)
 
+# Self-Paced SRPO reward mixing. When enabled, SRPO mixes three reward components with competence-aware soft weights:
+# 1) visual quality reward, 2) temporal coherence reward, 3) semantic SRP reward.
+srpo_enable_self_paced_reward = false
+
+# Competence thresholds for visual/temporal/semantic stages.
+# These are compared against per-batch mean rewards before soft weighting.
+# Typical range depends on reward model scale (often around [0.0, 1.0] or [1.0, 10.0]).
+srpo_self_paced_visual_threshold = 0.75
+srpo_self_paced_temporal_threshold = 0.75
+srpo_self_paced_semantic_threshold = 0.75
+
+# Softmax sharpness (beta) for stage weighting.
+# Higher -> harder transitions, lower -> smoother mixing. Must be > 0.
+srpo_self_paced_softmax_beta = 5.0
+
+# Sparsity coupling factor (lambda) used with Hoyer sparsity deltas between stages.
+# Higher values amplify sparsity-driven transitions.
+srpo_self_paced_sparsity_lambda = 0.5
+
+# Sigmoid scale used in competence gating h(mean_reward - threshold). Must be > 0.
+srpo_self_paced_sigmoid_scale = 8.0
+
+# Per-component scaling before mixing.
+# Set a scale to 0.0 to effectively disable that component within self-paced mode.
+srpo_self_paced_visual_scale = 1.0
+
+# Temporal scale
+srpo_self_paced_temporal_scale = 1.0
+
+# Semantic scale
+srpo_self_paced_semantic_scale = 1.0
+
+# Normalize mixed reward into a group-relative advantage-like signal before optimization.
+# Uses (r - mean) / std with epsilon guard; automatically skipped when std is too small.
+srpo_self_paced_enable_advantage_norm = true
+
+# Numerical epsilon for self-paced reward normalization. Must be > 0.
+srpo_self_paced_advantage_norm_eps = 1e-6
+
+# Use a clipped GRPO-style surrogate objective for the self-paced signal.
+# When false, SRPO keeps the existing negative-reward objective.
+# When true, uses ratio = exp(log pi_new - log pi_old_detached) with clipping.
+srpo_self_paced_use_grpo_clip_objective = false
+
+# Clip epsilon for the GRPO-style surrogate objective.
+# Valid range: (0, 1].
+srpo_self_paced_grpo_clip_eps = 1e-4
+
+# Standard deviation used in pseudo Gaussian policy log-likelihood.
+# Converts predicted clean-latent error into a log-prob proxy. Must be > 0.
+srpo_self_paced_policy_std = 1.0
+
+# Apply branch discount schedule to the GRPO-style surrogate objective.
+srpo_self_paced_apply_discount_to_grpo = true
+
+# Use a lagged old-policy snapshot for GRPO ratio computation.
+# true: compare against a periodically refreshed frozen LoRA snapshot.
+# false: fallback to detached-current proxy (weaker clipping signal).
+srpo_self_paced_use_lagged_old_policy = true
+
+# Number of optimizer steps between old-policy snapshot refreshes.
+# 1 means refresh every step (closest tracking); larger values increase policy lag.
+srpo_self_paced_old_policy_update_interval = 1
+
+# Store old-policy snapshot tensors on CPU to reduce VRAM usage.
+srpo_self_paced_old_policy_offload_cpu = true
+
+# Log-probability computation mode for GRPO clipped objective:
+# - "action_gaussian": sample an action from current policy mean and evaluate
+#   both current/old policy likelihood at that action (closer policy-ratio behavior).
+# - "latent_error_proxy": use latent reconstruction proxy log-prob (legacy strict mode).
+srpo_self_paced_logprob_mode = "action_gaussian"
+
+# Offline threshold calibration pre-pass before main SRPO loop.
+# Runs a short calibration routine and updates stage thresholds in-memory.
+srpo_self_paced_enable_offline_threshold_calibration = false
+
+# Number of calibration iterations in the pre-pass (>=1).
+srpo_self_paced_offline_calibration_steps = 12
+
+# Calibration prompt batch size. 0 means reuse srpo_batch_size.
+srpo_self_paced_offline_calibration_batch_size = 0
+
+# If true, calibration pre-pass performs temporary optimizer updates to estimate
+# stage reward gains, then restores original network/optimizer states.
+# If false, calibration uses evaluation-only reward statistics.
+srpo_self_paced_offline_calibration_update_network = false
+
+# Optional stage prompt curriculum (prompt strengthening).
+# Adds suffixes to reward prompts for Stage I (visual) and Stage III (semantic).
+srpo_self_paced_enable_prompt_curriculum = false
+
+# Stage I prompt suffix (visual quality / aesthetics emphasis).
+# Leave empty to use the base prompt unchanged.
+srpo_self_paced_stage1_visual_prompt_suffix = ""
+
+# Stage III prompt suffix (text-video alignment emphasis).
+# Leave empty to use the base prompt unchanged.
+srpo_self_paced_stage3_semantic_prompt_suffix = ""
+
+# Auto-calibrate thresholds online from observed reward improvements.
+# Paper calibrates thresholds from staged training gains; this provides a configurable
+# online approximation without separate stage-only training runs.
+srpo_self_paced_auto_calibrate_thresholds = false
+
+# Calibration factor applied to estimated reward improvement.
+srpo_self_paced_threshold_calibration_factor = 0.7
+
+# Number of optimization steps before threshold updates are applied.
+srpo_self_paced_threshold_calibration_warmup_steps = 50
+
+# EMA momentum for online threshold calibration deltas. Valid range: [0, 1).
+srpo_self_paced_threshold_calibration_momentum = 0.9
+
 # VAE spatial downsampling factor
 srpo_vae_scale_factor = 8
 
@@ -5505,7 +5619,7 @@ ctxmem_memory_update_frequency = 10
 
 # Frame selection strategies:
 # - "recent": Select most recent frames (fastest, good baseline)
-# - "fov_overlap": Select based on FOV overlap with camera poses (paper's method)
+# - "fov_overlap": Select based on FOV overlap with camera poses
 # - "semantic": Select based on visual similarity (experimental)
 # - "mixed": Combine recent and semantic selection (experimental)
 ctxmem_frame_selection_strategy = "semantic"
@@ -5517,7 +5631,7 @@ ctxmem_semantic_similarity_threshold = 0.7
 # Enable FOV-based frame selection using camera poses
 ctxmem_use_fov_selection = false
 
-# Default field of view in degrees (from paper: 52.67)
+# Default field of view in degrees
 ctxmem_default_fov = 52.67
 
 # Minimum overlap threshold for FOV-based selection (0.0 to 1.0)

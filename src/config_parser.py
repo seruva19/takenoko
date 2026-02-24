@@ -51,6 +51,7 @@ from configs.motion_disentanglement_config import (
 )
 from configs.det_motion_transfer_config import apply_det_motion_transfer_config
 from configs.euphonium_config import apply_euphonium_config
+from configs.srpo_self_paced_config import apply_srpo_self_paced_config
 from configs.ufo_config import apply_ufo_config
 from configs.pissa_config import apply_pissa_config
 from configs.adalora_config import apply_adalora_config
@@ -2142,6 +2143,9 @@ def create_args_from_config(
             f"🎯 SRPO training enabled - Reward model: {args.srpo_reward_model_name}, "
             f"Steps: {args.srpo_num_training_steps}, Batch size: {args.srpo_batch_size}"
         )
+
+    # Self-Paced SRPO reward (default off)
+    args = apply_srpo_self_paced_config(args, config, logger)
 
     # Euphonium-inspired SRPO enhancement (default off)
     args = apply_euphonium_config(args, config, logger)
