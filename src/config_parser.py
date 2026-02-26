@@ -57,6 +57,7 @@ from configs.pissa_config import apply_pissa_config
 from configs.adalora_config import apply_adalora_config
 from configs.mora_config import apply_mora_config
 from configs.vera_config import apply_vera_config
+from configs.cdka_config import apply_cdka_config
 from configs.s2d_config import apply_s2d_config
 
 
@@ -479,6 +480,7 @@ def create_args_from_config(
     apply_adalora_config(args, config, logger)
     apply_mora_config(args, config, logger)
     apply_vera_config(args, config, logger)
+    apply_cdka_config(args, config, logger)
 
     # Extract LoRA-GGPO parameters from network_args (e.g., "ggpo_sigma=0.03")
     args.ggpo_sigma = None

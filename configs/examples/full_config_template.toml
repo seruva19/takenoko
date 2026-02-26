@@ -401,7 +401,7 @@ lr_scheduler_args = ''
 # Network module to train: "networks.lora_wan", "networks.ic_lora_wan", "networks.riemann_lora_wan", "networks.control_lora_wan",
 # "networks.reward_lora", "networks.vae_wan", "lycoris.kohya", "networks.t_lora", "networks.tc_lora_wan", "networks.moc_lora",
 # "networks.mhc_lora", "networks.lorweb_lora_wan", "networks.singlora_wan", "networks.wan_finetune", "networks.slider_lora_wan",
-# "networks.relora_wan", "networks.adalora_wan", "networks.mora_wan", "networks.vera_wan"
+# "networks.relora_wan", "networks.adalora_wan", "networks.mora_wan", "networks.vera_wan", "networks.cdka_wan"
 # The module defines trainable adapters and is imported dynamically by the trainer.
 network_module = "networks.lora_wan"
 
@@ -497,6 +497,30 @@ network_alpha = 32
 #   "vera_projection_prng_key=0",
 #   "vera_d_initial=1.0",
 #   "vera_matrix_init=kaiming_uniform"
+# ]
+
+# CDKA (Kronecker-structured adapters, training-only)
+# Requires: network_module = "networks.cdka_wan"
+# - cdka_enabled: bool (default true when network_module is networks.cdka_wan)
+# - cdka_rank: int >= 1 (default network_dim)
+#   Adapter component rank. parser keeps network_dim synchronized to this value.
+# - cdka_r1: int >= 1 (default 1)
+#   Output-side Kronecker factor count. out_features are grouped by this factor.
+# - cdka_r2: int >= 1 (default 1)
+#   Input-side Kronecker factor count. in_features are grouped by this factor.
+# - cdka_allow_padding: bool (default true)
+#   true: pad feature dims to nearest valid factorization; false: require exact divisibility
+#   (in_features % cdka_r2 == 0 and out_features % cdka_r1 == 0).
+# - cdka_merge_chunk_size: int >= 1 (default 64)
+#   Chunk size used when materializing merged delta weights for regularization/merge paths.
+# Example:
+# network_args = [
+#   "cdka_enabled=true",
+#   "cdka_rank=32",
+#   "cdka_r1=2",
+#   "cdka_r2=4",
+#   "cdka_allow_padding=true",
+#   "cdka_merge_chunk_size=64"
 # ]
 
 # IC-LoRA (requires network_module = "networks.ic_lora_wan")
