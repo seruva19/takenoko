@@ -19,6 +19,7 @@ from common.logger import get_logger
 from utils import model_utils
 from utils.train_utils import config_key_provided
 from common.model_downloader import download_model_if_needed
+from modules.qlora_utils import QLoRASettings, apply_qlora_quantization
 from wan.configs.config import WAN_CONFIGS
 from wan.modules.model import WanModel, detect_wan_sd_dtype, load_wan_model
 from wan.modules.vae import WanVAE
@@ -207,6 +208,57 @@ class ModelManager:
             ),
         )
 
+        qlora_active = bool(getattr(args, "enable_qlora", False))
+        if qlora_active:
+            qlora_result = apply_qlora_quantization(
+                transformer,
+                QLoRASettings(
+                    quant_type=str(getattr(args, "qlora_quant_type", "nf4")),
+                    compute_dtype=str(getattr(args, "qlora_compute_dtype", "bfloat16")),
+                    use_double_quant=bool(
+                        getattr(args, "qlora_use_double_quant", True)
+                    ),
+                    quant_storage=str(getattr(args, "qlora_quant_storage", "uint8")),
+                    target_modules=getattr(args, "qlora_target_modules", []),
+                    skip_modules=getattr(args, "qlora_skip_modules", []),
+                    target_match_mode=str(
+                        getattr(args, "qlora_target_match", "contains")
+                    ),
+                    skip_match_mode=str(getattr(args, "qlora_skip_match", "contains")),
+                    upcast_layernorm=bool(
+                        getattr(args, "qlora_upcast_layernorm", True)
+                    ),
+                    layernorm_patterns=getattr(args, "qlora_layernorm_patterns", []),
+                    keep_in_fp32_modules=getattr(
+                        args,
+                        "qlora_keep_in_fp32_modules",
+                        [],
+                    ),
+                    fail_on_replacement_error=bool(
+                        getattr(args, "qlora_fail_on_replacement_error", False)
+                    ),
+                    min_replaced_modules=int(
+                        getattr(args, "qlora_min_replaced_modules", 1)
+                    ),
+                ),
+                logger,
+            )
+            args.qlora_replaced_linear_count = int(qlora_result.replaced_count)
+            args.qlora_failed_linear_count = int(len(qlora_result.failed))
+            args.qlora_upcast_layernorm_count = int(qlora_result.upcast_layernorm_count)
+            args.qlora_upcast_fp32_module_count = int(
+                qlora_result.upcast_fp32_module_count
+            )
+            logger.info(
+                "QLoRA quantization summary: replaced=%s, skipped=%s, failed=%s, "
+                "upcast_norms=%s, upcast_modules=%s",
+                qlora_result.replaced_count,
+                qlora_result.skipped_count,
+                len(qlora_result.failed),
+                qlora_result.upcast_layernorm_count,
+                qlora_result.upcast_fp32_module_count,
+            )
+
         # Optional: enable lean attention math from config
         try:
             if bool(getattr(args, "lean_attn_math", False)):
@@ -276,6 +328,10 @@ class ModelManager:
 
         # If dual-model training is disabled, return as-is
         enable_dual = bool(getattr(args, "enable_dual_model_training", False))
+        if qlora_active and enable_dual:
+            raise ValueError(
+                "QLoRA is not supported with dual-model training in this implementation."
+            )
         if not enable_dual:
             return transformer, None
 

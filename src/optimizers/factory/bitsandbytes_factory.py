@@ -23,6 +23,52 @@ def create_adamw8bit_optimizer(
     return optimizer_class, optimizer
 
 
+def create_paged_adamw8bit_optimizer(
+    trainable_params: List[Any],
+    lr: float,
+    optimizer_kwargs: Dict[str, Any],
+    logger: Any,
+) -> Tuple[Any, torch.optim.Optimizer]:
+    try:
+        import bitsandbytes as bnb
+    except ImportError:
+        raise ImportError(
+            "bitsandbytes is not installed. Please install bitsandbytes to use paged 8-bit optimizers."
+        )
+
+    optimizer_class = getattr(bnb.optim, "PagedAdamW8bit", None)
+    if optimizer_class is None:
+        raise ImportError("bitsandbytes.optim.PagedAdamW8bit is unavailable in this build.")
+
+    logger.info(f"using PagedAdamW8bit optimizer | {optimizer_kwargs}")
+    optimizer = optimizer_class(trainable_params, lr=lr, **optimizer_kwargs)
+    return optimizer_class, optimizer
+
+
+def create_paged_adamw32bit_optimizer(
+    trainable_params: List[Any],
+    lr: float,
+    optimizer_kwargs: Dict[str, Any],
+    logger: Any,
+) -> Tuple[Any, torch.optim.Optimizer]:
+    try:
+        import bitsandbytes as bnb
+    except ImportError:
+        raise ImportError(
+            "bitsandbytes is not installed. Please install bitsandbytes to use paged optimizers."
+        )
+
+    optimizer_class = getattr(bnb.optim, "PagedAdamW32bit", None)
+    if optimizer_class is None:
+        raise ImportError(
+            "bitsandbytes.optim.PagedAdamW32bit is unavailable in this build."
+        )
+
+    logger.info(f"using PagedAdamW32bit optimizer | {optimizer_kwargs}")
+    optimizer = optimizer_class(trainable_params, lr=lr, **optimizer_kwargs)
+    return optimizer_class, optimizer
+
+
 def create_came8bit_optimizer(
     trainable_params: List[Any],
     lr: float,

@@ -187,6 +187,30 @@ class OptimizerManager:
                 logger,
             )
 
+        elif optimizer_type == "PagedAdamW8bit".lower():
+            from optimizers.factory.bitsandbytes_factory import (
+                create_paged_adamw8bit_optimizer,
+            )
+
+            optimizer_class, optimizer = create_paged_adamw8bit_optimizer(
+                trainable_params,
+                lr,
+                optimizer_kwargs,
+                logger,
+            )
+
+        elif optimizer_type == "PagedAdamW32bit".lower():
+            from optimizers.factory.bitsandbytes_factory import (
+                create_paged_adamw32bit_optimizer,
+            )
+
+            optimizer_class, optimizer = create_paged_adamw32bit_optimizer(
+                trainable_params,
+                lr,
+                optimizer_kwargs,
+                logger,
+            )
+
         elif optimizer_type == "Adafactor".lower():
             from optimizers.factory.standard_factory import create_adafactor_optimizer
 

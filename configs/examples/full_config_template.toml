@@ -246,6 +246,8 @@ rope_use_float32 = false
 # Available optimizers:
 # - "AdamW": Standard PyTorch AdamW
 # - "AdamW8bit": bitsandbytes 8-bit AdamW (quantized GPU states)
+# - "PagedAdamW8bit": bitsandbytes paged 8-bit AdamW (QLoRA-friendly memory behavior)
+# - "PagedAdamW32bit": bitsandbytes paged 32-bit AdamW
 # - "RavenAdamW": CPU-offloaded AdamW with BF16/FP32 states
 # - "RavenAdamW8bit": CPU-offloaded 8-bit quantized AdamW
 # - "AdaFactor": Memory-efficient adaptive optimizer with relative_step scheduling
@@ -401,7 +403,8 @@ lr_scheduler_args = ''
 # Network module to train: "networks.lora_wan", "networks.ic_lora_wan", "networks.riemann_lora_wan", "networks.control_lora_wan",
 # "networks.reward_lora", "networks.vae_wan", "lycoris.kohya", "networks.t_lora", "networks.tc_lora_wan", "networks.moc_lora",
 # "networks.mhc_lora", "networks.lorweb_lora_wan", "networks.singlora_wan", "networks.wan_finetune", "networks.slider_lora_wan",
-# "networks.relora_wan", "networks.adalora_wan", "networks.mora_wan", "networks.vera_wan", "networks.cdka_wan"
+# "networks.relora_wan", "networks.adalora_wan", "networks.mora_wan", "networks.vera_wan", "networks.cdka_wan",
+# "networks.qlora_wan"
 # The module defines trainable adapters and is imported dynamically by the trainer.
 network_module = "networks.lora_wan"
 
@@ -521,6 +524,73 @@ network_alpha = 32
 #   "cdka_r2=4",
 #   "cdka_allow_padding=true",
 #   "cdka_merge_chunk_size=64"
+# ]
+
+# QLoRA (4-bit base-model quantization + LoRA adapters)
+# Constraints and dependencies:
+# - Requires bitsandbytes with CUDA support.
+# - Requires network_module = "networks.qlora_wan".
+# - QLoRA activates only when network_args contains qlora_enabled=true.
+# - Incompatible with fp8_scaled=true, torchao_fp8_enabled=true,
+#   enable_dual_model_training=true, and blocks_to_swap > 0.
+# network_args parameters:
+# - qlora_enabled: bool (required true to initialize QLoRA)
+# - qlora_quant_type: "nf4" | "fp4" (default "nf4")
+# - qlora_compute_dtype: "bfloat16" | "bf16" | "float16" | "fp16" | "float32" | "fp32" (default "bfloat16")
+# - qlora_use_double_quant: bool (default true)
+# - qlora_quant_storage: "uint8" | "float16" | "fp16" | "bfloat16" | "bf16" | "float32" | "fp32" (default "uint8")
+#   Compatibility aliases accepted in network_args:
+#   - bnb_4bit_quant_type
+#   - bnb_4bit_compute_dtype (supports "auto" -> inferred from mixed_precision)
+#   - bnb_4bit_use_double_quant
+#   - bnb_4bit_quant_storage
+# - qlora_target_modules: list[str], module filters for include (default [])
+#   Empty means all quantizable linear-like modules are candidates.
+#   Special token "all-linear" also forces include-all behavior.
+# - qlora_skip_modules: list[str], module filters for exclusion (default [])
+# - qlora_target_match / qlora_skip_match: "contains" | "regex" | "exact" (default "contains")
+# - qlora_upcast_layernorm: bool (default true). Upcasts norm modules to fp32 before quantization.
+# - qlora_layernorm_patterns: optional list[str]. When set, upcast only matching norm modules.
+# - qlora_keep_in_fp32_modules: optional list[str], "contains" matching; matching modules are kept/upcasted in fp32.
+# - qlora_use_paged_optimizer: bool (default true). When true and optimizer_type is empty or AdamW8bit,
+#   parser switches optimizer_type to paged AdamW.
+# - qlora_paged_optimizer_bits: 8 or 32 (default 8), selects PagedAdamW8bit or PagedAdamW32bit.
+# - qlora_min_replaced_modules: int >= 1 (default 1), minimum successful replacements required.
+# - qlora_fail_on_replacement_error: bool (default false), fail if any replacement errors occur.
+# - qlora_modules_to_save: optional list[str], extra base-model modules to keep trainable and checkpoint with LoRA state.
+# - qlora_modules_to_save_match: "contains" | "regex" | "exact" (default "exact")
+# - qlora_modules_to_save_lr: optional float > 0, dedicated LR for modules_to_save group.
+# - qlora_enable_memory_mapping: bool (default follows global enable_memory_mapping)
+# - qlora_enable_zero_copy_loading: bool (default follows global enable_zero_copy_loading)
+# - qlora_enable_non_blocking_transfers: bool (default follows global enable_non_blocking_transfers)
+# - qlora_memory_mapping_threshold_mb: optional float > 0 (MB; converted to bytes)
+# - qlora_memory_mapping_threshold / qlora_memory_mapping_threshold_bytes: optional int > 0 (bytes)
+# Example:
+# network_module = "networks.qlora_wan"
+# network_args = [
+#   "qlora_enabled=true",
+#   "qlora_quant_type=nf4",
+#   "qlora_compute_dtype=bfloat16",
+#   "qlora_use_double_quant=true",
+#   "qlora_quant_storage=uint8",
+#   "qlora_target_modules=['self_attn','cross_attn','ffn']",
+#   "qlora_skip_modules=['head']",
+#   "qlora_target_match=contains",
+#   "qlora_skip_match=contains",
+#   "qlora_upcast_layernorm=true",
+#   "qlora_layernorm_patterns=[]",
+#   "qlora_keep_in_fp32_modules=['final_layer']",
+#   "qlora_use_paged_optimizer=true",
+#   "qlora_paged_optimizer_bits=8",
+#   "qlora_min_replaced_modules=1",
+#   "qlora_fail_on_replacement_error=false",
+#   "qlora_modules_to_save=['head']",
+#   "qlora_modules_to_save_match=contains",
+#   "qlora_modules_to_save_lr=2e-5",
+#   "qlora_enable_memory_mapping=true",
+#   "qlora_enable_zero_copy_loading=false",
+#   "qlora_enable_non_blocking_transfers=false",
+#   "qlora_memory_mapping_threshold_mb=10",
 # ]
 
 # IC-LoRA (requires network_module = "networks.ic_lora_wan")
