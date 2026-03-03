@@ -29,6 +29,7 @@ def build_semantic_prepare_items(
     semantic_conditioning_helper: Optional[Any],
     semantic_alignment_helper: Optional[Any],
     bfm_conditioning_helper: Optional[Any],
+    dual_head_alignment_helper: Optional[Any] = None,
 ) -> tuple[list[Any], list[str]]:
     items: list[Any] = [network]
     slots: list[str] = ["network"]
@@ -44,6 +45,9 @@ def build_semantic_prepare_items(
     if bfm_conditioning_helper is not None:
         items.append(bfm_conditioning_helper)
         slots.append("bfm_conditioning_helper")
+    if dual_head_alignment_helper is not None:
+        items.append(dual_head_alignment_helper)
+        slots.append("dual_head_alignment_helper")
     items.extend([optimizer, train_dataloader, lr_scheduler])
     slots.extend(["optimizer", "train_dataloader", "lr_scheduler"])
     return items, slots
@@ -199,3 +203,4 @@ def _infer_text_context_dim(transformer: Any) -> int:
         if hasattr(layer, "in_features"):
             return int(layer.in_features)
     return int(getattr(transformer, "dim", 1024))
+

@@ -60,6 +60,7 @@ from configs.vera_config import apply_vera_config
 from configs.cdka_config import apply_cdka_config
 from configs.s2d_config import apply_s2d_config
 from configs.qlora_config import apply_qlora_config
+from configs.dual_head_alignment_config import apply_dual_head_alignment_config
 
 
 def create_args_from_config(
@@ -2022,8 +2023,9 @@ def create_args_from_config(
             f"🚀 TorchAO FP8 enabled - Weight dtype: {args.torchao_fp8_weight_dtype}"
         )
 
-    # Glance distillation mode configuration (WAN training)
+    # Glance distillation mode + paper-inspired dual-head alignment configuration (WAN training)
     apply_glance_config(args, config, logger)
+    apply_dual_head_alignment_config(args, config, logger)
 
     # RCM distillation pipeline configuration (root-level keys, prefixed with rcm_)
     rcm_extra_args = config.get("rcm_extra_args", {}) or {}
@@ -2155,3 +2157,4 @@ def create_args_from_config(
     args = apply_euphonium_config(args, config, logger)
 
     return args
+

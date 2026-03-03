@@ -372,6 +372,11 @@ def collect_and_log_training_metrics(
         logs["loss/memflow_guidance"] = float(
             loss_components.memflow_guidance_loss.item()
         )
+    if getattr(loss_components, "dual_head_alignment_loss", None) is not None:
+        dual_head_loss = float(
+            loss_components.dual_head_alignment_loss.item()
+        )
+        logs["loss/dual_head_alignment"] = dual_head_loss
     if getattr(loss_components, "reflexflow_adr_loss", None) is not None:
         logs["loss/reflexflow_adr"] = float(loss_components.reflexflow_adr_loss.item())
     if getattr(loss_components, "reflexflow_fc_loss", None) is not None:
@@ -387,6 +392,20 @@ def collect_and_log_training_metrics(
     flexam_metrics = getattr(loss_components, "flexam_metrics", None)
     if isinstance(flexam_metrics, dict):
         for key, value in flexam_metrics.items():
+            if value is None:
+                continue
+            if isinstance(value, torch.Tensor):
+                if value.numel() == 0:
+                    continue
+                logs[key] = float(value.detach().float().mean().item())
+            else:
+                try:
+                    logs[key] = float(value)
+                except Exception:
+                    continue
+    dual_head_metrics = getattr(loss_components, "dual_head_metrics", None)
+    if isinstance(dual_head_metrics, dict):
+        for key, value in dual_head_metrics.items():
             if value is None:
                 continue
             if isinstance(value, torch.Tensor):
@@ -747,5 +766,6 @@ def collect_and_log_training_metrics(
             accelerator.log(activation_metrics, step=global_step)
     except Exception as e:
         logger.debug(f"Activation stats logging error: {e}")
+
 
 

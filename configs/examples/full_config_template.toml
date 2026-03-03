@@ -5996,6 +5996,85 @@ immiscible_use_scipy = true
 immiscible_fallback_mode = "knn"
 
 # =============================================================================
+# ⚠️ DUAL-HEAD ALIGNMENT SETTINGS
+# =============================================================================
+# Enable dual-head auxiliary objective:
+# - Global FM branch learns long-horizon flow-target alignment.
+# - Local DM branch aligns sliding windows to an approximate base-model teacher
+#   (implemented via temporary LoRA disable/multiplier=0 pass in WAN LoRA training).
+enable_dual_head_alignment = false
+
+# Relative weight for global branch auxiliary loss (>= 0).
+dual_head_alignment_global_weight = 1.0
+
+# Relative weight for local branch auxiliary loss (>= 0).
+dual_head_alignment_local_weight = 1.0
+
+# Local temporal window size for DM branch (frames).
+# - 0: use full clip (no window cropping)
+# - >0: train local branch on sliding windows of this size.
+dual_head_alignment_window_frames = 0
+
+# Sliding stride for local windows when window_frames > 0.
+# - 0: defaults to window size (non-overlapping windows)
+# - >0: explicit stride.
+dual_head_alignment_window_stride = 0
+
+# Local branch reconstruction-to-target weight (>= 0).
+dual_head_alignment_local_recon_weight = 0.0
+
+# Local branch student-to-teacher behavior-matching weight (>= 0).
+dual_head_alignment_local_behavior_weight = 1.0
+
+# Local branch teacher-student KL term weight (>= 0).
+dual_head_alignment_local_kl_weight = 0.0
+
+# Local branch forward-divergence term weight (>= 0).
+dual_head_alignment_local_div_forward_weight = 0.0
+
+# Local branch reverse-divergence term weight (>= 0), mode-seeking proxy.
+dual_head_alignment_local_div_reverse_weight = 1.0
+
+# Temperature for local KL/divergence terms (> 0).
+dual_head_alignment_temperature = 1.0
+
+# Approximate teacher path for local branch:
+# - "base_model": run a no-grad teacher pass with LoRA multiplier set to 0
+# (same WAN backbone, no adapter contribution; alias to multiplier mode).
+# - "base_model_multiplier": force LoRA multiplier=0 for teacher pass.
+# - "base_model_disable_lora": toggle LoRA enabled state off for teacher pass.
+dual_head_alignment_teacher_mode = "base_model"
+
+# LR scale for dual-head helper parameters relative to main learning_rate (> 0).
+dual_head_alignment_head_lr_scale = 1.0
+
+# Training step to start applying dual-head auxiliary objective (>= 0).
+dual_head_alignment_start_step = 0
+
+# Teacher pass cadence in steps (>= 1).
+# - 1: every step
+# - N: apply dual-head teacher-alignment terms every N steps after start_step.
+dual_head_alignment_teacher_interval_steps = 1
+
+# Optional ramp duration for local branch weight in steps (>= 0).
+# - 0: no ramp, full local weight immediately at start_step.
+# - >0: linearly ramp local weight scale from 0 -> 1 over this many steps.
+dual_head_alignment_local_weight_ramp_steps = 0
+
+# Window selection policy when more windows exist than max_windows:
+# - "all": deterministic first windows
+# - "random": deterministic random subset based on step and random_seed.
+dual_head_alignment_window_sampling = "all"
+
+# Cap number of local windows per sample (>= 0).
+# - 0: no cap
+# - >0: limit local windows to reduce compute overhead.
+dual_head_alignment_max_windows = 0
+
+# Seed for deterministic random window selection when window_sampling="random".
+dual_head_alignment_random_seed = 42
+
+# =============================================================================
 # ⚠️ CAT-LVDM CORRUPTION-AWARE TRAINING SETTINGS
 # =============================================================================
 # Enable CAT-LVDM structured corruption on conditioning embeddings (training-only).
@@ -7494,4 +7573,5 @@ target_frames = [1, 25]
 
 # Extract each target_frame sequence once
 frame_sample = 1
+
 

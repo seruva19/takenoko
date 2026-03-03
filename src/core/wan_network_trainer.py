@@ -1113,6 +1113,35 @@ class WanNetworkTrainer:
                 logger.warning(f"Self-Transcendence setup failed: {exc}")
                 self_transcendence_helper = None
 
+        dual_head_alignment_helper = None
+        if getattr(args, "enable_dual_head_alignment", False):
+            try:
+                from enhancements.dual_head_alignment.helper import (
+                    DualHeadAlignmentHelper,
+                )
+
+                logger.info(
+                    "Dual-head alignment helper is enabled (paper-inspired approximation). Initializing module."
+                )
+                dual_head_alignment_helper = DualHeadAlignmentHelper(args)
+                dual_head_params = dual_head_alignment_helper.get_trainable_params()
+                if dual_head_params:
+                    dual_head_lr = float(args.learning_rate) * float(
+                        getattr(args, "dual_head_alignment_head_lr_scale", 1.0)
+                    )
+                    trainable_params.append(
+                        {"params": dual_head_params, "lr": dual_head_lr}
+                    )
+                    lr_descriptions.append("dual_head_alignment")
+                else:
+                    logger.warning(
+                        "Dual-head alignment helper enabled but no trainable parameters were found."
+                    )
+                    dual_head_alignment_helper = None
+            except Exception as exc:
+                logger.warning(f"Dual-head alignment helper setup failed: {exc}")
+                dual_head_alignment_helper = None
+
         (
             semantic_conditioning_helper,
             semantic_alignment_helper,
@@ -1226,6 +1255,7 @@ class WanNetworkTrainer:
             semantic_conditioning_helper=semantic_conditioning_helper,
             semantic_alignment_helper=semantic_alignment_helper,
             bfm_conditioning_helper=bfm_conditioning_helper,
+            dual_head_alignment_helper=dual_head_alignment_helper,
         )
         prepared = accelerator.prepare(*prepare_items)
         prepared_map = dict(zip(prepare_slots, prepared))
@@ -1239,6 +1269,9 @@ class WanNetworkTrainer:
         )
         bfm_conditioning_helper = prepared_map.get(
             "bfm_conditioning_helper", bfm_conditioning_helper
+        )
+        dual_head_alignment_helper = prepared_map.get(
+            "dual_head_alignment_helper", dual_head_alignment_helper
         )
         optimizer = prepared_map["optimizer"]
         train_dataloader = prepared_map["train_dataloader"]
@@ -1896,6 +1929,12 @@ class WanNetworkTrainer:
                 except Exception as exc:
                     logger.warning(f"BFM SemFeat hook setup failed: {exc}")
                     semfeat_helper = None
+            if dual_head_alignment_helper is not None:
+                try:
+                    dual_head_alignment_helper.setup_hooks()
+                except Exception as exc:
+                    logger.warning(f"Dual-head alignment helper setup failed: {exc}")
+                    dual_head_alignment_helper = None
 
             from enhancements.haste.integration import (
                 add_haste_params,
@@ -1997,6 +2036,7 @@ class WanNetworkTrainer:
                 haste_helper=haste_helper,
                 contrastive_attention_helper=contrastive_attention_helper,
                 dual_model_manager=dual_model_manager,
+                dual_head_alignment_helper=dual_head_alignment_helper,
             )
 
         if "sara_helper" in locals() and sara_helper is not None:
@@ -2040,6 +2080,11 @@ class WanNetworkTrainer:
             remove_contrastive_attention_helper(contrastive_attention_helper)
         if "semfeat_helper" in locals() and semfeat_helper is not None:
             semfeat_helper.remove_hooks()
+        if (
+            "dual_head_alignment_helper" in locals()
+            and dual_head_alignment_helper is not None
+        ):
+            dual_head_alignment_helper.remove_hooks()
         if "crepa_helper" in locals() and crepa_helper is not None:
             crepa_helper.remove_hooks()
         if "semantic_alignment_helper" in locals():
@@ -2252,3 +2297,4 @@ class WanNetworkTrainer:
             len(new_params),
             lr,
         )
+

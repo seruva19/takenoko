@@ -164,6 +164,7 @@ from core.handlers.saving_handler import (
 from core.handlers.adaptive_handler import handle_adaptive_timestep_sampling
 from core.handlers.self_correction_handler import handle_self_correction_update
 from core.handlers.relora_handler import handle_relora_reset
+from core.handlers.dual_head_alignment_handler import compute_dual_head_alignment_loss
 from core.handlers.vram_validation_handler import (
     handle_vram_validation_if_enabled,
     handle_windows_shared_memory_check,
@@ -335,6 +336,8 @@ class TrainingCore:
         self.stablevm_target_helper: Optional[StableVMTargetHelper] = None
         self._last_stablevm_target_metrics: Dict[str, torch.Tensor] = {}
         self._last_flexam_metrics: Dict[str, float] = {}
+        self._warned_dual_head_no_multiplier: bool = False
+        self._warned_dual_head_teacher_failed: bool = False
 
         # Weight EMA tracking (initialized when enabled)
         self.weight_ema: Optional[ExponentialMovingAverage] = None
@@ -1371,6 +1374,7 @@ class TrainingCore:
         contrastive_attention_helper: Optional[Any] = None,
         controlnet: Optional[Any] = None,
         dual_model_manager: Optional[Any] = None,
+        dual_head_alignment_helper: Optional[Any] = None,
     ) -> Tuple[int, Any]:
         """Run the main training loop."""
 
@@ -2561,6 +2565,47 @@ class TrainingCore:
                             )
                             self._attach_flexam_metrics(loss_components)
 
+                            if dual_head_alignment_helper is not None:
+                                (
+                                    dual_loss,
+                                    dual_metrics,
+                                    self._warned_dual_head_no_multiplier,
+                                    self._warned_dual_head_teacher_failed,
+                                    self._last_mixflow_stats,
+                                ) = compute_dual_head_alignment_loss(
+                                    args=args,
+                                    accelerator=accelerator,
+                                    dual_head_alignment_helper=dual_head_alignment_helper,
+                                    global_step=global_step,
+                                    unwrapped_net=unwrapped_net,
+                                    active_transformer=active_transformer,
+                                    latents_for_dit=latents_for_dit,
+                                    batch=batch,
+                                    noise=noise,
+                                    noisy_model_input=noisy_model_input,
+                                    timesteps=timesteps,
+                                    network_dtype=network_dtype,
+                                    control_signal_processor=control_signal_processor,
+                                    controlnet=controlnet,
+                                    model_pred=model_pred,
+                                    target=target,
+                                    weighting=weighting,
+                                    call_dit_fn=self.call_dit,
+                                    semanticgen_state=self.semanticgen_state,
+                                    warned_no_multiplier=self._warned_dual_head_no_multiplier,
+                                    warned_teacher_failed=self._warned_dual_head_teacher_failed,
+                                    last_mixflow_stats=self._last_mixflow_stats,
+                                )
+
+                                if dual_loss is not None:
+                                    loss_components.total_loss = (
+                                        loss_components.total_loss + dual_loss
+                                    )
+                                    loss_components.dual_head_alignment_loss = (
+                                        dual_loss.detach()
+                                    )
+                                    loss_components.dual_head_metrics = dual_metrics
+
                             if (
                                 self.error_recycling_helper is not None
                                 and self.error_recycling_helper.enabled
@@ -3335,3 +3380,4 @@ class TrainingCore:
         profiler.stop()
 
         return global_step, network
+
