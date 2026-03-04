@@ -425,6 +425,7 @@ network_alpha = 32
 # - include_patterns / exclude_patterns: regex list of target module names
 # - rank_dropout / module_dropout: dropout for LoRA ranks/modules
 # - conv_dim / conv_alpha: Conv2d LoRA rank/alpha
+# - use_rslora: bool, use RS-LoRA scaling alpha/sqrt(rank) instead of alpha/rank
 # - loraplus_lr_ratio: LoRA+ lr scaling for lora_up
 # - ggpo_sigma / ggpo_beta: LoRA-GGPO regularization
 # - initialize: "kaiming" (default), "pissa", or "pissa_niter_<k>"
@@ -435,6 +436,10 @@ network_alpha = 32
 
 # LoRA+ (scaled lr on lora_up only):
 # network_args = ["loraplus_lr_ratio=2.0"]
+
+# RS-LoRA (Rank-Stabilized LoRA, alpha/sqrt(rank) scaling):
+# network_args = ["use_rslora=true"]
+# Keep the same `use_rslora` setting when loading these checkpoints to preserve exact scaling.
 
 # LoRA-GGPO regularization (perturbs Linear LoRA weights during training):
 # Parsed by `takenoko.create_args_from_config` into args.ggpo_sigma/ggpo_beta for the loss hooks.
@@ -959,7 +964,7 @@ network_alpha = 32
 #network_args = [
 #  "ramp_up_steps=1000",
 #  "init_method=kaiming_uniform",
-#  "use_rslora=false",
+#  "use_rslora=false", # SingLoRA-only flag in this section
 #  "dropout=null",
 #]
 

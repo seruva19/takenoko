@@ -482,6 +482,20 @@ class ModelManager:
         logger.info(f"import network module: {args.network_module}")
         network_module = importlib.import_module(args.network_module)
 
+        # prepare network kwargs from network_args early so they are also available for
+        # base-weight merge and dim-from-weights construction paths.
+        net_kwargs = {}
+        if args.network_args is not None:
+            for net_arg in args.network_args:
+                if not isinstance(net_arg, str) or "=" not in net_arg:
+                    logger.warning(
+                        "Ignoring malformed network_args entry without '=': %r",
+                        net_arg,
+                    )
+                    continue
+                key, value = net_arg.split("=", 1)
+                net_kwargs[key] = value
+
         if args.base_weights is not None:
             # if base_weights is specified, merge the weights to DiT model
             for i, weight_path in enumerate(args.base_weights):
@@ -498,25 +512,21 @@ class ModelManager:
                 )
 
                 weights_sd = load_file(weight_path)
-                module = network_module.create_arch_network_from_weights(
-                    multiplier, weights_sd, unet=transformer, for_inference=True
-                )
+                try:
+                    module = network_module.create_arch_network_from_weights(
+                        multiplier,
+                        weights_sd,
+                        unet=transformer,
+                        for_inference=True,
+                        **net_kwargs,
+                    )
+                except TypeError:
+                    module = network_module.create_arch_network_from_weights(
+                        multiplier, weights_sd, unet=transformer, for_inference=True
+                    )
                 module.merge_to(None, transformer, weights_sd, torch.float32, "cpu")
 
             logger.info(f"all weights merged: {', '.join(args.base_weights)}")
-
-        # prepare network
-        net_kwargs = {}
-        if args.network_args is not None:
-            for net_arg in args.network_args:
-                if not isinstance(net_arg, str) or "=" not in net_arg:
-                    logger.warning(
-                        "Ignoring malformed network_args entry without '=': %r",
-                        net_arg,
-                    )
-                    continue
-                key, value = net_arg.split("=", 1)
-                net_kwargs[key] = value
 
         sparse_algo_to_pass = None
         if hasattr(args, "nabla_sparse_attention") and args.nabla_sparse_attention:
@@ -630,9 +640,14 @@ class ModelManager:
                     control_config=control_config,
                 )
             else:
-                network_from_weights = network_module.create_arch_network_from_weights(
-                    1, weights_sd, unet=transformer
-                )
+                try:
+                    network_from_weights = network_module.create_arch_network_from_weights(
+                        1, weights_sd, unet=transformer, **net_kwargs
+                    )
+                except TypeError:
+                    network_from_weights = network_module.create_arch_network_from_weights(
+                        1, weights_sd, unet=transformer
+                    )
                 # Some network modules return only the network, others return
                 # (network, metadata). Support both shapes.
                 if isinstance(network_from_weights, tuple):

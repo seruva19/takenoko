@@ -4,6 +4,7 @@
 # https://github.com/cloneofsimo/lora/blob/master/lora_diffusion/lora.py
 
 import ast
+import inspect
 import math
 import os
 import re
@@ -45,6 +46,7 @@ class LoRAModule(torch.nn.Module):
         # LoRA-GGPO parameters (optional)
         ggpo_sigma: Optional[float] = None,
         ggpo_beta: Optional[float] = None,
+        use_rslora: bool = False,
     ):
         """
         if alpha == 0 or None, alpha is rank (no scaling).
@@ -120,7 +122,13 @@ class LoRAModule(torch.nn.Module):
         if type(alpha) == torch.Tensor:
             alpha = alpha.detach().float().numpy()  # without casting, bf16 causes error
         alpha = self.lora_dim if alpha is None or alpha == 0 else alpha
-        self.scale = alpha / self.lora_dim
+        self.use_rslora = bool(use_rslora)
+        scale_denominator = (
+            math.sqrt(float(self.lora_dim))
+            if self.use_rslora
+            else float(self.lora_dim)
+        )
+        self.scale = float(alpha) / scale_denominator
         self.register_buffer("alpha", torch.tensor(alpha))  # for save/load
 
         # same as microsoft's
@@ -526,7 +534,14 @@ class LoRAInfModule(LoRAModule):
         **kwargs,
     ):
         # no dropout for inference
-        super().__init__(lora_name, org_module, multiplier, lora_dim, alpha)
+        super().__init__(
+            lora_name,
+            org_module,
+            multiplier,
+            lora_dim,
+            alpha,
+            use_rslora=kwargs.get("use_rslora", False),
+        )
 
         self.org_module_ref = [org_module]  # for reference
         self.enabled = True
@@ -780,6 +795,19 @@ def create_network(
     if verbose is not None:
         verbose = True if verbose == "True" else False
 
+    # RS-LoRA: scale by alpha/sqrt(rank) instead of alpha/rank.
+    use_rslora = kwargs.get("use_rslora", False)
+    if isinstance(use_rslora, str):
+        use_rslora = use_rslora.strip().lower() in (
+            "true",
+            "1",
+            "yes",
+            "y",
+            "on",
+        )
+    else:
+        use_rslora = bool(use_rslora)
+
     # regular expression for module selection: exclude and include
     exclude_patterns = kwargs.get("exclude_patterns", None)
     if exclude_patterns is not None and isinstance(exclude_patterns, str):      
@@ -863,6 +891,7 @@ def create_network(
         dropout=neuron_dropout,
         rank_dropout=rank_dropout,
         module_dropout=module_dropout,
+        use_rslora=use_rslora,
         conv_lora_dim=conv_dim,
         conv_alpha=conv_alpha,
         exclude_patterns=exclude_patterns,
@@ -875,6 +904,9 @@ def create_network(
         initialize=initialize,
         pissa_niter=cast(Optional[int], pissa_niter),
     )
+
+    if use_rslora:
+        logger.info("RS-LoRA enabled: using alpha/sqrt(rank) adapter scaling.")
 
     loraplus_lr_ratio = kwargs.get("loraplus_lr_ratio", None)
     # loraplus_unet_lr_ratio = kwargs.get("loraplus_unet_lr_ratio", None)
@@ -924,6 +956,7 @@ class LoRANetwork(torch.nn.Module):
         ggpo_beta: Optional[float] = None,
         initialize: str = "kaiming",
         pissa_niter: Optional[int] = None,
+        use_rslora: bool = False,
     ) -> None:
         super().__init__()
         self.multiplier = multiplier
@@ -935,6 +968,7 @@ class LoRANetwork(torch.nn.Module):
         self.dropout = dropout
         self.rank_dropout = rank_dropout
         self.module_dropout = module_dropout
+        self.use_rslora = bool(use_rslora)
         self.target_replace_modules = target_replace_modules
         self.prefix = prefix
 
@@ -958,6 +992,7 @@ class LoRANetwork(torch.nn.Module):
             logger.info(
                 f"create LoRA network. base dim (rank): {lora_dim}, alpha: {alpha}"
             )
+            logger.info("RS-LoRA: %s", "enabled" if self.use_rslora else "disabled")
             logger.info(
                 f"neuron dropout: p={self.dropout}, rank dropout: p={self.rank_dropout}, module dropout: p={self.module_dropout}"
             )
@@ -1105,19 +1140,34 @@ class LoRANetwork(torch.nn.Module):
                                     skipped.append(lora_name)
                                 continue
 
-                            lora = module_class(
-                                lora_name,  # type: ignore
+                            module_kwargs = {
+                                "dropout": dropout,
+                                "rank_dropout": rank_dropout,
+                                "module_dropout": module_dropout,
+                                "initialize": self.initialize,
+                                "pissa_niter": self.pissa_niter,
+                                "ggpo_sigma": self.ggpo_sigma,
+                                "ggpo_beta": self.ggpo_beta,
+                            }
+                            try:
+                                module_signature = inspect.signature(module_class)
+                                params = module_signature.parameters
+                                supports_var_kw = any(
+                                    p.kind == inspect.Parameter.VAR_KEYWORD
+                                    for p in params.values()
+                                )
+                                if supports_var_kw or "use_rslora" in params:
+                                    module_kwargs["use_rslora"] = self.use_rslora
+                            except Exception:
+                                module_kwargs["use_rslora"] = self.use_rslora
+
+                            lora = module_class(  # type: ignore
+                                lora_name,
                                 child_module,
                                 self.multiplier,
                                 dim,
                                 alpha,
-                                dropout=dropout,
-                                rank_dropout=rank_dropout,
-                                module_dropout=module_dropout,
-                                initialize=self.initialize,
-                                pissa_niter=self.pissa_niter,
-                                ggpo_sigma=self.ggpo_sigma,
-                                ggpo_beta=self.ggpo_beta,
+                                **module_kwargs,
                             )
                             loras.append(lora)
 
@@ -1575,7 +1625,10 @@ class LoRANetwork(torch.nn.Module):
             up = state_dict[upkeys[i]].to(device)
             alpha = state_dict[alphakeys[i]].to(device)
             dim = down.shape[0]
-            scale = alpha / dim
+            if self.use_rslora:
+                scale = alpha / math.sqrt(float(dim))
+            else:
+                scale = alpha / dim
 
             if up.shape[2:] == (1, 1) and down.shape[2:] == (1, 1):
                 updown = (
@@ -1652,6 +1705,12 @@ def create_network_from_weights(
 
     module_class = LoRAInfModule if for_inference else LoRAModule
 
+    use_rslora = kwargs.get("use_rslora", False)
+    if isinstance(use_rslora, str):
+        use_rslora = use_rslora.lower() in ("true", "1", "yes", "y", "on")
+    else:
+        use_rslora = bool(use_rslora)
+
     extra_include_patterns = kwargs.get("extra_include_patterns", None)
     if extra_include_patterns is not None and isinstance(extra_include_patterns, str):
         extra_include_patterns = ast.literal_eval(extra_include_patterns)
@@ -1692,6 +1751,7 @@ def create_network_from_weights(
         multiplier=multiplier,
         modules_dim=modules_dim,
         modules_alpha=modules_alpha,
+        use_rslora=use_rslora,
         module_class=module_class,
         extra_exclude_patterns=extra_exclude_patterns,
         extra_include_patterns=extra_include_patterns,
