@@ -502,6 +502,56 @@ network_alpha = 32
 #   "vera_matrix_init=kaiming_uniform"
 # ]
 
+# VB-LoRA (shared vector-bank composition, training-only)
+# Requires: network_module = "networks.vblora_wan"
+# Mirrors the PEFT/VB-LoRA pattern: per-layer logits compose low-rank A/B tiles
+# from one shared trainable vector bank.
+# - vblora_enabled: bool (default true when network_module is networks.vblora_wan)
+# - vblora_num_vectors: int >= 1 (default 256)
+#   Number of vectors in the shared bank.
+# - vblora_vector_length: int >= 1 (default 256)
+#   Length of each bank vector. For each targeted layer, both in/out features
+#   must be divisible by this value.
+# - vblora_topk: int >= 1 and <= vblora_num_vectors (default 2)
+#   Top-k sparse selection over bank vectors for each VB-LoRA logit tile.
+# - vblora_dropout: float in [0, 1) (default 0.0)
+#   Dropout applied before VB-LoRA low-rank projection.
+# - vblora_init_vector_bank_bound: float > 0 (default 0.02)
+#   Shared vector bank is initialized uniformly in [-bound, +bound].
+# - vblora_init_logits_std: float > 0 (default 0.1)
+#   Standard deviation for normal initialization of VB-LoRA logits.
+# - vblora_bank_lr_ratio: float > 0 (default 1.0)
+#   LR multiplier for shared vector bank parameter group.
+# - vblora_logits_lr_ratio: float > 0 (default 1.0)
+#   LR multiplier for VB-LoRA logits parameter group.
+# - vblora_train_vector_bank: bool (default true)
+#   true: optimize shared vector bank and logits; false: train logits only.
+# - vblora_save_only_topk_weights: bool (default false)
+#   true: save compressed `*_topk_indices` + `*_topk_weights` tensors instead of full logits.
+#   This reduces checkpoint size, but such checkpoints should be used for merge/inference only,
+#   not for resuming VB-LoRA training.
+# Aliases accepted for backward compatibility:
+# - vblora_vector_dim -> vblora_vector_length
+# - vblora_init_std -> vblora_init_logits_std
+# Notes:
+# - This does not change the base-model inference graph, but raw VB-LoRA checkpoints use
+#   VB-LoRA-specific tensor keys. For standard LoRA-only tools, convert or merge first.
+# - Keep network_dim/network_alpha as normal LoRA rank/scale controls.
+# Example:
+# network_args = [
+#   "vblora_enabled=true",
+#   "vblora_num_vectors=256",
+#   "vblora_vector_length=256",
+#   "vblora_topk=2",
+#   "vblora_dropout=0.0",
+#   "vblora_init_vector_bank_bound=0.02",
+#   "vblora_init_logits_std=0.1",
+#   "vblora_bank_lr_ratio=1.0",
+#   "vblora_logits_lr_ratio=1.0",
+#   "vblora_train_vector_bank=true",
+#   "vblora_save_only_topk_weights=false"
+# ]
+
 # CDKA (Kronecker-structured adapters, training-only)
 # Requires: network_module = "networks.cdka_wan"
 # - cdka_enabled: bool (default true when network_module is networks.cdka_wan)
