@@ -92,6 +92,10 @@ from enhancements.reflexflow.runtime import (
     build_reflexflow_context,
     maybe_log_reflexflow_metrics,
 )
+from enhancements.self_flow.noising import (
+    maybe_apply_self_flow_dual_timestep,
+    reduce_model_timesteps_for_runtime,
+)
 from core.training_inputs import prepare_standard_training_inputs
 from energy_based.eqm_mode.training_helper import EqMTrainingHelper
 
@@ -288,6 +292,8 @@ class TrainingCore:
         self.internal_guidance_helper: Optional[Any] = None
         # Self-Transcendence helper (set in run_training_loop when enabled)
         self.self_transcendence_helper: Optional[Any] = None
+        # Self-Flow helper (set in run_training_loop when enabled)
+        self.self_flow_helper: Optional[Any] = None
 
         # Initialize temporal consistency enhancement
         self.temporal_consistency_integration = None
@@ -606,6 +612,7 @@ class TrainingCore:
         rcm_trigflow: Optional[torch.Tensor] = None,
         rcm_t_scaling_factor: Optional[float] = None,
         reg_cls_token: Optional[torch.Tensor] = None,
+        model_timesteps_override: Optional[torch.Tensor] = None,
         context_override: Optional[List[torch.Tensor]] = None,
         apply_stable_velocity_target: bool = True,
         return_intermediate: Optional[bool] = None,
@@ -960,6 +967,12 @@ class TrainingCore:
             self._last_flexam_metrics = dict(flexam_result.metrics)
         else:
             model_input = noisy_model_input
+
+        if model_timesteps_override is not None:
+            model_timesteps = model_timesteps_override.to(
+                device=model_timesteps.device,
+                dtype=model_timesteps.dtype,
+            )
 
         ic_lora_ref_frames = 0
         ic_lora_conditioned_first_frame_mask: Optional[torch.Tensor] = None
@@ -1370,6 +1383,7 @@ class TrainingCore:
         crepa_helper: Optional[Any] = None,
         internal_guidance_helper: Optional[Any] = None,
         self_transcendence_helper: Optional[Any] = None,
+        self_flow_helper: Optional[Any] = None,
         haste_helper: Optional[Any] = None,
         contrastive_attention_helper: Optional[Any] = None,
         controlnet: Optional[Any] = None,
@@ -1382,6 +1396,7 @@ class TrainingCore:
         self.noise_scheduler = noise_scheduler
         self.internal_guidance_helper = internal_guidance_helper
         self.self_transcendence_helper = self_transcendence_helper
+        self.self_flow_helper = self_flow_helper
         self.initialize_stable_velocity_target(args)
 
         transition_cfg = getattr(args, "transition_training", None)
@@ -2049,23 +2064,72 @@ class TrainingCore:
                         eqm_enabled=eqm_enabled,
                         warned_reflexflow_eqm=self._warned_reflexflow_eqm,
                     )
+                    self_flow_context = None
+                    self_flow_model_timesteps = timesteps
+                    self_flow_runtime_timesteps = timesteps
+                    if (
+                        self_flow_helper is not None
+                        and not eqm_enabled
+                        and bool(
+                            getattr(self_flow_helper, "dual_timestep_enabled", True)
+                        )
+                    ):
+                        try:
+                            self_flow_context = maybe_apply_self_flow_dual_timestep(
+                                args=args,
+                                latents=latents_for_dit,
+                                noise=noise,
+                                base_timesteps=timesteps,
+                                patch_size=self.config.patch_size,
+                                batch=batch,
+                            )
+                            if self_flow_context is not None:
+                                noisy_model_input = (
+                                    self_flow_context.student_noisy_model_input.to(
+                                        device=accelerator.device,
+                                        dtype=network_dtype,
+                                    )
+                                )
+                                self_flow_model_timesteps = (
+                                    self_flow_context.student_model_timesteps.to(
+                                        device=accelerator.device,
+                                        dtype=network_dtype,
+                                    )
+                                )
+                                self_flow_runtime_timesteps = (
+                                    reduce_model_timesteps_for_runtime(
+                                        self_flow_model_timesteps
+                                    ).to(
+                                        device=accelerator.device,
+                                        dtype=timesteps.dtype,
+                                    )
+                                )
+                        except Exception as exc:
+                            if bool(getattr(args, "self_flow_strict_mode", True)):
+                                raise
+                            logger.warning(
+                                "Self-Flow dual-timestep path failed; using base noising. (%s)",
+                                exc,
+                            )
                     # Optional: If the network supports TLora-style masking, update mask from timesteps
                     try:
                         if unwrapped_net is None:
                             unwrapped_net = accelerator.unwrap_model(network)
                         if hasattr(unwrapped_net, "update_rank_mask_from_timesteps"):
                             unwrapped_net.update_rank_mask_from_timesteps(
-                                timesteps, max_timestep=1000, device=accelerator.device
+                                self_flow_runtime_timesteps,
+                                max_timestep=1000,
+                                device=accelerator.device,
                             )
                         if hasattr(unwrapped_net, "set_tc_lora_runtime_condition"):
                             unwrapped_net.set_tc_lora_runtime_condition(
                                 latents_for_dit,
-                                timesteps,
+                                self_flow_runtime_timesteps,
                                 max_timestep=getattr(args, "tc_lora_timestep_max", 1000),
                             )
                         elif hasattr(unwrapped_net, "set_tc_lora_timestep"):
                             unwrapped_net.set_tc_lora_timestep(
-                                timesteps,
+                                self_flow_runtime_timesteps,
                                 max_timestep=getattr(args, "tc_lora_timestep_max", 1000),
                             )
                     except Exception:
@@ -2075,7 +2139,9 @@ class TrainingCore:
                             if unwrapped_net is None:
                                 unwrapped_net = accelerator.unwrap_model(network)
                             if hasattr(unwrapped_net, "set_mhc_timestep"):
-                                unwrapped_net.set_mhc_timestep(timesteps)
+                                unwrapped_net.set_mhc_timestep(
+                                    self_flow_runtime_timesteps
+                                )
                         except Exception:
                             pass
                     try:
@@ -2110,7 +2176,7 @@ class TrainingCore:
                                 control_signal=control_signal,
                                 pixels=pixels,
                                 analogy_boxes=analogy_boxes,
-                                timesteps=timesteps,
+                                timesteps=self_flow_runtime_timesteps,
                             )
                     except Exception:
                         pass
@@ -2119,7 +2185,7 @@ class TrainingCore:
                         weighting = compute_loss_weighting_for_sd3(
                             args.weighting_scheme,
                             noise_scheduler,
-                            timesteps,
+                            self_flow_runtime_timesteps,
                             accelerator.device,
                             dit_dtype,
                         )
@@ -2172,6 +2238,8 @@ class TrainingCore:
                             timesteps = eqm_result.timesteps
                             noise = eqm_result.noise
                             noisy_model_input = eqm_result.noisy_latents
+                            self_flow_model_timesteps = timesteps
+                            self_flow_context = None
                             intermediate_z = eqm_result.intermediate
                             context_memory_loss = torch.zeros(
                                 (), device=accelerator.device, dtype=network_dtype
@@ -2247,6 +2315,7 @@ class TrainingCore:
                                         controlnet=controlnet,
                                         global_step=global_step,
                                         reg_cls_token=None,
+                                        model_timesteps_override=self_flow_model_timesteps,
                                         context_override=context_override,
                                         apply_stable_velocity_target=False,
                                     )
@@ -2290,6 +2359,7 @@ class TrainingCore:
                                     controlnet,
                                     global_step=global_step,
                                     reg_cls_token=reg_cls_input,
+                                    model_timesteps_override=self_flow_model_timesteps,
                                 )
                             finally:
                                 restore_concept_multiplier(
@@ -2352,6 +2422,7 @@ class TrainingCore:
                                             controlnet,
                                             global_step=global_step,
                                             reg_cls_token=None,
+                                            model_timesteps_override=self_flow_model_timesteps,
                                             apply_stable_velocity_target=False,
                                         )
                                     if (
@@ -2543,6 +2614,8 @@ class TrainingCore:
                                 crepa_helper=crepa_helper,
                                 internal_guidance_helper=internal_guidance_helper,
                                 self_transcendence_helper=self.self_transcendence_helper,
+                                self_flow_helper=self.self_flow_helper,
+                                self_flow_context=self_flow_context,
                                 drifting_helper=self.drifting_helper,
                                 haste_helper=haste_helper,
                                 contrastive_attention_helper=contrastive_attention_helper,
@@ -2902,6 +2975,7 @@ class TrainingCore:
                                         noise_scheduler=noise_scheduler,
                                         vae=vae,
                                         target_loi_context=None,
+                                        model_timesteps=self_flow_model_timesteps,
                                         repa_helper=repa_helper,
                                         sft_alignment_helper=sft_alignment_helper,
                                         det_motion_helper=det_motion_helper,
@@ -2913,6 +2987,8 @@ class TrainingCore:
                                         layer_sync_helper=layer_sync_helper,
                                         crepa_helper=crepa_helper,
                                         haste_helper=haste_helper,
+                                        self_flow_helper=self.self_flow_helper,
+                                        self_flow_context=self_flow_context,
                                         contrastive_attention_helper=contrastive_attention_helper,
                                         transition_loss_context=transition_loss_context,
                                         transition_forward_fn=transition_forward_fn,
@@ -2956,6 +3032,7 @@ class TrainingCore:
                             noise_scheduler=noise_scheduler,
                             vae=vae,
                             target_loi_context=None,
+                            model_timesteps=self_flow_model_timesteps,
                             repa_helper=repa_helper,
                             sft_alignment_helper=sft_alignment_helper,
                             det_motion_helper=det_motion_helper,
@@ -2967,6 +3044,8 @@ class TrainingCore:
                             layer_sync_helper=layer_sync_helper,
                             crepa_helper=crepa_helper,
                             haste_helper=haste_helper,
+                            self_flow_helper=self.self_flow_helper,
+                            self_flow_context=self_flow_context,
                             contrastive_attention_helper=contrastive_attention_helper,
                             transition_loss_context=transition_loss_context,
                             transition_forward_fn=(
@@ -3001,6 +3080,10 @@ class TrainingCore:
                             update_teacher_if_needed(
                                 self.transition_manager, accelerator, transformer
                             )
+                            if self.self_flow_helper is not None:
+                                self.self_flow_helper.update_teacher_if_needed(
+                                    active_transformer
+                                )
                         except RuntimeError as e:
                             logger.error(
                                 "Р РѓР Р‡Р Р„Р С‘ Make sure you're not adding empty "

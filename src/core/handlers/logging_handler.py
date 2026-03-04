@@ -191,6 +191,22 @@ def collect_and_log_training_metrics(
         logs["loss/self_transcendence"] = float(
             loss_components.self_transcendence_loss.item()
         )
+    if getattr(loss_components, "self_flow_loss", None) is not None:
+        logs["loss/self_flow"] = float(loss_components.self_flow_loss.item())
+    if getattr(loss_components, "self_flow_cosine_similarity", None) is not None:
+        logs["self_flow/cosine_similarity"] = float(
+            loss_components.self_flow_cosine_similarity.item()
+        )
+    if getattr(loss_components, "self_flow_masked_token_ratio", None) is not None:
+        logs["self_flow/masked_token_ratio"] = float(
+            loss_components.self_flow_masked_token_ratio.item()
+        )
+    if getattr(loss_components, "self_flow_tau_mean", None) is not None:
+        logs["self_flow/tau_mean"] = float(loss_components.self_flow_tau_mean.item())
+    if getattr(loss_components, "self_flow_tau_min_mean", None) is not None:
+        logs["self_flow/tau_min_mean"] = float(
+            loss_components.self_flow_tau_min_mean.item()
+        )
     attach_det_component_logs(logs, loss_components)
     if getattr(loss_components, "drifting_loss", None) is not None:
         logs["loss/drifting"] = float(loss_components.drifting_loss.item())

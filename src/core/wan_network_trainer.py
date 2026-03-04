@@ -44,6 +44,7 @@ from memory.safe_memory_manager import SafeMemoryManager
 from core.vae_training_core import VaeTrainingCore
 from reward.reward_training_core import RewardTrainingCore
 from enhancements.repa.repa_helper import RepaHelper
+from enhancements.self_flow.self_flow_helper import SelfFlowHelper
 from enhancements.semanticgen.trainer_integration import (
     build_semantic_prepare_items,
     create_semantic_helpers,
@@ -1113,6 +1114,21 @@ class WanNetworkTrainer:
                 logger.warning(f"Self-Transcendence setup failed: {exc}")
                 self_transcendence_helper = None
 
+        self_flow_helper = None
+        if getattr(args, "enable_self_flow", False):
+            try:
+                logger.info("Self-Flow is enabled. Initializing helper module.")
+                self_flow_helper = SelfFlowHelper(transformer, args, self.config)
+                self._maybe_add_self_flow_params(
+                    trainable_params,
+                    lr_descriptions,
+                    self_flow_helper,
+                    args,
+                )
+            except Exception as exc:
+                logger.warning(f"Self-Flow setup failed: {exc}")
+                self_flow_helper = None
+
         dual_head_alignment_helper = None
         if getattr(args, "enable_dual_head_alignment", False):
             try:
@@ -1922,6 +1938,13 @@ class WanNetworkTrainer:
                         f"Self-Transcendence hook setup failed: {exc}"
                     )
                     self_transcendence_helper = None
+            if self_flow_helper is not None:
+                try:
+                    self_flow_helper.setup_hooks()
+                    self_flow_helper = accelerator.prepare(self_flow_helper)
+                except Exception as exc:
+                    logger.warning(f"Self-Flow hook setup failed: {exc}")
+                    self_flow_helper = None
             if semfeat_helper is not None:
                 try:
                     semfeat_helper.setup_hooks()
@@ -2033,6 +2056,7 @@ class WanNetworkTrainer:
                 crepa_helper=crepa_helper,
                 internal_guidance_helper=internal_guidance_helper,
                 self_transcendence_helper=self_transcendence_helper,
+                self_flow_helper=self_flow_helper,
                 haste_helper=haste_helper,
                 contrastive_attention_helper=contrastive_attention_helper,
                 dual_model_manager=dual_model_manager,
@@ -2065,6 +2089,8 @@ class WanNetworkTrainer:
             and self_transcendence_helper is not None
         ):
             self_transcendence_helper.remove_hooks()
+        if "self_flow_helper" in locals() and self_flow_helper is not None:
+            self_flow_helper.remove_hooks()
         if "haste_helper" in locals() and haste_helper is not None:
             from enhancements.haste.integration import remove_haste_helper
 
@@ -2294,6 +2320,40 @@ class WanNetworkTrainer:
         lr_descriptions.append("videorepa_projector")
         logger.info(
             "VideoREPA: added %d projector params to optimizer groups (lr=%.6f).",
+            len(new_params),
+            lr,
+        )
+
+    @staticmethod
+    def _maybe_add_self_flow_params(
+        trainable_params: list[Any],
+        lr_descriptions: list[str],
+        self_flow_helper: Any,
+        args: argparse.Namespace,
+    ) -> None:
+        """Ensure Self-Flow projector parameters are included in optimizer groups."""
+        params = getattr(self_flow_helper, "get_trainable_params", None)
+        if not callable(params):
+            return
+        trainable = list(params())
+        if not trainable:
+            return
+        existing = set()
+        for group in trainable_params:
+            if isinstance(group, dict) and "params" in group:
+                existing.update(id(p) for p in group["params"])
+            elif isinstance(group, torch.nn.Parameter):
+                existing.add(id(group))
+        new_params = [p for p in trainable if id(p) not in existing]
+        if not new_params:
+            return
+        lr = float(getattr(args, "learning_rate", 1e-4)) * float(
+            getattr(args, "input_lr_scale", 1.0)
+        )
+        trainable_params.append({"params": new_params, "lr": lr})
+        lr_descriptions.append("self_flow_projector")
+        logger.info(
+            "Self-Flow: added %d projector params to optimizer groups (lr=%.6f).",
             len(new_params),
             lr,
         )

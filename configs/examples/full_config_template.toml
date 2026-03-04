@@ -2064,6 +2064,100 @@ self_transcendence_mlp_multiplier = 2
 self_transcendence_uncond_mode = "zero"
 
 # =============================================================================
+# ⚠️ SELF-FLOW SETTINGS
+# =============================================================================
+# Self-Flow integrates a self-supervised feature objective directly into flow
+# matching (no external encoder requirement). All switches are train-time only.
+# Inference graph and LoRA deployment remain unchanged.
+# Paper anchors:
+# - Dual-timestep masking and tau_min teacher asymmetry (Method, Eq. 4-6)
+# - EMA teacher momentum 0.9999
+# - Layer ratios l=0.3D (student), k=0.7D (teacher)
+# - Mask ratios: image=0.25, video=0.1, audio=0.5
+
+# Global gate. Default false for behavior preservation.
+enable_self_flow = false
+
+# Enable dual-timestep masked noising branch:
+# 1) sample t,s from the configured timestep distribution p(t),
+# 2) mask tokens with ratio R_M,
+# 3) student uses mixed tau tokens, teacher uses tau_min=min(t,s).
+self_flow_enable_dual_timestep = true
+
+# Enable self-supervised feature alignment objective (EMA teacher + cosine loss).
+self_flow_enable_feature_alignment = true
+
+# Strict mode keeps implementation close to the paper and blocks known-conflict
+# enhancements that alter noising semantics (FVDM, MixFlow, Self-Resampling,
+# ReflexFlow, Error Recycling). Also requires broadcast_time_embed=false.
+self_flow_strict_mode = true
+
+# Mask ratio selection mode:
+# - "auto": image/video/audio defaults below
+# - "fixed": always use self_flow_mask_ratio
+self_flow_mask_ratio_mode = "auto"
+
+# Fixed mask ratio when self_flow_mask_ratio_mode="fixed" (must be in [0, 0.5]).
+self_flow_mask_ratio = 0.25
+
+# Auto mask ratio for image (must be in [0, 0.5]).
+self_flow_mask_ratio_image = 0.25
+
+# Auto mask ratio for video (must be in [0, 0.5]).
+self_flow_mask_ratio_video = 0.10
+
+# Auto mask ratio for audio (must be in [0, 0.5]).
+self_flow_mask_ratio_audio = 0.50
+
+# Force tokenwise timestep conditioning for Self-Flow dual-timestep path.
+# Requires Wan 2.2 style tokenwise time embedding behavior.
+self_flow_force_tokenwise_timesteps = true
+
+# Helps prevent numerical extremes during teacher/student noising.
+# Lower bound for continuous sampled timesteps before conversion to [1..1000].
+self_flow_timestep_lower_bound = 0.001
+
+# Upper bound for continuous sampled timesteps before conversion to [1..1000].
+self_flow_timestep_upper_bound = 0.999
+
+# Representation objective weight gamma in:
+# total_loss = flow_matching_loss + gamma * self_flow_rep_loss
+# Paper training detail uses gamma=0.8.
+self_flow_rep_loss_weight = 0.8
+
+# Representation loss form:
+# - "negative_cosine": strict cosine loss style (-cos)
+# - "one_minus_cosine": numerically shifted variant (same optimum)
+self_flow_rep_loss_type = "negative_cosine"
+
+# EMA teacher controls.
+self_flow_teacher_use_ema = true
+
+# EMA teacher momentum.
+self_flow_teacher_momentum = 0.9999
+
+# EMA teacher update interval.
+self_flow_teacher_update_interval = 1
+
+# Student/teacher layer selection:
+# - ratio values are fractions of model depth D (paper defaults 0.3D / 0.7D)
+# - explicit indices override ratio when >= 1 (1-based block indices)
+self_flow_student_layer_ratio = 0.3
+
+# Teacher layer ratio.
+self_flow_teacher_layer_ratio = 0.7
+
+# Student layer index.
+self_flow_student_layer_index = -1
+
+# Teacher layer index.
+self_flow_teacher_layer_index = -1
+
+# Projection head width multiplier for student feature projector.
+# >=1, where 1 is lightweight/paper-friendly.
+self_flow_projection_hidden_multiplier = 1
+
+# =============================================================================
 # ⚠️ REPA (REPRESENTATIONAL ALIGNMENT) SETTINGS
 # =============================================================================
 

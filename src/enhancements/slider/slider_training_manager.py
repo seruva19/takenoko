@@ -172,6 +172,8 @@ class SliderTrainingManager:
                 layer_sync_helper=kwargs.get("layer_sync_helper"),
                 crepa_helper=kwargs.get("crepa_helper"),
                 self_transcendence_helper=kwargs.get("self_transcendence_helper"),
+                self_flow_helper=kwargs.get("self_flow_helper"),
+                self_flow_context=kwargs.get("self_flow_context"),
                 haste_helper=kwargs.get("haste_helper"),
                 contrastive_attention_helper=kwargs.get(
                     "contrastive_attention_helper"
@@ -241,6 +243,8 @@ class SliderTrainingManager:
                 layer_sync_helper=kwargs.get("layer_sync_helper"),
                 crepa_helper=kwargs.get("crepa_helper"),
                 self_transcendence_helper=kwargs.get("self_transcendence_helper"),
+                self_flow_helper=kwargs.get("self_flow_helper"),
+                self_flow_context=kwargs.get("self_flow_context"),
                 haste_helper=kwargs.get("haste_helper"),
                 contrastive_attention_helper=kwargs.get(
                     "contrastive_attention_helper"

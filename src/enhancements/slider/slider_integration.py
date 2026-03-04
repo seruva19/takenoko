@@ -146,6 +146,8 @@ class SliderIntegration:
                 crepa_helper=kwargs.get("crepa_helper"),
                 drifting_helper=kwargs.get("drifting_helper"),
                 self_transcendence_helper=kwargs.get("self_transcendence_helper"),
+                self_flow_helper=kwargs.get("self_flow_helper"),
+                self_flow_context=kwargs.get("self_flow_context"),
                 haste_helper=kwargs.get("haste_helper"),
                 contrastive_attention_helper=kwargs.get(
                     "contrastive_attention_helper"

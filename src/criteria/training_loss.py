@@ -122,6 +122,16 @@ class LossComponents:
         The Internal Guidance auxiliary supervision loss, if enabled.
     self_transcendence_loss: Optional[torch.Tensor]
         The Self-Transcendence alignment loss, if enabled.
+    self_flow_loss: Optional[torch.Tensor]
+        The Self-Flow representation alignment loss, if enabled.
+    self_flow_cosine_similarity: Optional[torch.Tensor]
+        Mean cosine similarity between projected student and teacher features.
+    self_flow_masked_token_ratio: Optional[torch.Tensor]
+        Mean ratio of tokens replaced with the secondary timestep.
+    self_flow_tau_mean: Optional[torch.Tensor]
+        Mean mixed tokenwise timestep value (tau) in normalized [0, 1] scale.
+    self_flow_tau_min_mean: Optional[torch.Tensor]
+        Mean teacher timestep value (tau_min) in normalized [0, 1] scale.
     det_temporal_kernel_loss: Optional[torch.Tensor]
         DeT-style temporal-kernel smoothing regularization term.
     det_dense_tracking_loss: Optional[torch.Tensor]
@@ -337,6 +347,11 @@ class LossComponents:
     layer_sync_similarity: Optional[torch.Tensor] = None
     internal_guidance_loss: Optional[torch.Tensor] = None
     self_transcendence_loss: Optional[torch.Tensor] = None
+    self_flow_loss: Optional[torch.Tensor] = None
+    self_flow_cosine_similarity: Optional[torch.Tensor] = None
+    self_flow_masked_token_ratio: Optional[torch.Tensor] = None
+    self_flow_tau_mean: Optional[torch.Tensor] = None
+    self_flow_tau_min_mean: Optional[torch.Tensor] = None
     det_temporal_kernel_loss: Optional[torch.Tensor] = None
     det_dense_tracking_loss: Optional[torch.Tensor] = None
     det_external_tracking_loss: Optional[torch.Tensor] = None
@@ -754,6 +769,8 @@ class TrainingLossComputer:
         crepa_helper: Optional[Any] = None,
         internal_guidance_helper: Optional[Any] = None,
         self_transcendence_helper: Optional[Any] = None,
+        self_flow_helper: Optional[Any] = None,
+        self_flow_context: Optional[Any] = None,
         drifting_helper: Optional[Any] = None,
         global_step: Optional[int] = None,
         current_epoch: Optional[Any] = None,
@@ -1477,6 +1494,41 @@ class TrainingLossComputer:
                     "Self-Transcendence loss computation failed: %s",
                     e,
                 )
+
+        # ---- Optional Self-Flow Loss ----
+        self_flow_loss_value: Optional[torch.Tensor] = None
+        self_flow_cosine_similarity_value: Optional[torch.Tensor] = None
+        self_flow_masked_token_ratio_value: Optional[torch.Tensor] = None
+        self_flow_tau_mean_value: Optional[torch.Tensor] = None
+        self_flow_tau_min_mean_value: Optional[torch.Tensor] = None
+        if getattr(args, "enable_self_flow", False) and self_flow_helper is not None:
+            try:
+                self_flow_loss = self_flow_helper.compute_loss(
+                    accelerator=accelerator,
+                    network_dtype=network_dtype,
+                    batch=batch,
+                    context=self_flow_context,
+                )
+                if self_flow_loss is not None:
+                    loss = loss + self_flow_loss
+                    self_flow_loss_value = self_flow_loss.detach()
+
+                sf_cosine = getattr(self_flow_helper, "last_cosine_similarity", None)
+                if sf_cosine is not None and torch.is_tensor(sf_cosine):
+                    self_flow_cosine_similarity_value = sf_cosine.detach()
+
+                if self_flow_context is not None:
+                    self_flow_masked_token_ratio_value = loss.detach().new_tensor(
+                        float(getattr(self_flow_context, "masked_token_ratio", 0.0))
+                    )
+                    self_flow_tau_mean_value = loss.detach().new_tensor(
+                        float(getattr(self_flow_context, "tau_mean", 0.0))
+                    )
+                    self_flow_tau_min_mean_value = loss.detach().new_tensor(
+                        float(getattr(self_flow_context, "tau_min_mean", 0.0))
+                    )
+            except Exception as e:
+                logger.warning("Self-Flow loss computation failed: %s", e)
 
         # ---- Optional Drifting Loss ----
         drifting_loss_value: Optional[torch.Tensor] = None
@@ -2474,6 +2526,11 @@ class TrainingLossComputer:
             layer_sync_similarity=layer_sync_similarity_value,
             internal_guidance_loss=internal_guidance_loss_value,
             self_transcendence_loss=self_transcendence_loss_value,
+            self_flow_loss=self_flow_loss_value,
+            self_flow_cosine_similarity=self_flow_cosine_similarity_value,
+            self_flow_masked_token_ratio=self_flow_masked_token_ratio_value,
+            self_flow_tau_mean=self_flow_tau_mean_value,
+            self_flow_tau_min_mean=self_flow_tau_min_mean_value,
             **det_component_values,
             drifting_loss=drifting_loss_value,
             drifting_drift_norm_mean=drifting_drift_norm_mean_value,

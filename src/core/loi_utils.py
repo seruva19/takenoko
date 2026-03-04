@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Dict, Optional
 
 from common.logger import get_logger
+from enhancements.self_flow.noising import reduce_model_timesteps_for_runtime
 from enhancements.slider.slider_integration import compute_slider_loss_if_enabled
 from utils.train_utils import compute_loss_weighting_for_sd3
 from enhancements.temporal_consistency.training_integration import (
@@ -37,6 +38,7 @@ def run_loi_extra_backward(
     noise_scheduler,
     vae,
     target_loi_context: Optional[Dict[str, Any]],
+    model_timesteps,
     repa_helper,
     sft_alignment_helper,
     det_motion_helper,
@@ -48,6 +50,8 @@ def run_loi_extra_backward(
     layer_sync_helper,
     crepa_helper,
     haste_helper,
+    self_flow_helper=None,
+    self_flow_context=None,
     contrastive_attention_helper=None,
     transition_loss_context,
     transition_forward_fn=None,
@@ -69,6 +73,7 @@ def run_loi_extra_backward(
         controlnet,
         global_step=global_step,
         reg_cls_token=reg_cls_input,
+        model_timesteps_override=model_timesteps,
         apply_stable_velocity_target=False,
     )
     if model_result is None or model_result[0] is None:
@@ -95,10 +100,15 @@ def run_loi_extra_backward(
             internal_guidance_shift_loi,
         ) = model_result
 
+    weighting_timesteps = (
+        reduce_model_timesteps_for_runtime(model_timesteps)
+        if model_timesteps is not None
+        else timesteps
+    )
     weighting_loi = compute_loss_weighting_for_sd3(
         args.weighting_scheme,
         noise_scheduler,
-        timesteps,
+        weighting_timesteps,
         accelerator.device,
         network_dtype,
     )
@@ -139,6 +149,8 @@ def run_loi_extra_backward(
         sara_helper=sara_helper,
         layer_sync_helper=layer_sync_helper,
         crepa_helper=crepa_helper,
+        self_flow_helper=self_flow_helper,
+        self_flow_context=self_flow_context,
         internal_guidance_helper=getattr(training_core, "internal_guidance_helper", None),
         drifting_helper=getattr(training_core, "drifting_helper", None),
         haste_helper=haste_helper,

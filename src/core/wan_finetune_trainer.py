@@ -46,6 +46,11 @@ from distillation.glance_distiller import GlanceDistiller
 from core.vae_training_core import VaeTrainingCore
 from reward.reward_training_core import RewardTrainingCore
 from enhancements.repa.repa_helper import RepaHelper
+from enhancements.self_flow.self_flow_helper import SelfFlowHelper
+from enhancements.self_flow.noising import (
+    maybe_apply_self_flow_dual_timestep,
+    reduce_model_timesteps_for_runtime,
+)
 from enhancements.repa.trainer_integration import (
     maybe_add_vae_repa_params_for_finetune,
 )
@@ -666,6 +671,7 @@ class WanFinetuneTrainer:
         layer_sync_helper: Optional[Any] = None,
         crepa_helper: Optional[Any] = None,
         self_transcendence_helper: Optional[Any] = None,
+        self_flow_helper: Optional[Any] = None,
         haste_helper: Optional[Any] = None,
         contrastive_attention_helper: Optional[Any] = None,
         vae: Optional[Any] = None,
@@ -750,6 +756,38 @@ class WanFinetuneTrainer:
         noisy_model_input = noisy_model_input.to(device=device, dtype=transformer.dtype)
         noise = noise.to(device=device, dtype=transformer.dtype)
         timesteps = timesteps.to(device=device, dtype=transformer.dtype)
+        model_timesteps = timesteps
+        runtime_timesteps = timesteps
+        self_flow_context = None
+        if self_flow_helper is not None and bool(
+            getattr(self_flow_helper, "dual_timestep_enabled", True)
+        ):
+            try:
+                self_flow_context = maybe_apply_self_flow_dual_timestep(
+                    args=args,
+                    latents=latents,
+                    noise=noise,
+                    base_timesteps=timesteps,
+                    patch_size=self.config.patch_size,
+                    batch=batch,
+                )
+                if self_flow_context is not None:
+                    noisy_model_input = self_flow_context.student_noisy_model_input.to(
+                        device=device, dtype=transformer.dtype
+                    )
+                    model_timesteps = self_flow_context.student_model_timesteps.to(
+                        device=device, dtype=transformer.dtype
+                    )
+                    runtime_timesteps = reduce_model_timesteps_for_runtime(
+                        model_timesteps
+                    ).to(device=device, dtype=timesteps.dtype)
+            except Exception as exc:
+                if bool(getattr(args, "self_flow_strict_mode", True)):
+                    raise
+                logger.warning(
+                    "Self-Flow dual-timestep path failed; using base noising. (%s)",
+                    exc,
+                )
 
         # Set noise scheduler for custom loss target support
         self.training_core.noise_scheduler = noise_scheduler
@@ -793,6 +831,7 @@ class WanFinetuneTrainer:
                     transformer.dtype,
                     global_step=global_step,
                     reg_cls_token=None,
+                    model_timesteps_override=model_timesteps,
                     context_override=context_override,
                     apply_stable_velocity_target=False,
                 )
@@ -832,6 +871,7 @@ class WanFinetuneTrainer:
                     transformer.dtype,
                     global_step=global_step,
                     reg_cls_token=reg_cls_input,
+                    model_timesteps_override=model_timesteps,
                 )
             finally:
                 restore_concept_multiplier(
@@ -870,7 +910,7 @@ class WanFinetuneTrainer:
                 weighting = compute_loss_weighting_for_sd3(
                     weighting_scheme,
                     noise_scheduler,
-                    timesteps,
+                    runtime_timesteps,
                     device,
                     transformer.dtype,
                 )
@@ -899,7 +939,7 @@ class WanFinetuneTrainer:
             repa_helper=repa_helper if sara_helper is None else None,
             moalign_helper=moalign_helper,
             semfeat_helper=semfeat_helper,
-            bfm_conditioning_helper=bfm_conditioning_helper,
+            bfm_conditioning_helper=self.training_core.bfm_conditioning_helper,
             reg_helper=reg_helper,
             reg_cls_pred=reg_cls_pred,
             reg_cls_target=reg_cls_target,
@@ -908,6 +948,8 @@ class WanFinetuneTrainer:
             crepa_helper=crepa_helper,
             internal_guidance_helper=internal_guidance_helper,
             self_transcendence_helper=self_transcendence_helper,
+            self_flow_helper=self_flow_helper,
+            self_flow_context=self_flow_context,
             haste_helper=haste_helper,
             contrastive_attention_helper=contrastive_attention_helper,
             raft=None,
@@ -1091,6 +1133,38 @@ class WanFinetuneTrainer:
         param_names.append([f"videorepa_projector.{i}" for i in range(len(new_params))])
         logger.info(
             "VideoREPA: added %d projector params to optimizer groups (lr=%.6f).",
+            len(new_params),
+            lr,
+        )
+
+    @staticmethod
+    def _maybe_add_self_flow_params(
+        params_to_optimize: list[dict[str, Any]],
+        param_names: list[list[str]],
+        self_flow_helper: Any,
+        args: argparse.Namespace,
+    ) -> None:
+        """Ensure Self-Flow projector parameters are included in optimizer groups."""
+        params = getattr(self_flow_helper, "get_trainable_params", None)
+        if not callable(params):
+            return
+        trainable = list(params())
+        if not trainable:
+            return
+        existing = set()
+        for group in params_to_optimize:
+            if "params" in group:
+                existing.update(id(p) for p in group["params"])
+        new_params = [p for p in trainable if id(p) not in existing]
+        if not new_params:
+            return
+        lr = float(getattr(args, "learning_rate", 1e-4)) * float(
+            getattr(args, "input_lr_scale", 1.0)
+        )
+        params_to_optimize.append({"params": new_params, "lr": lr})
+        param_names.append([f"self_flow_projector.{i}" for i in range(len(new_params))])
+        logger.info(
+            "Self-Flow: added %d projector params to optimizer groups (lr=%.6f).",
             len(new_params),
             lr,
         )
@@ -1512,6 +1586,21 @@ class WanFinetuneTrainer:
                 logger.warning(f"Self-Transcendence setup failed: {exc}")
                 self_transcendence_helper = None
 
+        self_flow_helper = None
+        if getattr(args, "enable_self_flow", False):
+            try:
+                logger.info("Self-Flow is enabled. Initializing helper module.")
+                self_flow_helper = SelfFlowHelper(transformer, args, self.config)
+                self._maybe_add_self_flow_params(
+                    params_to_optimize,
+                    param_names,
+                    self_flow_helper,
+                    args,
+                )
+            except Exception as exc:
+                logger.warning(f"Self-Flow setup failed: {exc}")
+                self_flow_helper = None
+
         # Log detailed network information if verbose mode is enabled
         if getattr(args, "verbose_network", False):
             NetworkLoggingUtils.log_detailed_network_info(transformer, args)
@@ -1557,7 +1646,15 @@ class WanFinetuneTrainer:
 
         if optimizer_type == "adafactor":
             logger.info("Creating Adafactor optimizer directly")
-            trainable_params = params_to_optimize[0]["params"]
+            trainable_params = []
+            seen_param_ids = set()
+            for group in params_to_optimize:
+                for param in group.get("params", []):
+                    param_id = id(param)
+                    if param_id in seen_param_ids:
+                        continue
+                    seen_param_ids.add(param_id)
+                    trainable_params.append(param)
             import transformers.optimization
 
             optimizer_kwargs = {
@@ -1967,6 +2064,13 @@ class WanFinetuneTrainer:
                     f"Self-Transcendence hook setup failed: {exc}"
                 )
                 self_transcendence_helper = None
+        if self_flow_helper is not None:
+            try:
+                self_flow_helper.setup_hooks()
+                self_flow_helper = accelerator.prepare(self_flow_helper)
+            except Exception as exc:
+                logger.warning(f"Self-Flow hook setup failed: {exc}")
+                self_flow_helper = None
 
         # Initialize REPA/iREPA helper if enabled
         repa_helper = None
@@ -2353,6 +2457,7 @@ class WanFinetuneTrainer:
                         layer_sync_helper=layer_sync_helper,
                         crepa_helper=crepa_helper,
                         self_transcendence_helper=self_transcendence_helper,
+                        self_flow_helper=self_flow_helper,
                         haste_helper=haste_helper,
                         contrastive_attention_helper=contrastive_attention_helper,
                         vae=vae,
@@ -2377,6 +2482,8 @@ class WanFinetuneTrainer:
 
                             # Optimizer step
                             optimizer.step()
+                            if self_flow_helper is not None:
+                                self_flow_helper.update_teacher_if_needed(training_model)
                             self.training_core._update_weight_ema_if_needed(
                                 accelerator, global_step
                             )
@@ -2385,6 +2492,8 @@ class WanFinetuneTrainer:
                     else:
                         # Fused backward pass - optimizer.step() and zero_grad() handled by hooks
                         if accelerator.sync_gradients:
+                            if self_flow_helper is not None:
+                                self_flow_helper.update_teacher_if_needed(training_model)
                             self.training_core._update_weight_ema_if_needed(
                                 accelerator, global_step
                             )
@@ -2501,6 +2610,35 @@ class WanFinetuneTrainer:
                         ):
                             logs["loss/self_transcendence"] = float(
                                 loss_components.self_transcendence_loss.item()
+                            )
+                        if getattr(loss_components, "self_flow_loss", None) is not None:
+                            logs["loss/self_flow"] = float(
+                                loss_components.self_flow_loss.item()
+                            )
+                        if (
+                            getattr(loss_components, "self_flow_cosine_similarity", None)
+                            is not None
+                        ):
+                            logs["self_flow/cosine_similarity"] = float(
+                                loss_components.self_flow_cosine_similarity.item()
+                            )
+                        if (
+                            getattr(loss_components, "self_flow_masked_token_ratio", None)
+                            is not None
+                        ):
+                            logs["self_flow/masked_token_ratio"] = float(
+                                loss_components.self_flow_masked_token_ratio.item()
+                            )
+                        if getattr(loss_components, "self_flow_tau_mean", None) is not None:
+                            logs["self_flow/tau_mean"] = float(
+                                loss_components.self_flow_tau_mean.item()
+                            )
+                        if (
+                            getattr(loss_components, "self_flow_tau_min_mean", None)
+                            is not None
+                        ):
+                            logs["self_flow/tau_min_mean"] = float(
+                                loss_components.self_flow_tau_min_mean.item()
                             )
                         if (
                             getattr(loss_components, "layer_sync_loss", None)
@@ -2871,6 +3009,8 @@ class WanFinetuneTrainer:
             and self_transcendence_helper is not None
         ):
             self_transcendence_helper.remove_hooks()
+        if "self_flow_helper" in locals() and self_flow_helper is not None:
+            self_flow_helper.remove_hooks()
         if "haste_helper" in locals() and haste_helper is not None:
             from enhancements.haste.integration import remove_haste_helper
 
