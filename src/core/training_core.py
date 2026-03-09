@@ -93,6 +93,7 @@ from enhancements.reflexflow.runtime import (
     maybe_log_reflexflow_metrics,
 )
 from enhancements.self_flow.noising import (
+    build_self_flow_alignment_context,
     maybe_apply_self_flow_dual_timestep,
     reduce_model_timesteps_for_runtime,
 )
@@ -2111,6 +2112,24 @@ class TrainingCore:
                                 "Self-Flow dual-timestep path failed; using base noising. (%s)",
                                 exc,
                             )
+                    if (
+                        self_flow_helper is not None
+                        and self_flow_context is None
+                        and bool(
+                            getattr(
+                                self_flow_helper,
+                                "feature_alignment_enabled",
+                                False,
+                            )
+                        )
+                    ):
+                        self_flow_context = build_self_flow_alignment_context(
+                            args=args,
+                            latents=latents_for_dit,
+                            noisy_model_input=noisy_model_input,
+                            model_timesteps=self_flow_model_timesteps,
+                            patch_size=self.config.patch_size,
+                        )
                     # Optional: If the network supports TLora-style masking, update mask from timesteps
                     try:
                         if unwrapped_net is None:

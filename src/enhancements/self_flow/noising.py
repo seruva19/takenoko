@@ -164,6 +164,47 @@ def reduce_model_timesteps_for_runtime(model_timesteps: torch.Tensor) -> torch.T
     return reduced.to(dtype=model_timesteps.dtype)
 
 
+def build_self_flow_alignment_context(
+    *,
+    args: Any,
+    latents: torch.Tensor,
+    noisy_model_input: torch.Tensor,
+    model_timesteps: torch.Tensor,
+    patch_size: Tuple[int, int, int],
+) -> SelfFlowDualTimestepContext:
+    """
+    Build a no-op Self-Flow context for feature-alignment-only steps.
+
+    This preserves EMA teacher alignment when the dual-timestep branch is
+    intentionally disabled or skipped for the current batch.
+    """
+    ft, ht, wt = _token_shape_from_latents(latents, patch_size)
+    seq_len = int(ft * ht * wt)
+    lower = float(getattr(args, "self_flow_timestep_lower_bound", 0.001))
+    upper = float(getattr(args, "self_flow_timestep_upper_bound", 0.999))
+
+    timestep_stats = model_timesteps.float().view(model_timesteps.shape[0], -1)
+    if timestep_stats.numel() == 0:
+        tau_stats = timestep_stats
+    elif timestep_stats.max().item() > 1.0 or timestep_stats.min().item() < 0.0:
+        tau_stats = ((timestep_stats - 1.0) / 1000.0).clamp(lower, upper)
+    else:
+        tau_stats = timestep_stats.clamp(lower, upper)
+
+    tau_mean = float(tau_stats.mean().item()) if tau_stats.numel() > 0 else 0.0
+    return SelfFlowDualTimestepContext(
+        student_noisy_model_input=noisy_model_input,
+        teacher_noisy_model_input=noisy_model_input,
+        student_model_timesteps=model_timesteps,
+        teacher_model_timesteps=model_timesteps,
+        base_timesteps=model_timesteps,
+        masked_token_ratio=0.0,
+        tau_mean=tau_mean,
+        tau_min_mean=tau_mean,
+        sequence_length=seq_len,
+    )
+
+
 def _sample_secondary_timestep(
     args: Any,
     latents: torch.Tensor,

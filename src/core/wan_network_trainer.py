@@ -13,6 +13,7 @@ from multiprocessing import Value
 from typing import Any, Optional
 import torch
 from tqdm import tqdm
+from accelerate import Accelerator
 from accelerate.utils import set_seed
 
 import utils.fluxflow_augmentation as fluxflow_augmentation
@@ -1128,6 +1129,8 @@ class WanNetworkTrainer:
             except Exception as exc:
                 logger.warning(f"Self-Flow setup failed: {exc}")
                 self_flow_helper = None
+        if self_flow_helper is not None:
+            self._register_self_flow_state_hooks(accelerator, self_flow_helper)
 
         dual_head_alignment_helper = None
         if getattr(args, "enable_dual_head_alignment", False):
@@ -2357,4 +2360,20 @@ class WanNetworkTrainer:
             len(new_params),
             lr,
         )
+
+    @staticmethod
+    def _register_self_flow_state_hooks(
+        accelerator: Accelerator,
+        self_flow_helper: Any,
+    ) -> None:
+        def save_hook(_models, _weights, output_dir: str) -> None:
+            if not accelerator.is_main_process:
+                return
+            self_flow_helper.save_runtime_state(output_dir)
+
+        def load_hook(_models, input_dir: str) -> None:
+            self_flow_helper.load_runtime_state(input_dir)
+
+        accelerator.register_save_state_pre_hook(save_hook)
+        accelerator.register_load_state_pre_hook(load_hook)
 

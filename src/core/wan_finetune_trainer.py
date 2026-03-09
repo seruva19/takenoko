@@ -48,6 +48,7 @@ from reward.reward_training_core import RewardTrainingCore
 from enhancements.repa.repa_helper import RepaHelper
 from enhancements.self_flow.self_flow_helper import SelfFlowHelper
 from enhancements.self_flow.noising import (
+    build_self_flow_alignment_context,
     maybe_apply_self_flow_dual_timestep,
     reduce_model_timesteps_for_runtime,
 )
@@ -788,6 +789,18 @@ class WanFinetuneTrainer:
                     "Self-Flow dual-timestep path failed; using base noising. (%s)",
                     exc,
                 )
+        if (
+            self_flow_helper is not None
+            and self_flow_context is None
+            and bool(getattr(self_flow_helper, "feature_alignment_enabled", False))
+        ):
+            self_flow_context = build_self_flow_alignment_context(
+                args=args,
+                latents=latents,
+                noisy_model_input=noisy_model_input,
+                model_timesteps=model_timesteps,
+                patch_size=self.config.patch_size,
+            )
 
         # Set noise scheduler for custom loss target support
         self.training_core.noise_scheduler = noise_scheduler
@@ -1168,6 +1181,22 @@ class WanFinetuneTrainer:
             len(new_params),
             lr,
         )
+
+    @staticmethod
+    def _register_self_flow_state_hooks(
+        accelerator: Accelerator,
+        self_flow_helper: Any,
+    ) -> None:
+        def save_hook(_models, _weights, output_dir: str) -> None:
+            if not accelerator.is_main_process:
+                return
+            self_flow_helper.save_runtime_state(output_dir)
+
+        def load_hook(_models, input_dir: str) -> None:
+            self_flow_helper.load_runtime_state(input_dir)
+
+        accelerator.register_save_state_pre_hook(save_hook)
+        accelerator.register_load_state_pre_hook(load_hook)
 
     def train(self, args: argparse.Namespace) -> None:
         """
@@ -1600,6 +1629,8 @@ class WanFinetuneTrainer:
             except Exception as exc:
                 logger.warning(f"Self-Flow setup failed: {exc}")
                 self_flow_helper = None
+        if self_flow_helper is not None:
+            self._register_self_flow_state_hooks(accelerator, self_flow_helper)
 
         # Log detailed network information if verbose mode is enabled
         if getattr(args, "verbose_network", False):

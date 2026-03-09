@@ -1,16 +1,21 @@
 from __future__ import annotations
 
 import copy
-from typing import Any, List, Optional, Tuple
+import os
+from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from safetensors.torch import load_file, save_file
 
 from common.logger import get_logger
 from enhancements.self_flow.noising import SelfFlowDualTimestepContext
 
 logger = get_logger(__name__)
+
+SELF_FLOW_PROJECTOR_STATE_FILE = "self_flow_projector.safetensors"
+SELF_FLOW_TEACHER_STATE_FILE = "self_flow_teacher_ema.safetensors"
 
 
 class SelfFlowHelper(nn.Module):
@@ -224,6 +229,89 @@ class SelfFlowHelper(nn.Module):
 
     def get_trainable_params(self) -> List[nn.Parameter]:
         return list(self.student_projector.parameters())
+
+    def projector_state_dict(self) -> Dict[str, torch.Tensor]:
+        return {
+            name: tensor.detach().clone().to(device="cpu")
+            for name, tensor in self.student_projector.state_dict().items()
+        }
+
+    def load_projector_state_dict(self, state_dict: Dict[str, Any]) -> None:
+        if not state_dict:
+            return
+        self.student_projector.load_state_dict(state_dict, strict=True)
+        logger.info(
+            "Self-Flow: loaded projector state (%d tensors).",
+            len(state_dict),
+        )
+
+    def teacher_state_dict(self) -> Dict[str, torch.Tensor]:
+        if self.teacher is None:
+            return {}
+
+        state: Dict[str, torch.Tensor] = {
+            "__self_flow_step_counter__": torch.tensor(
+                [int(self._step_counter)],
+                dtype=torch.int64,
+            )
+        }
+        for name, tensor in self.teacher.state_dict().items():
+            state[f"teacher::{name}"] = tensor.detach().clone().to(device="cpu")
+        return state
+
+    def load_teacher_state_dict(self, state_dict: Dict[str, Any]) -> None:
+        if self.teacher is None or not state_dict:
+            return
+
+        step_tensor = state_dict.get("__self_flow_step_counter__")
+        if isinstance(step_tensor, torch.Tensor) and step_tensor.numel() > 0:
+            self._step_counter = int(step_tensor.flatten()[0].item())
+
+        teacher_state = {
+            key[len("teacher::") :]: value
+            for key, value in state_dict.items()
+            if isinstance(value, torch.Tensor) and key.startswith("teacher::")
+        }
+        if not teacher_state:
+            return
+
+        self.teacher.load_state_dict(teacher_state, strict=True)
+        self.teacher.eval()
+        self.teacher.requires_grad_(False)
+        logger.info(
+            "Self-Flow: loaded EMA teacher state (%d tensors).",
+            len(teacher_state),
+        )
+
+    def save_runtime_state(self, output_dir: str) -> None:
+        if not self.enabled:
+            return
+
+        projector_state = self.projector_state_dict()
+        if projector_state:
+            save_file(
+                projector_state,
+                os.path.join(output_dir, SELF_FLOW_PROJECTOR_STATE_FILE),
+            )
+
+        teacher_state = self.teacher_state_dict()
+        if teacher_state:
+            save_file(
+                teacher_state,
+                os.path.join(output_dir, SELF_FLOW_TEACHER_STATE_FILE),
+            )
+
+    def load_runtime_state(self, input_dir: str) -> None:
+        if not self.enabled:
+            return
+
+        projector_path = os.path.join(input_dir, SELF_FLOW_PROJECTOR_STATE_FILE)
+        if os.path.exists(projector_path):
+            self.load_projector_state_dict(load_file(projector_path))
+
+        teacher_path = os.path.join(input_dir, SELF_FLOW_TEACHER_STATE_FILE)
+        if os.path.exists(teacher_path):
+            self.load_teacher_state_dict(load_file(teacher_path))
 
     def update_teacher_if_needed(self, student_transformer: nn.Module) -> None:
         if not self.enabled or not self.feature_alignment_enabled:
