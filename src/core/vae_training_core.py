@@ -26,6 +26,10 @@ from utils.train_utils import (
 )
 
 from utils.perceptual import get_lpips_model, sobel_edges
+from utils.sensecraft_utils import (
+    create_sensecraft_loss,
+    prepare_sensecraft_loss_tensors,
+)
 
 import logging
 from common.logger import get_logger
@@ -140,13 +144,61 @@ class VaeTrainingCore:
         self.config = config
         self.loss_balancer: Optional[MedianLossBalancer] = None
         self._lpips_model: Optional[torch.nn.Module] = None
+        self._sensecraft_losses: Dict[str, torch.nn.Module] = {}
         self._warned_missing_lpips = False
+        self._warned_missing_sensecraft = False
         self._loss_weights: Dict[str, float] = {}
         self._sobel_fn: Callable[[torch.Tensor], torch.Tensor] = sobel_edges
         self._use_latent_mean: bool = False
         self._fixed_sample_batch: Optional[torch.Tensor] = None
         self._sample_images_dir: Optional[str] = None
         self._sample_max_frames: int = 16
+
+    def _resolve_sensecraft_mode(
+        self, args: argparse.Namespace, tensor: torch.Tensor
+    ) -> str:
+        mode = str(getattr(args, "vae_sensecraft_mode", "auto")).lower()
+        if mode == "auto":
+            return "3d" if tensor.dim() == 5 else "2d"
+        return mode
+
+    def _get_sensecraft_loss_module(
+        self,
+        args: argparse.Namespace,
+        device: torch.device,
+        mode: str,
+    ) -> Optional[torch.nn.Module]:
+        if not bool(getattr(args, "vae_enable_sensecraft_loss", False)):
+            return None
+
+        if mode in self._sensecraft_losses:
+            loss_module = self._sensecraft_losses[mode]
+            return loss_module.to(device)
+
+        try:
+            loss_module = create_sensecraft_loss(
+                loss_config=list(getattr(args, "vae_sensecraft_loss_config", [])),
+                input_range=tuple(
+                    getattr(args, "vae_sensecraft_input_range", (0.0, 1.0))
+                ),
+                mode=mode,
+            )
+        except RuntimeError as exc:
+            if not self._warned_missing_sensecraft:
+                logger.warning(
+                    "SenseCraft VAE loss requested but unavailable: %s. The term will be disabled.",
+                    exc,
+                )
+                self._warned_missing_sensecraft = True
+            return None
+
+        loss_module = loss_module.to(device)
+        loss_module.eval()
+        for parameter in loss_module.parameters():
+            parameter.requires_grad = False
+        self._sensecraft_losses[mode] = loss_module
+        logger.info("Loaded SenseCraft VAE loss in %s mode onto %s", mode, device)
+        return loss_module
 
     def compute_vae_loss(
         self,
@@ -157,6 +209,8 @@ class VaeTrainingCore:
         loss_weights: Optional[Dict[str, float]] = None,
         loss_balancer: Optional[MedianLossBalancer] = None,
         lpips_model: Optional[torch.nn.Module] = None,
+        sensecraft_loss_module: Optional[torch.nn.Module] = None,
+        sensecraft_mode: str = "auto",
         use_latent_mean: bool = False,
         reconstruction_loss_type: str = "mse",
         sobel_fn: Optional[Callable[[torch.Tensor], torch.Tensor]] = None,
@@ -168,6 +222,7 @@ class VaeTrainingCore:
             "mae": 0.0,
             "lpips": 0.0,
             "edge": 0.0,
+            "sensecraft": 0.0,
             "kl": 1e-6,
         }
 
@@ -220,6 +275,36 @@ class VaeTrainingCore:
             abs_losses["edge"] = edge_loss
         else:
             loss_dict["edge"] = reconstructed_f32.new_zeros(())
+
+        sensecraft_terms: Dict[str, torch.Tensor] = {}
+        if weights.get("sensecraft", 0.0) > 0.0 and sensecraft_loss_module is not None:
+            sensecraft_input, sensecraft_target = prepare_sensecraft_loss_tensors(
+                reconstructed_f32,
+                original_f32,
+                mode=sensecraft_mode,
+            )
+            sensecraft_outputs = sensecraft_loss_module(
+                sensecraft_input,
+                sensecraft_target,
+            )
+            if isinstance(sensecraft_outputs, dict):
+                sensecraft_loss = sensecraft_outputs.get(
+                    "loss", reconstructed_f32.new_zeros(())
+                )
+                sensecraft_terms = {
+                    key: value
+                    for key, value in sensecraft_outputs.items()
+                    if key != "loss" and isinstance(value, torch.Tensor)
+                }
+            else:
+                sensecraft_loss = sensecraft_outputs
+
+            loss_dict["sensecraft"] = sensecraft_loss
+            loss_dict["sensecraft_terms"] = sensecraft_terms
+            abs_losses["sensecraft"] = sensecraft_loss
+        else:
+            loss_dict["sensecraft"] = reconstructed_f32.new_zeros(())
+            loss_dict["sensecraft_terms"] = sensecraft_terms
 
         kl_weight = weights.get("kl", 0.0)
         if (
@@ -539,6 +624,12 @@ class VaeTrainingCore:
                     vae.dtype,
                     use_latent_mean=self._use_latent_mean,
                 )
+                sensecraft_mode = self._resolve_sensecraft_mode(args, original)
+                sensecraft_loss_module = self._get_sensecraft_loss_module(
+                    args,
+                    accelerator.device,
+                    sensecraft_mode,
+                )
 
                 val_loss, _ = self.compute_vae_loss(
                     reconstructed,
@@ -548,6 +639,8 @@ class VaeTrainingCore:
                     loss_weights=self._loss_weights,
                     loss_balancer=None,
                     lpips_model=self._lpips_model,
+                    sensecraft_loss_module=sensecraft_loss_module,
+                    sensecraft_mode=sensecraft_mode,
                     use_latent_mean=self._use_latent_mean,
                     reconstruction_loss_type=getattr(
                         args, "vae_reconstruction_loss", "mse"
@@ -603,6 +696,11 @@ class VaeTrainingCore:
             "mae": float(getattr(args, "vae_mae_weight", 0.0)),
             "lpips": float(getattr(args, "vae_lpips_weight", 0.0)),
             "edge": float(getattr(args, "vae_edge_weight", 0.0)),
+            "sensecraft": (
+                float(getattr(args, "vae_sensecraft_weight", 1.0))
+                if bool(getattr(args, "vae_enable_sensecraft_loss", False))
+                else 0.0
+            ),
             "kl": float(getattr(args, "vae_kl_weight", 1e-6)),
         }
 
@@ -614,6 +712,26 @@ class VaeTrainingCore:
         ):
             loss_weights["mse"] = 0.0
             loss_weights["mae"] = 1.0
+
+        if bool(getattr(args, "vae_enable_sensecraft_loss", False)):
+            configured_mode = str(getattr(args, "vae_sensecraft_mode", "auto")).lower()
+            probe_modes = ["2d", "3d"] if configured_mode == "auto" else [configured_mode]
+            sensecraft_available = False
+            self._sensecraft_losses = {}
+            for probe_mode in probe_modes:
+                if (
+                    self._get_sensecraft_loss_module(
+                        args,
+                        accelerator.device,
+                        probe_mode,
+                    )
+                    is not None
+                ):
+                    sensecraft_available = True
+            if not sensecraft_available:
+                loss_weights["sensecraft"] = 0.0
+        else:
+            self._sensecraft_losses = {}
 
         self._loss_weights = loss_weights
         self._use_latent_mean = bool(getattr(args, "vae_decoder_latent_mean", False))
@@ -651,10 +769,11 @@ class VaeTrainingCore:
             self._lpips_model = None
 
         logger.info(
-            "Starting VAE training with weights %s, reconstruction loss=%s, latent_mean=%s",
+            "Starting VAE training with weights %s, reconstruction loss=%s, latent_mean=%s, sensecraft_enabled=%s",
             self._loss_weights,
             reconstruction_loss_type,
             self._use_latent_mean,
+            bool(getattr(args, "vae_enable_sensecraft_loss", False)),
         )
 
         for epoch in range(num_train_epochs):
@@ -708,6 +827,12 @@ class VaeTrainingCore:
                         network_dtype,
                         use_latent_mean=self._use_latent_mean,
                     )
+                    sensecraft_mode = self._resolve_sensecraft_mode(args, original)
+                    sensecraft_loss_module = self._get_sensecraft_loss_module(
+                        args,
+                        accelerator.device,
+                        sensecraft_mode,
+                    )
 
                     loss, loss_dict = self.compute_vae_loss(
                         reconstructed,
@@ -717,6 +842,8 @@ class VaeTrainingCore:
                         loss_weights=self._loss_weights,
                         loss_balancer=self.loss_balancer,
                         lpips_model=self._lpips_model,
+                        sensecraft_loss_module=sensecraft_loss_module,
+                        sensecraft_mode=sensecraft_mode,
                         use_latent_mean=self._use_latent_mean,
                         reconstruction_loss_type=reconstruction_loss_type,
                         sobel_fn=self._sobel_fn,
@@ -842,10 +969,17 @@ class VaeTrainingCore:
                     "vae/loss/average": avr_loss,
                 }
 
-                for term in ("mse", "mae", "lpips", "edge", "kl"):
+                for term in ("mse", "mae", "lpips", "edge", "sensecraft", "kl"):
                     value = loss_dict.get(term)
                     if isinstance(value, torch.Tensor):
                         logs[f"vae/loss/{term}"] = float(value.detach().item())
+
+                sensecraft_terms = loss_dict.get("sensecraft_terms", {}) or {}
+                for key, value in sensecraft_terms.items():
+                    if isinstance(value, torch.Tensor):
+                        logs[f"vae/loss/sensecraft_{key}"] = float(
+                            value.detach().item()
+                        )
 
                 coeffs = loss_dict.get("coeffs", {}) or {}
                 for key, value in coeffs.items():

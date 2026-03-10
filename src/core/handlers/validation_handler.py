@@ -72,6 +72,7 @@ def handle_step_validation(
             bool(getattr(args, "enable_temporal_ssim", False)),
             bool(getattr(args, "enable_temporal_lpips", False)),
             bool(getattr(args, "enable_flow_warped_ssim", False)),
+            bool(getattr(args, "enable_sensecraft_validation_metrics", False)),
             bool(getattr(args, "enable_fvd", False)),
             bool(getattr(args, "enable_vmaf", False)),
             bool(getattr(args, "enable_motion_disentanglement_eval", False)),

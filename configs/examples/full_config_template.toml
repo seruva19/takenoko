@@ -6524,6 +6524,25 @@ flow_warped_ssim_max_items = 2
 # Subsample frames for speed
 flow_warped_ssim_frame_stride = 2
 
+# SenseCraft validation metrics on decoded validation frames.
+enable_sensecraft_validation_metrics = false
+
+# SenseCraft metrics to compute per validation timestep.
+# Valid options: "psnr", "ssim", "ms_ssim", "lpips"
+sensecraft_validation_metrics = ["psnr", "ssim", "lpips"]
+
+# Maximum validation items per timestep to decode and score with SenseCraft.
+# Higher values improve stability but increase validation time and VRAM use.
+sensecraft_validation_max_items = 2
+
+# Frame stride used when sampling video frames for SenseCraft metrics.
+# 1 scores every frame, 8 scores every eighth frame. Must be >= 1.
+sensecraft_validation_frame_stride = 8
+
+# LPIPS backbone used by SenseCraft when "lpips" is included above.
+# Valid options: "alex" (fastest), "vgg" (heavier), "squeeze" (lightweight).
+sensecraft_validation_lpips_network = "alex"
+
 # FVD (Fréchet Video Distance)
 enable_fvd = false
 
@@ -7285,6 +7304,43 @@ vae_lpips_weight = 0.0
 
 # Sobel edge consistency weight to encourage crisp edges.
 vae_edge_weight = 0.0
+
+# Enable SenseCraft compound reconstruction loss during VAE training.
+# compares reconstructed pixels against original pixels and can combine multiple perceptual / structural sub-losses behind one top-level weight.
+vae_enable_sensecraft_loss = false
+
+# Top-level multiplier applied to the total SenseCraft loss before optional balancing.
+# Use this to control how strongly the compound SenseCraft objective competes with MSE / MAE / LPIPS / edge / KL terms.
+# Set to 0 to disable contribution without deleting the compound config below.
+vae_sensecraft_weight = 1.0
+
+# SenseCraft tensor mode:
+# - "auto": use "3d" for BCHW video tensors and "2d" for image tensors (recommended)
+# - "2d": always score frame/image tensors as 2D images
+# - "3d": always score video tensors as BTCHW sequences
+vae_sensecraft_mode = "auto"
+
+# Value range of VAE inputs/outputs passed into SenseCraft.
+# [0.0, 1.0] matches Takenoko's decoded image tensors by default.
+# If you preprocess VAE targets into another range, keep this in sync.
+vae_sensecraft_input_range = [0.0, 1.0]
+
+# Compound SenseCraft loss definition.
+# TOML format rules:
+# - each entry must be a one-key inline table
+# - simple form: { charbonnier = 1.0 }
+# - weighted + kwargs form: { lpips = [0.05, { net = "alex" }] }
+# - internal weights are local to SenseCraft; `vae_sensecraft_weight` is the external scaler
+# Example losses:
+#   charbonnier / mse / l1 / huber
+#   sobel / gradient / high_freq
+#   ssim / ms_ssim / lpips
+#   temporal_gradient / stssim / patch_fft_3d (for video-heavy VAE work)
+vae_sensecraft_loss_config = [
+  { charbonnier = 1.0 },
+  { sobel = 0.1 },
+  { lpips = [0.05, { net = "alex" }] },
+]
 
 # Rolling window (in steps) for the optional median loss balancer. 0 disables balancing.
 vae_loss_balancer_window = 0

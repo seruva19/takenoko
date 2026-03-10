@@ -12,6 +12,7 @@ import numpy as np
 from accelerate import Accelerator
 
 from modules.scheduling_flow_match_discrete import FlowMatchDiscreteScheduler
+from utils.sensecraft_utils import get_sensecraft_metric_functions
 from utils.train_utils import get_sigmas
 from common.logger import get_logger
 from core.metrics import get_throughput_metrics, get_total_runtime
@@ -61,10 +62,14 @@ class ValidationCore:
         self._warned_no_vae_for_metrics = False
         self._warned_no_pixels_for_metrics = False
         self._warned_missing_lpips = False
+        self._warned_missing_sensecraft = False
         self._warned_missing_torchvision = False
         self._warned_missing_ffmpeg = False
         self._warned_insufficient_frames_temporal = False
         self._warned_motion_eval_failed = False
+        self._warned_sensecraft_ms_ssim_small = False
+        self._warned_sensecraft_lpips_small = False
+        self._sensecraft_metric_fns: Optional[Dict[str, Any]] = None
 
     def _warn_once(self, key: str, message: str) -> None:
         try:
@@ -189,6 +194,78 @@ class ValidationCore:
                         pass
                 return stats
         return {}  # Return empty dict on non-main processes
+
+    def _get_sensecraft_metric_fns(self) -> Optional[Dict[str, Any]]:
+        if self._sensecraft_metric_fns is not None:
+            return self._sensecraft_metric_fns
+
+        try:
+            self._sensecraft_metric_fns = get_sensecraft_metric_functions()
+        except RuntimeError as exc:
+            self._warn_once(
+                "_warned_missing_sensecraft",
+                f"SenseCraft metrics requested but unavailable: {exc}",
+            )
+            return None
+
+        return self._sensecraft_metric_fns
+
+    def _compute_sensecraft_metric(
+        self,
+        *,
+        metric_name: str,
+        metric_fns: Dict[str, Any],
+        pred_frames: torch.Tensor,
+        ref_frames: torch.Tensor,
+        frame_stride: int,
+        lpips_network: str,
+    ) -> Optional[torch.Tensor]:
+        values: list[torch.Tensor] = []
+        frame_count = pred_frames.shape[2]
+
+        if metric_name == "ms_ssim" and (
+            pred_frames.shape[-2] < 160 or pred_frames.shape[-1] < 160
+        ):
+            self._warn_once(
+                "_warned_sensecraft_ms_ssim_small",
+                "SenseCraft MS-SSIM requested but validation frames are smaller than ~160px; skipping MS-SSIM.",
+            )
+            return None
+
+        if metric_name == "lpips" and (
+            pred_frames.shape[-2] < 64 or pred_frames.shape[-1] < 64
+        ):
+            self._warn_once(
+                "_warned_sensecraft_lpips_small",
+                "SenseCraft LPIPS requested but validation frames are smaller than 64px; skipping LPIPS.",
+            )
+            return None
+
+        for frame_idx in range(0, frame_count, max(1, frame_stride)):
+            pred_frame = pred_frames[:, :, frame_idx]
+            ref_frame = ref_frames[:, :, frame_idx]
+
+            if metric_name == "psnr":
+                value = metric_fns["psnr"](pred_frame, ref_frame, data_range=1.0)
+            elif metric_name == "ssim":
+                value = metric_fns["ssim"](pred_frame, ref_frame, data_range=1.0)
+            elif metric_name == "ms_ssim":
+                value = metric_fns["ms_ssim"](pred_frame, ref_frame, data_range=1.0)
+            elif metric_name == "lpips":
+                value = metric_fns["lpips"](
+                    pred_frame * 2.0 - 1.0,
+                    ref_frame * 2.0 - 1.0,
+                    net=lpips_network,
+                )
+            else:
+                raise ValueError(f"Unsupported SenseCraft validation metric '{metric_name}'")
+
+            values.append(value.reshape(()).detach())
+
+        if not values:
+            return None
+
+        return torch.stack(values).mean()
 
     def validate(  # type: ignore
         self,
@@ -480,6 +557,7 @@ class ValidationCore:
                 batch_direct_noise_losses = []
                 batch_item_counts = []  # number of items per-batch for coverage
                 batch_motion_eval_vals: Dict[str, list[torch.Tensor]] = {}
+                batch_sensecraft_metric_vals: Dict[str, list[torch.Tensor]] = {}
 
                 # Calculate SNR only once for the current timestep (optimization)
                 fixed_timesteps_tensor = torch.full(
@@ -496,6 +574,12 @@ class ValidationCore:
                 # Requires decoded frames from VAE and reference pixels in batch
                 enable_psnr = bool(getattr(args, "enable_perceptual_snr", False))
                 max_psnr_items = int(getattr(args, "perceptual_snr_max_items", 4))
+                enable_sensecraft_metrics = bool(
+                    getattr(args, "enable_sensecraft_validation_metrics", False)
+                )
+                sensecraft_metric_names = list(
+                    getattr(args, "sensecraft_validation_metrics", [])
+                )
 
                 # Track sample-weighted (per-example) sums across all batches/timesteps
                 if timestep_idx == 0:
@@ -1283,6 +1367,99 @@ class ValidationCore:
                                     "Flow-warped SSIM requested but validation batches lack 'pixels'; set load_val_pixels=true.",
                                 )
 
+                    # SenseCraft image metrics on decoded validation frames
+                    if enable_sensecraft_metrics and vae is not None and "pixels" in batch:
+                        try:
+                            metric_fns = self._get_sensecraft_metric_fns()
+                            if metric_fns is not None:
+                                if "pred_frames" not in locals():
+                                    pred_latents = pred.detach()
+                                    with torch.autocast(
+                                        device_type=str(accelerator.device).split(":")[0],
+                                        enabled=False,
+                                    ):
+                                        vae_dtype = vae.dtype
+                                        pred_latents = pred_latents.to(dtype=vae_dtype)
+                                        decoded = vae.decode(
+                                            pred_latents
+                                            / getattr(vae, "scaling_factor", 1.0)
+                                        )
+                                        pred_frames = (
+                                            torch.stack(decoded, dim=0)
+                                            if isinstance(decoded, list)
+                                            else decoded
+                                        )
+
+                                pred_frames = pred_frames.to(torch.float32)
+                                ref_frames = torch.stack(batch["pixels"], dim=0).to(
+                                    device=pred_frames.device, dtype=torch.float32
+                                )
+
+                                max_items = int(
+                                    getattr(args, "sensecraft_validation_max_items", 2)
+                                )
+                                frame_stride = int(
+                                    getattr(
+                                        args,
+                                        "sensecraft_validation_frame_stride",
+                                        8,
+                                    )
+                                )
+                                lpips_network = str(
+                                    getattr(
+                                        args,
+                                        "sensecraft_validation_lpips_network",
+                                        "alex",
+                                    )
+                                )
+                                batch_size = min(
+                                    pred_frames.shape[0],
+                                    ref_frames.shape[0],
+                                    max_items,
+                                )
+
+                                if batch_size > 0 and pred_frames.shape == ref_frames.shape:
+                                    pred_subset = pred_frames[:batch_size].clamp(0, 1)
+                                    ref_subset = ref_frames[:batch_size].clamp(0, 1)
+
+                                    for metric_name in sensecraft_metric_names:
+                                        metric_value = self._compute_sensecraft_metric(
+                                            metric_name=metric_name,
+                                            metric_fns=metric_fns,
+                                            pred_frames=pred_subset,
+                                            ref_frames=ref_subset,
+                                            frame_stride=frame_stride,
+                                            lpips_network=lpips_network,
+                                        )
+                                        if metric_value is not None:
+                                            batch_sensecraft_metric_vals.setdefault(
+                                                metric_name, []
+                                            ).append(metric_value.unsqueeze(0))
+                                else:
+                                    logger.warning(
+                                        "Skipping SenseCraft validation metrics: shape mismatch pred=%s vs ref=%s",
+                                        tuple(pred_frames.shape),
+                                        tuple(ref_frames.shape),
+                                    )
+                        except Exception as e:
+                            if accelerator.is_main_process:
+                                logger.warning(
+                                    "SenseCraft validation metric computation failed: %s",
+                                    e,
+                                )
+                    elif enable_sensecraft_metrics:
+                        if accelerator.is_main_process:
+                            if vae is None:
+                                self._warn_once(
+                                    "_warned_no_vae_for_metrics",
+                                    "SenseCraft validation metrics requested but VAE is not available; skipping.",
+                                )
+                            if "pixels" not in batch:
+                                self._warn_once(
+                                    "_warned_no_pixels_for_metrics",
+                                    "SenseCraft validation metrics requested but validation batches lack 'pixels'; set load_val_pixels=true.",
+                                )
+
                     # FVD (Fréchet Video Distance) using configurable backbone
                     if (
                         bool(getattr(args, "enable_fvd", False))
@@ -1667,6 +1844,24 @@ class ValidationCore:
                     )
                 except Exception:
                     flow_warped_ssim_metrics = {}
+                sensecraft_metrics = {}
+                for metric_name, metric_values in batch_sensecraft_metric_vals.items():
+                    if not metric_values:
+                        continue
+                    try:
+                        sensecraft_metrics.update(
+                            self._compute_and_gather_metrics(
+                                accelerator,
+                                metric_values,
+                                f"sensecraft_{metric_name}",
+                            )
+                        )
+                    except Exception as e:
+                        if accelerator.is_main_process:
+                            self._warn_once(
+                                "_warned_missing_sensecraft",
+                                f"Failed to gather SenseCraft metric '{metric_name}': {e}",
+                            )
 
                 # FVD (feature Fréchet distance over short clips)
                 try:
@@ -1809,6 +2004,10 @@ class ValidationCore:
                             log_dict[f"val_timesteps/{tag}"] = value
                             perception_dict[f"{per_ns}/val/{tag}"] = value
                         for key, value in flow_warped_ssim_metrics.items():
+                            tag = f"{key}_t{current_timestep}"
+                            log_dict[f"val_timesteps/{tag}"] = value
+                            perception_dict[f"{per_ns}/val/{tag}"] = value
+                        for key, value in sensecraft_metrics.items():
                             tag = f"{key}_t{current_timestep}"
                             log_dict[f"val_timesteps/{tag}"] = value
                             perception_dict[f"{per_ns}/val/{tag}"] = value

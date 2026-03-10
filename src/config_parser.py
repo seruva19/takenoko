@@ -2,6 +2,12 @@ import argparse
 import logging
 from typing import Any, Dict
 from common.logger import get_logger
+from utils.sensecraft_utils import (
+    VALID_SENSECRAFT_LPIPS_NETS,
+    validate_sensecraft_input_range,
+    validate_sensecraft_loss_config,
+    validate_sensecraft_metrics,
+)
 from enhancements.semanticgen.config import parse_semanticgen_config
 from enhancements.blockwise_flow_matching.config import (
     parse_blockwise_flow_matching_config,
@@ -394,6 +400,25 @@ def create_args_from_config(
     args.vae_mae_weight = float(config.get("vae_mae_weight", 0.0))
     args.vae_lpips_weight = float(config.get("vae_lpips_weight", 0.0))
     args.vae_edge_weight = float(config.get("vae_edge_weight", 0.0))
+    args.vae_enable_sensecraft_loss = bool(
+        config.get("vae_enable_sensecraft_loss", False)
+    )
+    args.vae_sensecraft_weight = float(config.get("vae_sensecraft_weight", 1.0))
+    args.vae_sensecraft_mode = str(config.get("vae_sensecraft_mode", "auto")).lower()
+    if args.vae_sensecraft_mode not in {"auto", "2d", "3d"}:
+        raise ValueError("vae_sensecraft_mode must be one of: auto, 2d, 3d")
+    args.vae_sensecraft_input_range = validate_sensecraft_input_range(
+        config.get("vae_sensecraft_input_range", [0.0, 1.0]),
+        config_name="vae_sensecraft_input_range",
+    )
+    args.vae_sensecraft_loss_config = validate_sensecraft_loss_config(
+        config.get("vae_sensecraft_loss_config", []),
+        config_name="vae_sensecraft_loss_config",
+    )
+    if args.vae_enable_sensecraft_loss and not args.vae_sensecraft_loss_config:
+        raise ValueError(
+            "vae_enable_sensecraft_loss requires vae_sensecraft_loss_config to be non-empty"
+        )
     args.vae_loss_balancer_window = int(config.get("vae_loss_balancer_window", 0))
     args.vae_loss_balancer_percentile = int(
         config.get("vae_loss_balancer_percentile", 95)
@@ -915,6 +940,38 @@ def create_args_from_config(
     args.flow_warped_ssim_frame_stride = int(
         config.get("flow_warped_ssim_frame_stride", 2)
     )
+    args.enable_sensecraft_validation_metrics = bool(
+        config.get("enable_sensecraft_validation_metrics", False)
+    )
+    args.sensecraft_validation_metrics = validate_sensecraft_metrics(
+        config.get("sensecraft_validation_metrics", ["psnr", "ssim", "lpips"]),
+        config_name="sensecraft_validation_metrics",
+    )
+    args.sensecraft_validation_max_items = int(
+        config.get("sensecraft_validation_max_items", 2)
+    )
+    if args.sensecraft_validation_max_items < 1:
+        raise ValueError("sensecraft_validation_max_items must be >= 1")
+    args.sensecraft_validation_frame_stride = int(
+        config.get("sensecraft_validation_frame_stride", 8)
+    )
+    if args.sensecraft_validation_frame_stride < 1:
+        raise ValueError("sensecraft_validation_frame_stride must be >= 1")
+    args.sensecraft_validation_lpips_network = str(
+        config.get("sensecraft_validation_lpips_network", "alex")
+    ).lower()
+    if args.sensecraft_validation_lpips_network not in VALID_SENSECRAFT_LPIPS_NETS:
+        raise ValueError(
+            "sensecraft_validation_lpips_network must be one of: "
+            + ", ".join(VALID_SENSECRAFT_LPIPS_NETS)
+        )
+    if (
+        args.enable_sensecraft_validation_metrics
+        and not args.sensecraft_validation_metrics
+    ):
+        raise ValueError(
+            "enable_sensecraft_validation_metrics requires sensecraft_validation_metrics to be non-empty"
+        )
 
     # FVD (Fréchet Video Distance) validation (optional)
     args.enable_fvd = bool(config.get("enable_fvd", False))

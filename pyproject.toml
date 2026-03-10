@@ -44,6 +44,7 @@ dependencies = [
   "safetensors>=0.4.3",
   "schedulefree>=1.4.1",
   "scikit-learn>=1.7.1",
+  "sensecraft>=0.3.11",
   "tensorboard>=2.19.0",
   "tensorboardx>=2.6.4",
   "termcolor>=3.1.0",
@@ -58,7 +59,7 @@ dependencies = [
   "tqdm==4.67.1",
   "transformers==4.46.3",
   "triton-windows<=3.2.0.post19",
-  "voluptuous==0.15.2"
+  "voluptuous==0.15.2",
 
 ]
 
