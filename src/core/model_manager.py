@@ -524,6 +524,13 @@ class ModelManager:
                     module = network_module.create_arch_network_from_weights(
                         multiplier, weights_sd, unet=transformer, for_inference=True
                     )
+                if isinstance(module, tuple):
+                    module = module[0]
+                if hasattr(module, "is_mergeable") and not module.is_mergeable():
+                    raise ValueError(
+                        f"base_weights does not support runtime-conditioned network module {args.network_module}. "
+                        "Load it as network_weights and provide the required runtime reference path instead."
+                    )
                 module.merge_to(None, transformer, weights_sd, torch.float32, "cpu")
 
             logger.info(f"all weights merged: {', '.join(args.base_weights)}")

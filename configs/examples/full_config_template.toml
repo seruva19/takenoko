@@ -404,7 +404,7 @@ lr_scheduler_args = ''
 # "networks.reward_lora", "networks.vae_wan", "lycoris.kohya", "networks.t_lora", "networks.tc_lora_wan", "networks.moc_lora",
 # "networks.mhc_lora", "networks.lorweb_lora_wan", "networks.singlora_wan", "networks.wan_finetune", "networks.slider_lora_wan",
 # "networks.relora_wan", "networks.adalora_wan", "networks.mora_wan", "networks.vera_wan", "networks.cdka_wan",
-# "networks.qlora_wan"
+# "networks.qlora_wan", "networks.video2lora_wan"
 # The module defines trainable adapters and is imported dynamically by the trainer.
 network_module = "networks.lora_wan"
 
@@ -579,6 +579,73 @@ network_alpha = 32
 #   "cdka_r2=4",
 #   "cdka_allow_padding=true",
 #   "cdka_merge_chunk_size=64"
+# ]
+
+# Video2LoRA (runtime-conditioned LightLoRA + HyperNetwork)
+# Requires: network_module = "networks.video2lora_wan"
+# This variant keeps standard Takenoko training/inference behavior unchanged unless selected.
+# It reuses paired reference loading via `control_signal`, predicts per-sample LoRA weights
+# from a reference video/image batch, and applies them inside the adapter forward path.
+# It is runtime-conditioned and therefore cannot be used through static `base_weights` merging.
+# Explicit opt-in is required: set `video2lora_enabled=true` in `network_args` when selecting this module.
+# Recommended:
+# - Use a low rank such as network_dim = 1..4.
+# - Keep `network_alpha` equal to `network_dim` unless you have a specific scaling reason.
+# - Provide paired reference media with the suffix configured below (default "_reference").
+# - Cache paired reference latents when possible for the most paper-like conditioning path.
+# Supported network_args:
+# - video2lora_enabled: bool (default false, required true when network_module is networks.video2lora_wan)
+# - video2lora_aux_down_dim: int >= 1 (default 128)
+#   Width of the trainable auxiliary matrix used to reconstruct the down projection.
+# - video2lora_aux_up_dim: int >= 1 (default 64)
+#   Width of the trainable auxiliary matrix used to reconstruct the up projection.
+# - video2lora_reference_feature_dim: int >= 1 (default 16)
+#   Expected channel count of the paired reference latents fed into the HyperNetwork.
+#   For WAN VAE latents this should usually stay at 16.
+# - video2lora_feature_dim: int >= 1 (default 256)
+#   Hidden width for the HyperNetwork projection/decoder stack.
+# - video2lora_decoder_blocks: int >= 1 (default 4)
+#   Number of Transformer decoder layers used for per-module weight prediction.
+# - video2lora_attention_heads: int >= 1 (default 4)
+#   Preferred head count for the HyperNetwork decoder. If it does not divide the internal
+#   LightLoRA weight width exactly, the implementation automatically reduces it to a valid divisor.
+# - video2lora_sample_iters: int >= 1 (default 4)
+#   Number of iterative HyperNetwork decoding refinement passes. This follows the upstream
+#   VideoHyperDream default more closely than a single-pass decoder.
+# - video2lora_max_reference_frames: int >= 0 (default 0)
+#   Temporal cap applied before tokenization. Set 0 to keep all latent frames.
+# - video2lora_spatial_pool_size: int >= 0 (default 0)
+#   Optional adaptive pooled latent size before tokenization. Set 0 to preserve full latent resolution.
+# - video2lora_reference_suffix: non-empty string (default "_reference")
+#   Paired reference media suffix reused through the standard control/reference dataset loader.
+# - video2lora_runtime_source: {"auto","control_signal"} (default "auto")
+#   `auto` is normalized to the paired control/reference path only. Target latents/pixels are never used.
+# - video2lora_require_reference: bool (default true)
+#   true: skip batches that do not provide a usable reference input for HyperNetwork prediction.
+# - video2lora_reference_dropout_p: float in [0, 1] (default 0.0)
+#   Per-sample dropout applied to reference features before HyperNetwork decoding.
+# - video2lora_hypernet_lr_ratio: float > 0 (default 1.0)
+#   LR multiplier for the HyperNetwork parameter group relative to the base adapter LR.
+# Example:
+# network_module = "networks.video2lora_wan"
+# network_dim = 2
+# network_alpha = 2
+# network_args = [
+#   "video2lora_enabled=true",
+#   "video2lora_aux_down_dim=128",
+#   "video2lora_aux_up_dim=64",
+#   "video2lora_reference_feature_dim=16",
+#   "video2lora_feature_dim=256",
+#   "video2lora_decoder_blocks=4",
+#   "video2lora_attention_heads=4",
+#   "video2lora_sample_iters=4",
+#   "video2lora_max_reference_frames=0",
+#   "video2lora_spatial_pool_size=0",
+#   "video2lora_reference_suffix=_reference",
+#   "video2lora_runtime_source=auto",
+#   "video2lora_require_reference=true",
+#   "video2lora_reference_dropout_p=0.0",
+#   "video2lora_hypernet_lr_ratio=1.0"
 # ]
 
 # QLoRA (4-bit base-model quantization + LoRA adapters)

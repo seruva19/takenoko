@@ -63,6 +63,7 @@ from configs.cdka_config import apply_cdka_config
 from configs.s2d_config import apply_s2d_config
 from configs.qlora_config import apply_qlora_config
 from configs.rslora_config import apply_rslora_config
+from configs.video2lora_config import apply_video2lora_config
 from configs.dual_head_alignment_config import apply_dual_head_alignment_config
 
 
@@ -489,6 +490,7 @@ def create_args_from_config(
     apply_cdka_config(args, config, logger)
     apply_qlora_config(args, config, logger)
     apply_rslora_config(args, config, logger)
+    apply_video2lora_config(args, config, logger)
 
     # Extract LoRA-GGPO parameters from network_args (e.g., "ggpo_sigma=0.03")
     args.ggpo_sigma = None

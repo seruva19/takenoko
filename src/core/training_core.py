@@ -2163,33 +2163,107 @@ class TrainingCore:
                                 )
                         except Exception:
                             pass
+                    if unwrapped_net is None:
+                        unwrapped_net = accelerator.unwrap_model(network)
+
+                    control_signal = None
+                    pixels = None
+                    analogy_boxes = None
+                    if isinstance(batch, dict):
+                        maybe_control = batch.get("control_signal")
+                        if isinstance(maybe_control, torch.Tensor):
+                            control_signal = maybe_control.to(device=latents_for_dit.device)
+                        maybe_pixels = batch.get("pixels")
+                        if isinstance(maybe_pixels, list) and len(maybe_pixels) > 0:
+                            tensor_pixels = [
+                                p for p in maybe_pixels if isinstance(p, torch.Tensor)
+                            ]
+                            if len(tensor_pixels) == len(maybe_pixels):
+                                pixels = torch.stack(tensor_pixels, dim=0).to(
+                                    device=latents_for_dit.device
+                                )
+                        elif isinstance(maybe_pixels, torch.Tensor):
+                            pixels = maybe_pixels.to(device=latents_for_dit.device)
+                        maybe_boxes = batch.get("lorweb_analogy_boxes")
+                        if isinstance(maybe_boxes, torch.Tensor):
+                            analogy_boxes = maybe_boxes.to(device=latents_for_dit.device)
+
+                    if hasattr(unwrapped_net, "set_video2lora_runtime_condition"):
+                        video2lora_reference = None
+                        if (
+                            isinstance(control_signal, torch.Tensor)
+                            and control_signal.dim() == 5
+                        ):
+                            expected_channels = int(
+                                getattr(
+                                    unwrapped_net,
+                                    "video2lora_reference_feature_dim",
+                                    control_signal.shape[1],
+                                )
+                            )
+                            if int(control_signal.shape[1]) == expected_channels:
+                                video2lora_reference = control_signal.to(
+                                    dtype=latents_for_dit.dtype
+                                )
+                            elif vae is not None:
+                                reference_pixels = control_signal.to(
+                                    device=latents_for_dit.device,
+                                    dtype=getattr(vae, "dtype", control_signal.dtype),
+                                )
+                                max_val = float(reference_pixels.max().detach().cpu())
+                                min_val = float(reference_pixels.min().detach().cpu())
+                                if max_val > 1.5:
+                                    reference_pixels = reference_pixels / 127.5 - 1.0
+                                elif min_val >= 0.0 and max_val <= 1.0:
+                                    reference_pixels = reference_pixels * 2.0 - 1.0
+
+                                vae_device = getattr(vae, "device", latents_for_dit.device)
+                                restore_vae_device = None
+                                if str(vae_device) != str(latents_for_dit.device):
+                                    restore_vae_device = vae_device
+                                    vae.to(latents_for_dit.device)
+                                try:
+                                    encoded_reference = vae.encode(
+                                        [
+                                            reference_pixels[idx]
+                                            for idx in range(reference_pixels.shape[0])
+                                        ]
+                                    )
+                                finally:
+                                    if restore_vae_device is not None:
+                                        vae.to(restore_vae_device)
+
+                                if isinstance(encoded_reference, list):
+                                    video2lora_reference = torch.stack(
+                                        encoded_reference,
+                                        dim=0,
+                                    )
+                                elif isinstance(encoded_reference, torch.Tensor):
+                                    video2lora_reference = encoded_reference
+                                else:
+                                    raise TypeError(
+                                        "Video2LoRA reference encoding returned an unsupported type."
+                                    )
+                                video2lora_reference = video2lora_reference.to(
+                                    device=latents_for_dit.device,
+                                    dtype=latents_for_dit.dtype,
+                                )
+
+                        video2lora_ready = unwrapped_net.set_video2lora_runtime_condition(
+                            latents=latents_for_dit,
+                            control_signal=video2lora_reference,
+                            pixels=None,
+                            timesteps=self_flow_runtime_timesteps,
+                        )
+                        if not video2lora_ready:
+                            if accelerator.is_main_process:
+                                logger.warning(
+                                    "Video2LoRA skipped batch: missing usable paired reference latents for runtime-conditioned adapter prediction."
+                                )
+                            continue
+
                     try:
-                        if unwrapped_net is None:
-                            unwrapped_net = accelerator.unwrap_model(network)
                         if hasattr(unwrapped_net, "set_lorweb_runtime_condition"):
-                            control_signal = None
-                            pixels = None
-                            analogy_boxes = None
-                            if isinstance(batch, dict):
-                                maybe_control = batch.get("control_signal")
-                                if isinstance(maybe_control, torch.Tensor):
-                                    control_signal = maybe_control.to(
-                                        device=latents_for_dit.device
-                                    )
-                                maybe_pixels = batch.get("pixels")
-                                if isinstance(maybe_pixels, list) and len(maybe_pixels) > 0:
-                                    tensor_pixels = [p for p in maybe_pixels if isinstance(p, torch.Tensor)]
-                                    if len(tensor_pixels) == len(maybe_pixels):
-                                        pixels = torch.stack(tensor_pixels, dim=0).to(
-                                            device=latents_for_dit.device
-                                        )
-                                elif isinstance(maybe_pixels, torch.Tensor):
-                                    pixels = maybe_pixels.to(device=latents_for_dit.device)
-                                maybe_boxes = batch.get("lorweb_analogy_boxes")
-                                if isinstance(maybe_boxes, torch.Tensor):
-                                    analogy_boxes = maybe_boxes.to(
-                                        device=latents_for_dit.device
-                                    )
                             unwrapped_net.set_lorweb_runtime_condition(
                                 latents=latents_for_dit,
                                 control_signal=control_signal,

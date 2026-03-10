@@ -866,6 +866,40 @@ class CheckpointManager:
                 metadata_to_save["ic_lora_concat_mode"] = str(
                     getattr(args, "ic_lora_concat_mode", "reference_target_frames")
                 )
+            if getattr(args, "network_module", "") == "networks.video2lora_wan":
+                metadata_to_save["video2lora_reference_suffix"] = str(
+                    getattr(args, "video2lora_reference_suffix", "_reference")
+                )
+                metadata_to_save["video2lora_runtime_source"] = str(
+                    getattr(args, "video2lora_runtime_source", "auto")
+                )
+                metadata_to_save["video2lora_aux_down_dim"] = str(
+                    int(getattr(args, "video2lora_aux_down_dim", 128))
+                )
+                metadata_to_save["video2lora_aux_up_dim"] = str(
+                    int(getattr(args, "video2lora_aux_up_dim", 64))
+                )
+                metadata_to_save["video2lora_reference_feature_dim"] = str(
+                    int(getattr(args, "video2lora_reference_feature_dim", 16))
+                )
+                metadata_to_save["video2lora_feature_dim"] = str(
+                    int(getattr(args, "video2lora_feature_dim", 256))
+                )
+                metadata_to_save["video2lora_decoder_blocks"] = str(
+                    int(getattr(args, "video2lora_decoder_blocks", 4))
+                )
+                metadata_to_save["video2lora_sample_iters"] = str(
+                    int(getattr(args, "video2lora_sample_iters", 4))
+                )
+                metadata_to_save["video2lora_max_reference_frames"] = str(
+                    int(getattr(args, "video2lora_max_reference_frames", 0))
+                )
+                metadata_to_save["video2lora_spatial_pool_size"] = str(
+                    int(getattr(args, "video2lora_spatial_pool_size", 0))
+                )
+                metadata_to_save["video2lora_hypernet_lr_ratio"] = str(
+                    float(getattr(args, "video2lora_hypernet_lr_ratio", 1.0))
+                )
             if bool(getattr(args, "enable_ufo_runtime_inference_profile", False)):
                 rec_multiplier = float(
                     getattr(args, "ufo_inference_lora_multiplier", 0.15)
