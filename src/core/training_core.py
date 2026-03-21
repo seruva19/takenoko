@@ -3031,9 +3031,9 @@ class TrainingCore:
                     loi_applied = False
                     loi_attempted = False
                     loi_used_extra_backward = False
+                    unwrapped_net = accelerator.unwrap_model(network)
                     try:
-                        if hasattr(network, "maybe_apply_loi_init"):
-                            unwrapped_net = accelerator.unwrap_model(network)
+                        if hasattr(unwrapped_net, "maybe_apply_loi_init"):
                             extra_backward_fn = None
                             if getattr(unwrapped_net, "loi_requires_backprop", False):
                                 loi_used_extra_backward = True
@@ -3169,7 +3169,26 @@ class TrainingCore:
                                         det_lr_exc,
                                     )
 
+                            if hasattr(unwrapped_net, "pre_optimizer_step"):
+                                try:
+                                    unwrapped_net.pre_optimizer_step()
+                                except Exception as pre_step_exc:
+                                    logger.debug(
+                                        "Network pre_optimizer_step skipped: %s",
+                                        pre_step_exc,
+                                    )
+
                             optimizer.step()
+
+                            if hasattr(unwrapped_net, "post_optimizer_step"):
+                                try:
+                                    unwrapped_net.post_optimizer_step()
+                                except Exception as post_step_exc:
+                                    logger.debug(
+                                        "Network post_optimizer_step skipped: %s",
+                                        post_step_exc,
+                                    )
+
                             update_teacher_if_needed(
                                 self.transition_manager, accelerator, transformer
                             )

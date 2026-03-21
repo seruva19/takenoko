@@ -403,7 +403,7 @@ lr_scheduler_args = ''
 # Network module to train: "networks.lora_wan", "networks.ic_lora_wan", "networks.riemann_lora_wan", "networks.control_lora_wan",
 # "networks.reward_lora", "networks.vae_wan", "lycoris.kohya", "networks.t_lora", "networks.tc_lora_wan", "networks.moc_lora",
 # "networks.mhc_lora", "networks.lorweb_lora_wan", "networks.singlora_wan", "networks.wan_finetune", "networks.slider_lora_wan",
-# "networks.relora_wan", "networks.adalora_wan", "networks.mora_wan", "networks.vera_wan", "networks.cdka_wan",
+# "networks.relora_wan", "networks.adalora_wan", "networks.mora_wan", "networks.vera_wan", "networks.stella_wan", "networks.cdka_wan",
 # "networks.qlora_wan", "networks.video2lora_wan"
 # The module defines trainable adapters and is imported dynamically by the trainer.
 network_module = "networks.lora_wan"
@@ -749,6 +749,41 @@ network_alpha = 32
 # - loi_power_iters: randomized SVD power iterations q (default 1)
 # - loi_max_elements: skip LOI when out_dim * in_dim exceeds this (default 2000000)
 # network_args = ["loi_enabled=true", "loi_alpha=0.1", "loi_oversample=2", "loi_power_iters=1", "loi_max_elements=2000000"]
+
+# StelLA (Stiefel-constrained three-factor LoRA)
+# Requires: network_module = "networks.stella_wan"
+# - stella_enabled: bool (default true when network_module is networks.stella_wan)
+# - stella_retraction: {"polar","exp_map"} (default "polar")
+#   Retraction strategy after optimizer perturbation on Stiefel parameters.
+# - stella_diag_s: bool (default false)
+#   true uses diagonal S (rank-vector scaling), false uses full rank x rank S.
+# - stella_grad_scaling: bool or float>0 (default true)
+#   true uses automatic per-layer reference scaling; float sets explicit reference dim.
+# - stella_grad_reference_dim: int >= 0 (optional, default 0=auto)
+#   Optional explicit reference dimension used when stella_grad_scaling=true.
+#   When 0 and stella_grad_scaling=true, Takenoko infers a reference dim from the
+#   most common StelLA-adapted input feature size (hidden-size style behavior).
+# - stella_init: {"orthonormal","svd_major","svd_minor","kaiming"} (default "orthonormal")
+#   StelLA factor initialization mode for U/V matrices.
+#   Aliases accepted: "rando", "random_qr", "orthogonal" -> "orthonormal".
+#   Boolean forms are accepted in network_args for compatibility:
+#   true -> orthonormal, false -> kaiming.
+# Notes:
+# - StelLA keeps inference compatibility; adapters still merge into base weights.
+# - U/V parameter groups are emitted with weight_decay=0.0 by default.
+# - Manifold updates are batched by matrix shape for better optimizer-step throughput.
+# - Checkpoint loading accepts both Takenoko keys (`lora_up/lora_down/stella_s`)
+#   and upstream-style aliases (`stella_U/stella_Vt/stella_S`, with optional adapter segment).
+# Example:
+# network_module = "networks.stella_wan"
+# network_args = [
+#   "stella_enabled=true",
+#   "stella_retraction=polar",
+#   "stella_diag_s=false",
+#   "stella_grad_scaling=true",
+#   "stella_grad_reference_dim=2048",
+#   "stella_init=orthonormal"
+# ]
 
 # T-LoRA (timestep-gated LoRA)
 # Activated when network_module = "networks.t_lora".
