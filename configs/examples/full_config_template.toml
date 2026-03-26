@@ -432,7 +432,7 @@ lr_scheduler_args = ''
 # "networks.reward_lora", "networks.vae_wan", "lycoris.kohya", "networks.t_lora", "networks.tc_lora_wan", "networks.moc_lora",
 # "networks.mhc_lora", "networks.lorweb_lora_wan", "networks.singlora_wan", "networks.wan_finetune", "networks.slider_lora_wan",
 # "networks.relora_wan", "networks.adalora_wan", "networks.mora_wan", "networks.vera_wan", "networks.stella_wan", "networks.cdka_wan",
-# "networks.qlora_wan", "networks.video2lora_wan"
+# "networks.oftv2_wan", "networks.qlora_wan", "networks.video2lora_wan"
 # The module defines trainable adapters and is imported dynamically by the trainer.
 network_module = "networks.lora_wan"
 
@@ -479,6 +479,45 @@ network_alpha = 32
 # - optional "pissa_niter=4" can be used with "initialize=pissa"
 # Recommended with network_dropout = 0 to match PiSSA paper/PEFT defaults.
 # network_args = ["initialize=pissa_niter_4"]
+
+# OFTv2 (Orthogonal Finetuning v2, training-only)
+# Requires: network_module = "networks.oftv2_wan"
+# OFTv2 rotates the frozen weight/input space instead of learning additive low-rank deltas.
+# It preserves WAN inference shape/entrypoints, but checkpoints are OFTv2-specific and should be
+# loaded with the same network_module for resume/merge workflows.
+# Parameters:
+# - oftv2_enabled: bool (default true when network_module is networks.oftv2_wan)
+# - oftv2_block_size: int >= 1 (default falls back to network_dim, recommended explicit)
+#   Rotation block width. Each targeted layer's input width is adjusted to the nearest divisible
+#   block size if needed; Takenoko logs the adjusted modules during initialization.
+# - oftv2_coft: bool (default false)
+#   Enables constrained OFT (COFT) projection before Cayley parametrization.
+# - oftv2_eps: float > 0 (default 1e-4)
+#   COFT projection radius; only used when oftv2_coft=true.
+# - oftv2_block_share: bool (default false)
+#   true shares one learned rotation block across all blocks of a layer.
+# - oftv2_use_cayley_neumann: bool (default true)
+#   true uses the efficient Cayley-Neumann approximation; false uses the exact Cayley solve.
+# - oftv2_num_cayley_neumann_terms: int >= 1 (default 5)
+#   Number of Neumann-series terms when oftv2_use_cayley_neumann=true.
+# - oftv2_module_dropout: float in [0, 1) (default 0.0)
+#   Multiplicative block dropout that replaces sampled OFT blocks with identity during training.
+# Notes:
+# - network_alpha is ignored by OFTv2.
+# - rank_dropout and network_dropout are ignored; use oftv2_module_dropout instead.
+# - include_patterns/exclude_patterns and include_time_modules behave like standard WAN LoRA targeting.
+# Example:
+# network_module = "networks.oftv2_wan"
+# network_args = [
+#   "oftv2_enabled=true",
+#   "oftv2_block_size=32",
+#   "oftv2_coft=false",
+#   "oftv2_eps=1e-4",
+#   "oftv2_block_share=false",
+#   "oftv2_use_cayley_neumann=true",
+#   "oftv2_num_cayley_neumann_terms=5",
+#   "oftv2_module_dropout=0.0"
+# ]
 
 # AdaLoRA (adaptive rank allocation, training-only)
 # Requires: network_module = "networks.adalora_wan"
