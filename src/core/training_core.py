@@ -68,6 +68,7 @@ from enhancements.mixflow.training_integration import (
     apply_mixflow_slowed_interpolation,
     maybe_apply_mixflow_beta_t_sampling,
 )
+from enhancements.ortholora.helper import OrthoLoRAHelper
 from enhancements.ic_lora.training_integration import (
     is_ic_lora_enabled,
     prepare_ic_lora_model_input,
@@ -1399,6 +1400,11 @@ class TrainingCore:
         self.self_transcendence_helper = self_transcendence_helper
         self.self_flow_helper = self_flow_helper
         self.initialize_stable_velocity_target(args)
+        ortholora_helper = (
+            OrthoLoRAHelper(args)
+            if bool(getattr(args, "enable_ortholora", False))
+            else None
+        )
 
         transition_cfg = getattr(args, "transition_training", None)
         if transition_cfg and getattr(transition_cfg, "enabled", False):
@@ -2933,7 +2939,43 @@ class TrainingCore:
                         target=target,
                         step=global_step,
                     )
+                    ortholora_plan = None
+                    if ortholora_helper is not None:
+                        try:
+                            ortholora_plan = ortholora_helper.prepare_backward_plan(
+                                args=args,
+                                accelerator=accelerator,
+                                network=unwrapped_net,
+                                batch=batch,
+                                model_pred=model_pred,
+                                target=target,
+                                weighting=weighting,
+                                timesteps=timesteps,
+                                noise=noise,
+                                noisy_model_input=noisy_model_input,
+                                latents=latents,
+                                noise_scheduler=noise_scheduler,
+                                network_dtype=network_dtype,
+                            )
+                        except Exception as ortholora_exc:
+                            logger.warning(
+                                "OrthoLORA projection skipped for this step: %s",
+                                ortholora_exc,
+                            )
+                            ortholora_plan = None
                     accelerator.backward(loss_for_backward)
+                    if ortholora_helper is not None and ortholora_plan is not None:
+                        ortholora_helper.apply_backward_plan(ortholora_plan)
+                        if (
+                            ortholora_helper.log_metrics
+                            and accelerator.is_main_process
+                            and accelerator.trackers
+                            and accelerator.sync_gradients
+                        ):
+                            accelerator.log(
+                                ortholora_plan.metrics,
+                                step=global_step,
+                            )
 
                     # End backward pass timing
                     end_backward_pass_timing()

@@ -29,6 +29,7 @@ from dataset.config_utils import (
     validate_dataset_config,
 )
 from configs.relora_config import apply_relora_config
+from configs.ortholora_config import apply_ortholora_config
 from configs.internal_guidance_config import apply_internal_guidance_config
 from configs.glance_config import apply_glance_config
 from configs.physics_guided_motion_loss import apply_physics_guided_motion_config
@@ -520,6 +521,7 @@ def create_args_from_config(
     apply_qlora_config(args, config, logger)
     apply_rslora_config(args, config, logger)
     apply_video2lora_config(args, config, logger)
+    apply_ortholora_config(args, config, logger)
 
     # Extract LoRA-GGPO parameters from network_args (e.g., "ggpo_sigma=0.03")
     args.ggpo_sigma = None

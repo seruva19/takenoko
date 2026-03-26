@@ -1225,6 +1225,42 @@ relora_log_reset_metrics = false
 relora_skip_reset_until_warmup = false
 
 # =============================================================================
+# ⚠️ ORTHOLORA SETTINGS
+# =============================================================================
+
+# OrthoLORA projects conflicting LoRA gradients between independently grouped
+# subsets inside the current batch. This is training-only and keeps standard LoRA
+# inference unchanged because the forward pass and saved adapter format stay the same.
+# It is most useful when a single shared adapter is trained across multiple datasets
+# or concepts in the same run, and the current batch mixes at least two groups.
+# Requirements and caveats:
+# - Works only when the active adapter exposes trainable lora_down/lora_up weights.
+# - Projection is skipped automatically when a batch resolves to fewer than
+#   ortholora_min_active_groups valid groups after filtering.
+# - Auxiliary losses and non-LoRA parameters keep their normal gradients; only the
+#   LoRA denoising-loss contribution is projected.
+# Grouping options:
+# - "dataset_index": treat each dataset entry in [[datasets]] as its own task.
+# - "concept_id": use concept ids when concept-tagged batches are available.
+# - "media_type": split mixed batches into image vs video groups.
+
+# enable training-time OrthoLORA gradient projection (bool)
+enable_ortholora = false
+
+# grouping key for per-task gradient extraction:
+# {"dataset_index", "concept_id", "media_type"}
+ortholora_group_by = "dataset_index"
+
+# minimum number of active groups required in the current batch before projection runs (int >= 2)
+ortholora_min_active_groups = 2
+
+# ignore groups smaller than this many samples inside the current batch (int >= 1)
+ortholora_min_group_samples = 1
+
+# log active-group and conflict-pair counters to trackers when projection runs (bool)
+ortholora_log_metrics = true
+
+# =============================================================================
 # ⚠️ SLIDER TRAINING SETTINGS
 # =============================================================================
 
