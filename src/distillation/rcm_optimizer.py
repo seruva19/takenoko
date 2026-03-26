@@ -44,7 +44,12 @@ def build_rcm_optimizer(
         optimizer,
         optimizer_train_fn,
         optimizer_eval_fn,
-    ) = optimizer_manager.get_optimizer(args, student, trainable_params)
+    ) = optimizer_manager.get_optimizer(
+        args,
+        student,
+        trainable_params,
+        accelerator=accelerator,
+    )
 
     scheduler = SchedulerManager.get_lr_scheduler(
         args, optimizer, accelerator.num_processes

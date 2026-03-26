@@ -50,6 +50,7 @@ Keep in mind that work on some features is not yet complete due to time and hard
 | [T-LoRA](https://github.com/ControlGenAI/T-LoRA) | repo | - T-LoRA training | [ControlGenAI](https://github.com/ControlGenAI) | MIT | see also [paper](https://arxiv.org/abs/2507.05964) |
 | [sd-scripts (fork)](https://github.com/hinablue/sd-scripts) | repo | - Fourier loss<br>- HinaAdaptive optimizer | [hinablue](https://github.com/hinablue) | Apache 2.0 | |
 | [Muon](https://github.com/KellerJordan/Muon) | repo | - Muon optimizer | [KellerJordan](https://github.com/KellerJordan) | MIT | |
+| [dion](https://github.com/microsoft/dion) | repo | - DION2-inspired reduced orthonormal optimizer integration | [microsoft](https://github.com/microsoft) | MIT |  |
 | [Sana](https://github.com/NVlabs/Sana) | repo | - CAME 8-bit optimizer | [NVlabs](https://github.com/NVlabs) | Apache 2.0 | see also [paper](https://arxiv.org/abs/2410.10629) |
 | [SimpleTuner](https://github.com/bghira/SimpleTuner) | repo | - Routed TREAD<br>- SOAP optimizer<br>- Masked training (spatial-first loss, area interpolation, proper normalization, auto mask generation)<br>- Advanced EMA features<br>- CREPA/LayerSync improvements<br>- Scheduled rollout probability ramping | [bghira](https://github.com/bghira) | AGPL-3.0 | |
 | [diffusion-pipe (pr)](https://github.com/Ada123-a/diffusion-pipe-TREAD) | repo | - Frame-based TREAD | [Ada123-a](https://github.com/Ada123-a) | MIT |  |

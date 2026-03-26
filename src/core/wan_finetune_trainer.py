@@ -1715,7 +1715,10 @@ class WanFinetuneTrainer:
                 _optimizer_train_fn,
                 _optimizer_eval_fn,
             ) = self.optimizer_manager.get_optimizer(
-                args, transformer, params_to_optimize
+                args,
+                transformer,
+                params_to_optimize,
+                accelerator=accelerator,
             )
             logger.info(
                 "✅ Created optimizer: %s | %s",
@@ -1911,6 +1914,7 @@ class WanFinetuneTrainer:
         optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
             optimizer, train_dataloader, lr_scheduler
         )
+        self.optimizer_manager.register_optimizer_checkpoint_hook(accelerator, optimizer)
 
         # Apply fused backward pass AFTER accelerator.prepare() when optimizer is wrapped
         if self.fused_backward_pass:

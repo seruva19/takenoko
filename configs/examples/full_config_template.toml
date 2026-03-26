@@ -251,6 +251,7 @@ rope_use_float32 = false
 # - "RavenAdamW": CPU-offloaded AdamW with BF16/FP32 states
 # - "RavenAdamW8bit": CPU-offloaded 8-bit quantized AdamW
 # - "AdaFactor": Memory-efficient adaptive optimizer with relative_step scheduling
+# - "Dion2": Takenoko-native DION2-style optimizer for 2D matrix params + auxiliary AdamW for <2D params
 # - "Muon", "NorMuon", "Riemannion": Second-order optimizers for matrix parameters (Riemannion supports paired LoRA updates)
 # - "TemporalAdamW": AdamW with temporal gradient smoothing for video training
 # - "Prodigy": Adaptive learning rate optimizer
@@ -313,7 +314,34 @@ optimizer_type = "adamw8bit"
 # MuonClip-specific arguments:
 # - tau: Clipping threshold for QK-Clip (default: 100.0).
 #
+# DION2-specific arguments:
+# - Use optimizer_type = "Dion2" to activate the optimizer.
+# - dion2_rank_fraction: Reduced-core sampling fraction in (0, 1]. Default: 0.25.
+# - dion2_momentum: Matrix momentum coefficient. Default: 0.95.
+# - dion2_ns_steps: Newton-Schulz iterations for the reduced core. Default: 5.
+# - dion2_lr_scale: Scale factor applied to original group lr for >=2D params. Default: 1.0.
+# - dion2_aux_lr_scale: Scale factor applied to original group lr for <2D params. Default: 1.0.
+# - dion2_aux_optimizer: Auxiliary optimizer for non-DION2 groups. "lion" or "adamw". Default: "lion".
+# - dion2_weight_decay: Shared weight decay for both matrix and auxiliary groups. Default: 0.001.
+# - dion2_aux_betas: Auxiliary AdamW betas for <2D params. Default: (0.9, 0.999).
+# - dion2_aux_eps: Auxiliary AdamW epsilon. Default: 1e-8.
+# - dion2_selection: "norm" or "stride". Default: "norm".
+# - dion2_subspace_cap: Max sampled rows/cols for the reduced core. Default: 128.
+# - dion2_exclude_embeddings: Route nn.Embedding params to the auxiliary optimizer. Default: true.
+# - dion2_exclude_lm_head: Route lm_head params to the auxiliary optimizer. Default: true.
+# - dion2_exclude_name_patterns: Optional fnmatch patterns for params forced into the auxiliary optimizer.
+# - dion2_lm_head_lr_scale: Optional override for lm_head LR scaling. Default: auto = 1/sqrt(input_dim).
+# - dion2_embedding_weight_decay: Optional weight decay override for embedding params. Default: inherited group weight_decay.
+# - dion2_lm_head_weight_decay: Optional weight decay override for lm_head params. Default: inherited group weight_decay.
+# - dion2_error_feedback: Enable residual error-feedback on the reduced update. Default: true.
+# - dion2_error_decay: Residual carry-over multiplier for error feedback. Default: 1.0.
+# - dion2_distribute_work: If true and a DDP process_group is available, assign matrix updates to per-rank owners and broadcast the resulting parameter/state tensors. Default: false.
+# - dion2_log_metrics: Enable extra metric tracking. Default: False.
+#
+# optimizer_type = "Dion2"
 # optimizer_args = ["log_muon_metrics=True", "ns_steps=5", "weight_decay_type='cautious'"]
+# optimizer_args = ["dion2_rank_fraction=0.25", "dion2_selection='norm'", "dion2_subspace_cap=128", "dion2_aux_optimizer='lion'"]
+# optimizer_args = ["dion2_exclude_embeddings=True", "dion2_exclude_lm_head=True", "dion2_lm_head_lr_scale=0.05", "dion2_error_feedback=True", "dion2_distribute_work=True"]
 # optimizer_args = ["mano_momentum=0.95", "mano_nesterov=False", "mano_scale_factor=0.2", "mano_betas=(0.9,0.95)"]
 # optimizer_args = ["mano_exclude_embeddings=True", "mano_exclude_lm_head=True", "mano_exclude_name_patterns=['*.head.*']"]
 #

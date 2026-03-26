@@ -1178,7 +1178,12 @@ class WanNetworkTrainer:
             optimizer,
             optimizer_train_fn,
             optimizer_eval_fn,
-        ) = self.optimizer_manager.get_optimizer(args, transformer, trainable_params)
+        ) = self.optimizer_manager.get_optimizer(
+            args,
+            transformer,
+            trainable_params,
+            accelerator=accelerator,
+        )
 
         # ========== DataLoader Setup ==========
         n_workers = min(args.max_data_loader_n_workers, os.cpu_count() or 1)
@@ -1295,6 +1300,7 @@ class WanNetworkTrainer:
         optimizer = prepared_map["optimizer"]
         train_dataloader = prepared_map["train_dataloader"]
         lr_scheduler = prepared_map["lr_scheduler"]
+        self.optimizer_manager.register_optimizer_checkpoint_hook(accelerator, optimizer)
         if controlnet is not None:
             # update prepared instance back to model_manager
             self.model_manager.controlnet = controlnet

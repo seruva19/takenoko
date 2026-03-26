@@ -12,6 +12,7 @@ import logging
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import torch
+import torch.distributed as dist
 
 from common.logger import get_logger
 
@@ -23,6 +24,59 @@ class OptimizerManager:
 
     def __init__(self):
         pass
+
+    @staticmethod
+    def build_distributed_context(accelerator: Optional[Any] = None) -> Dict[str, Any]:
+        """Extract distributed context for optimizers that need it at construction time."""
+
+        process_group = None
+        accelerator_pg = None
+        distributed_type = None
+
+        if accelerator is not None:
+            state = getattr(accelerator, "state", None)
+            if state is not None:
+                accelerator_pg = getattr(state, "process_group", None)
+                distributed_type = getattr(state, "distributed_type", None)
+
+        if dist.is_available() and dist.is_initialized():
+            process_group = accelerator_pg if accelerator_pg is not None else dist.group.WORLD
+
+        world_size = 1
+        rank = 0
+        backend = None
+        if process_group is not None:
+            try:
+                world_size = dist.get_world_size(process_group)
+                rank = dist.get_rank(process_group)
+                backend = dist.get_backend(process_group)
+            except Exception:
+                world_size = 1
+                rank = 0
+                backend = None
+
+        return {
+            "process_group": process_group,
+            "world_size": world_size,
+            "rank": rank,
+            "backend": backend,
+            "distributed_type": str(distributed_type) if distributed_type is not None else None,
+        }
+
+    @staticmethod
+    def register_optimizer_checkpoint_hook(
+        accelerator: Any,
+        optimizer: torch.optim.Optimizer,
+    ) -> None:
+        """Synchronize optimizer state before accelerator.save_state()."""
+
+        def save_hook(_models, _weights, _output_dir: str) -> None:
+            actual_optimizer = getattr(optimizer, "optimizer", optimizer)
+            sync_fn = getattr(actual_optimizer, "synchronize_for_checkpoint", None)
+            if callable(sync_fn):
+                sync_fn()
+
+        accelerator.register_save_state_pre_hook(save_hook)
 
     @staticmethod
     def generate_step_logs(
@@ -65,6 +119,7 @@ class OptimizerManager:
         args: argparse.Namespace,
         transformer: torch.nn.Module,
         trainable_params: List[torch.nn.Parameter],
+        accelerator: Optional[Any] = None,
     ) -> Tuple[str, str, torch.optim.Optimizer, Callable, Callable]:
         """Create and configure the optimizer based on arguments.
 
@@ -160,6 +215,8 @@ class OptimizerManager:
             is_q_galore_optimizer_type,
             prepare_galore_trainable_params,
         )
+
+        distributed_context = OptimizerManager.build_distributed_context(accelerator)
 
         trainable_params, optimizer_kwargs = prepare_galore_trainable_params(
             args,
@@ -439,6 +496,20 @@ class OptimizerManager:
                 lr,
                 optimizer_kwargs,
                 logger,
+            )
+
+        elif optimizer_type in {"dion2", "dion_2"}:
+            from optimizers.factory.dion2_factory import create_dion2_optimizer
+
+            optimizer_class, optimizer = create_dion2_optimizer(
+                transformer,
+                trainable_params,
+                lr,
+                optimizer_kwargs,
+                distributed_context=distributed_context,
+                extract_params=extract_params,
+                log_param_structure=log_param_structure,
+                logger=logger,
             )
 
         elif optimizer_type == "Muon".lower():
