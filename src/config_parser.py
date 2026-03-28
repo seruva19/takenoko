@@ -43,6 +43,9 @@ from configs.flexam_config import apply_flexam_config
 from configs.video_consistency_distance import (
     apply_video_consistency_distance_config,
 )
+from configs.frame_aware_history_corruption_config import (
+    apply_frame_aware_history_corruption_config,
+)
 from configs.self_resampling_config import apply_self_resampling_config
 from configs.reflexflow_config import apply_reflexflow_config
 from configs.videorepa_config import apply_videorepa_config
@@ -800,6 +803,7 @@ def create_args_from_config(
 
     # Self-resampling (train-only, LoRA gated)
     apply_self_resampling_config(args, config, logger)
+    apply_frame_aware_history_corruption_config(args, config, logger)
     apply_reflexflow_config(args, config, logger)
 
     # Error recycling (train-only, LoRA gated)

@@ -98,7 +98,6 @@ class DriftingLossHelper:
         self.feature_encoder_strict = bool(
             getattr(args, "drifting_feature_encoder_strict", False)
         )
-
         self._pos_queue_global: Deque[_QueueEntry] = deque(maxlen=self.queue_size_global)
         self._neg_queue_global: Deque[_QueueEntry] = deque(
             maxlen=self.queue_neg_size_global
@@ -728,7 +727,11 @@ class DriftingLossHelper:
         else:
             loss = torch.stack(losses, dim=0).mean()
 
-        drift_norm = torch.stack(drift_norms, dim=0).mean()
+        metric_ref = loss.detach()
+        if drift_norms:
+            drift_norm = torch.stack(drift_norms, dim=0).mean()
+        else:
+            drift_norm = metric_ref.new_tensor(0.0)
         mean_feature_dim = (
             float(sum(feature_dims)) / max(1, len(feature_dims))
             if feature_dims

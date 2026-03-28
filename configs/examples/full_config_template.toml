@@ -3829,6 +3829,71 @@ self_resampling_attention_routing_always_keep_last_frame = false
 self_resampling_log_interval = 50
 
 # =============================================================================
+# ⚠️ FRAME-AWARE HISTORY CORRUPTION SETTINGS
+# =============================================================================
+# Enable frame-aware corruption over historical context frames. This can run:
+# - after detached self-resampling builds the degraded history tensor, or
+# - by itself as a lighter corruption-only mode when enable_self_resampling=false.
+# Default: false.
+enable_frame_aware_history_corruption = false
+
+# Keep frame 0 as a clean visual anchor when frame-aware corruption is active.
+# Recommended: true.
+frame_aware_history_corruption_keep_first_frame = true
+
+# Per-frame corruption mode probabilities. These must sum exactly to 1.0:
+# exposure + noise + blur + clean = 1.0.
+frame_aware_history_corruption_exposure_prob = 0.0
+
+# Additive Gaussian-noise magnitude range (>= 0) used when the noise mode is sampled.
+frame_aware_history_corruption_noise_prob = 0.0
+
+# Spatial downsample/upsample factor range (>= 1) used for blur degradation.
+frame_aware_history_corruption_blur_prob = 0.0
+
+# Probability of keeping the history frames as-is (no corruption).
+frame_aware_history_corruption_clean_prob = 1.0
+
+# Exposure scaling range (> 0) used when the frame-aware mode samples exposure.
+# Values below 1.0 darken/attenuate history; values above 1.0 brighten/amplify it.
+frame_aware_history_corruption_exposure_min = 0.85
+
+# Exposure scaling range (> 0) used when the frame-aware mode samples exposure.
+# Values below 1.0 darken/attenuate history; values above 1.0 brighten/amplify it.
+frame_aware_history_corruption_exposure_max = 1.15
+
+# Additive Gaussian-noise magnitude range (>= 0) used when the noise mode is sampled.
+frame_aware_history_corruption_noise_min = 0.01
+
+# Additive Gaussian-noise magnitude range (>= 0) used when the noise mode is sampled.
+frame_aware_history_corruption_noise_max = 0.08
+
+# Spatial downsample/upsample factor range (>= 1) used for blur degradation.
+# Larger values produce stronger blur / restoration-shift simulation.
+frame_aware_history_corruption_downsample_min = 1.25
+
+# Spatial downsample/upsample factor range (>= 1) used for blur degradation.
+# Larger values produce stronger blur / restoration-shift simulation.
+frame_aware_history_corruption_downsample_max = 2.5
+
+# First temporal index eligible for frame-aware corruption (>= 0).
+# Example: 0 means all history-capable frames can be corrupted.
+frame_aware_history_corruption_history_start_frame = 0
+
+# Number of tail frames excluded from frame-aware corruption (>= 0).
+# Default 1 keeps the newest history frame untouched.
+frame_aware_history_corruption_history_exclude_tail_frames = 1
+
+# Blend ratio between original noisy history and corrupted history (0.0-1.0).
+# 1.0 fully replaces selected history frames; lower values mix corruption with the
+# incoming history tensor.
+frame_aware_history_corruption_blend = 1.0
+
+# Metric logging interval in optimizer steps (> 0).
+# Controls cadence for `frame_aware_history_corruption/*` TensorBoard metrics.
+frame_aware_history_corruption_log_interval = 50
+
+# =============================================================================
 # ⚠️ REFLEXFLOW SETTINGS
 # =============================================================================
 

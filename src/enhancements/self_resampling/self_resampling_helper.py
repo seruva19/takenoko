@@ -429,7 +429,10 @@ class SelfResamplingHelper:
                         self._warned_rollout_failure = True
 
         if not model_rollout_active:
-            resampled, autoregressive_active = self._apply_autoregressive_error_accumulation(
+            (
+                resampled,
+                autoregressive_active,
+            ) = self._apply_autoregressive_error_accumulation(
                 resampled=resampled,
                 latents=latents,
                 history_start=history_start,

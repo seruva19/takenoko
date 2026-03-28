@@ -103,7 +103,6 @@ def apply_drifting_config(args: Any, config: Dict[str, Any], logger: Any) -> Non
     args.drifting_feature_encoder_strict = bool(
         config.get("drifting_feature_encoder_strict", False)
     )
-
     if args.drifting_loss_weight < 0.0:
         raise ValueError("drifting_loss_weight must be >= 0")
     if args.drifting_temperature <= 0.0:
@@ -145,7 +144,6 @@ def apply_drifting_config(args: Any, config: Dict[str, Any], logger: Any) -> Non
         raise ValueError(
             "drifting_feature_encoder_channel_mode must be one of: first3, mean_to_rgb"
         )
-
     if args.drifting_feature_encoder_enabled:
         if not args.drifting_feature_encoder_path:
             raise ValueError(

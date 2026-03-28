@@ -44,6 +44,9 @@ from enhancements.semanticgen.training_integration import SemanticGenTrainingSta
 
 from enhancements.error_recycling.error_recycling_helper import ErrorRecyclingHelper
 from enhancements.drifting.drifting_helper import DriftingLossHelper
+from enhancements.frame_aware_history_corruption.frame_aware_history_corruption_helper import (
+    FrameAwareHistoryCorruptionHelper,
+)
 from enhancements.reflexflow.reflexflow_helper import ReflexFlowHelper
 from enhancements.self_resampling.self_resampling_helper import SelfResamplingHelper
 from enhancements.stable_velocity.stablevm_target_helper import StableVMTargetHelper
@@ -88,6 +91,9 @@ from transition.pipeline import (
     update_teacher_if_needed,
 )
 from core.self_resampling_runtime import maybe_apply_self_resampling
+from core.frame_aware_history_corruption_runtime import (
+    maybe_apply_frame_aware_history_corruption,
+)
 from enhancements.reflexflow.runtime import (
     maybe_apply_reflexflow,
     build_reflexflow_context,
@@ -334,8 +340,12 @@ class TrainingCore:
         self.error_recycling_helper: Optional[ErrorRecyclingHelper] = None
         # Self-resampling helper (optional, training-only)
         self.self_resampling_helper: Optional[SelfResamplingHelper] = None
+        self.frame_aware_history_corruption_helper: Optional[
+            FrameAwareHistoryCorruptionHelper
+        ] = None
         self._warned_self_resampling_eqm = False
         self._warned_self_resampling_fast_rollout_fallback = False
+        self._warned_frame_aware_history_corruption_eqm = False
         self.drifting_helper: Optional[DriftingLossHelper] = None
         self.reflexflow_helper: Optional[ReflexFlowHelper] = None
         self._warned_reflexflow_eqm = False
@@ -1474,7 +1484,7 @@ class TrainingCore:
                     logger.warning("Error recycling setup failed: %s", exc)
                     self.error_recycling_helper = None
 
-        # Initialize self-resampling helper (train-only, LoRA-gated)
+        # Initialize self-resampling helper (train-only, LoRA-gated).
         self.self_resampling_helper = None
         if bool(getattr(args, "enable_self_resampling", False)):
             network_module = str(getattr(args, "network_module", "")).lower()
@@ -1494,6 +1504,32 @@ class TrainingCore:
                 except Exception as exc:
                     logger.warning("Self-resampling setup failed: %s", exc)
                     self.self_resampling_helper = None
+
+        # Initialize frame-aware history corruption helper (train-only, LoRA-gated).
+        self.frame_aware_history_corruption_helper = None
+        if bool(getattr(args, "enable_frame_aware_history_corruption", False)):
+            network_module = str(getattr(args, "network_module", "")).lower()
+            train_arch = str(getattr(args, "train_architecture", "lora")).lower()
+            if "lora" not in network_module and train_arch != "lora":
+                logger.warning(
+                    "Frame-aware history corruption requires LoRA training; disabling for network_module=%s.",
+                    network_module or "<unset>",
+                )
+            else:
+                try:
+                    self.frame_aware_history_corruption_helper = (
+                        FrameAwareHistoryCorruptionHelper(args)
+                    )
+                    self.frame_aware_history_corruption_helper.setup_hooks()
+                    logger.info(
+                        "Frame-aware history corruption enabled for this run."
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Frame-aware history corruption setup failed: %s",
+                        exc,
+                    )
+                    self.frame_aware_history_corruption_helper = None
 
         # Initialize ReflexFlow scheduled-sampling helper (train-only, LoRA-gated)
         self.reflexflow_helper = None
@@ -1961,6 +1997,7 @@ class TrainingCore:
 
                     error_recycling_state = None
                     self_resampling_state = None
+                    frame_aware_history_corruption_state = None
                     reflexflow_state = None
                     latents_for_dit = latents
                     reflexflow_clean_noisy_input = None
@@ -2055,6 +2092,21 @@ class TrainingCore:
                         semanticgen_state=self.semanticgen_state,
                         semantic_conditioning_helper=self.semantic_conditioning_helper,
                         predict_with_full_dit=_predict_self_resampling_with_full_dit,
+                    )
+                    (
+                        noisy_model_input,
+                        frame_aware_history_corruption_state,
+                        self._warned_frame_aware_history_corruption_eqm,
+                    ) = maybe_apply_frame_aware_history_corruption(
+                        frame_aware_history_corruption_helper=(
+                            self.frame_aware_history_corruption_helper
+                        ),
+                        noisy_model_input=noisy_model_input,
+                        global_step=global_step,
+                        eqm_enabled=eqm_enabled,
+                        warned_frame_aware_history_corruption_eqm=(
+                            self._warned_frame_aware_history_corruption_eqm
+                        ),
                     )
                     (
                         noisy_model_input,
@@ -2839,6 +2891,28 @@ class TrainingCore:
                                         self.self_resampling_helper.state_to_metrics(
                                             self_resampling_state
                                         )
+                                    )
+                                    if metrics:
+                                        accelerator.log(metrics, step=global_step)
+
+                            if (
+                                accelerator.is_main_process
+                                and accelerator.trackers
+                                and accelerator.sync_gradients
+                                and self.frame_aware_history_corruption_helper is not None
+                                and frame_aware_history_corruption_state is not None
+                            ):
+                                log_interval = int(
+                                    getattr(
+                                        args,
+                                        "frame_aware_history_corruption_log_interval",
+                                        50,
+                                    )
+                                    or 50
+                                )
+                                if global_step % max(log_interval, 1) == 0:
+                                    metrics = self.frame_aware_history_corruption_helper.state_to_metrics(
+                                        frame_aware_history_corruption_state
                                     )
                                     if metrics:
                                         accelerator.log(metrics, step=global_step)
