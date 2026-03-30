@@ -809,6 +809,38 @@ network_alpha = 32
 # - ic_lora_masked_loss_only: optimize only masked regions (requires masked conditioning).
 # - ic_lora_enforce_panel_tags: require captions to include [IMAGE1]/[IMAGE2]... tags.
 
+# Optional reference positional-bias controls for IC-LoRA.
+# These only affect the prepended IC-LoRA reference frames.
+# Behavior:
+# - appearance/id/style tasks shift reference RoPE along the temporal axis
+# - motion/camera/effect tasks shift reference RoPE along the width axis
+enable_ic_lora_reference_positional_bias = false
+
+# Scope for IC-LoRA reference positional bias support.
+# Valid values:
+# - "ic_lora": apply only to the prepended IC-LoRA reference segment
+# Current implementation supports only "ic_lora".
+ic_lora_reference_positional_bias_scope = "ic_lora"
+
+# Shared reference-conditioning task type used by IC-LoRA positional bias and
+# SemanticGen task-type conditioning tokens.
+# Valid values:
+# - "auto": try batch metadata first; otherwise fall back to appearance behavior
+# - "appearance", "id", "style"
+# - "temporal", "motion", "camera", "effect"
+# Recommendation:
+# - use "id" or "style" for reference-appearance transfer
+# - use "motion", "camera", or "effect" for temporal transfer experiments
+reference_conditioning_task_type = "auto"
+
+# Scale applied to the temporal position bias for appearance tasks.
+# Effective offset = round(target_frame_tokens * ic_lora_reference_temporal_position_bias_scale)
+ic_lora_reference_temporal_position_bias_scale = 1.0
+
+# Scale applied to the width position bias for temporal tasks.
+# Effective offset = round(target_width_tokens * ic_lora_reference_width_position_bias_scale)
+ic_lora_reference_width_position_bias_scale = 1.0
+
 # RiemannLoRA (requires network_module = "networks.riemann_lora_wan"):
 # - loi_enabled: enable gradient-informed initialization (default false)
 # - loi_alpha: scale for LOI update (default 0.1)
@@ -4288,6 +4320,16 @@ semantic_align_block_index = 8
 
 # Optional LR override for SemanticGen helper params (defaults to learning_rate).
 # semanticgen_lr = 0.0001
+
+# Optional task-type conditioning tokens for SemanticGen / semantic alignment.
+# Default: false
+# Dependency: has effect only when enable_semanticgen_lora=true or semantic_align_enabled=true.
+# Uses the shared reference_conditioning_task_type configured in the IC-LoRA section above.
+enable_task_type_conditioning_tokens = false
+
+# Global multiplier for the learnable task-type token.
+# Set to 0.0 to disable task-token influence without turning off the parameter path.
+task_type_conditioning_token_scale = 1.0
 
 # =============================================================================
 # ⚠️ SARA (STRUCTURAL AND ADVERSARIAL REPRESENTATION ALIGNMENT) SETTINGS

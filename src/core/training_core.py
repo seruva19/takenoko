@@ -77,6 +77,9 @@ from enhancements.ic_lora.training_integration import (
     prepare_ic_lora_model_input,
     should_skip_ic_lora_batch,
 )
+from enhancements.reference_conditioning.task_routing import (
+    build_ic_lora_reference_positional_bias_metadata,
+)
 from enhancements.flexam_training.training_integration import (
     is_flexam_training_enabled,
     prepare_flexam_conditioning,
@@ -989,6 +992,8 @@ class TrainingCore:
         ic_lora_ref_frames = 0
         ic_lora_conditioned_first_frame_mask: Optional[torch.Tensor] = None
         ic_lora_masked_loss_mask: Optional[torch.Tensor] = None
+        ic_lora_rope_reference_offsets: Optional[torch.Tensor] = None
+        ic_lora_reference_frame_token_counts: Optional[torch.Tensor] = None
         if is_ic_lora_enabled(args):
             (
                 model_input,
@@ -1001,6 +1006,16 @@ class TrainingCore:
                 latents=latents,
                 noisy_model_input=model_input,
                 network_dtype=network_dtype,
+            )
+            (
+                ic_lora_rope_reference_offsets,
+                ic_lora_reference_frame_token_counts,
+            ) = build_ic_lora_reference_positional_bias_metadata(
+                args=args,
+                batch=batch,
+                model_input=model_input,
+                reference_frame_count=ic_lora_ref_frames,
+                patch_size=self.config.patch_size,
             )
 
         seq_source = model_input if model_input.dim() == 5 else latents
@@ -1107,6 +1122,8 @@ class TrainingCore:
                 reg_cls_token=reg_cls_token,
                 segment_idx=bfm_segment_idx,
                 bfm_semfeat_tokens=bfm_semfeat_tokens,
+                rope_reference_offsets=ic_lora_rope_reference_offsets,
+                reference_frame_token_counts=ic_lora_reference_frame_token_counts,
             )
         # Unpack optional intermediate
         intermediate_z: Optional[torch.Tensor] = None

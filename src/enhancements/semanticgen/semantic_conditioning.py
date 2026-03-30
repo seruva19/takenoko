@@ -9,6 +9,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from common.logger import get_logger
+from enhancements.reference_conditioning.task_routing import (
+    TRANSFER_TASK_TYPES,
+    resolve_transfer_task_type,
+    transfer_task_index,
+)
 from enhancements.semanticgen.semantic_encoder import SemanticEncoder, sample_frames
 from dataset.image_video_dataset import TARGET_FPS_WAN
 from utils.model_utils import str_to_dtype
@@ -64,6 +69,12 @@ class SemanticConditioningHelper(nn.Module):
         self.semantic_condition_min_scale = float(
             getattr(args, "semantic_condition_min_scale", 0.0)
         )
+        self.enable_task_type_conditioning_tokens = bool(
+            getattr(args, "enable_task_type_conditioning_tokens", False)
+        )
+        self.task_type_conditioning_token_scale = float(
+            getattr(args, "task_type_conditioning_token_scale", 1.0)
+        )
 
         self._mlp: Optional[nn.Linear] = nn.Linear(
             self.embed_dim, self.compress_dim * 2
@@ -71,6 +82,11 @@ class SemanticConditioningHelper(nn.Module):
         self._proj: Optional[nn.Linear] = nn.Linear(
             self.compress_dim, self.text_dim
         ).to(self.device)
+        self._task_embedding: Optional[nn.Embedding] = None
+        if self.enable_task_type_conditioning_tokens:
+            self._task_embedding = nn.Embedding(
+                len(TRANSFER_TASK_TYPES), self.embed_dim
+            ).to(self.device)
 
     def get_trainable_params(self) -> List[nn.Parameter]:
         params: List[nn.Parameter] = []
@@ -78,6 +94,8 @@ class SemanticConditioningHelper(nn.Module):
             params.extend(list(self._mlp.parameters()))
         if self._proj is not None:
             params.extend(list(self._proj.parameters()))
+        if self._task_embedding is not None:
+            params.extend(list(self._task_embedding.parameters()))
         return params
 
     def build_context(
@@ -92,6 +110,7 @@ class SemanticConditioningHelper(nn.Module):
             return SemanticConditioningOutput(context, None, None)
         if semantic_tokens.dim() == 2:
             semantic_tokens = semantic_tokens.unsqueeze(1)
+        semantic_tokens = self._augment_with_task_token(batch, semantic_tokens)
 
         scale = self._compute_scale(global_step)
         if scale <= 0:
@@ -117,7 +136,12 @@ class SemanticConditioningHelper(nn.Module):
         return SemanticConditioningOutput(updated_context, kl_loss, projected)
 
     def get_semantic_tokens(self, batch: dict) -> Optional[torch.Tensor]:
-        return self._resolve_semantic_tokens(batch)
+        semantic_tokens = self._resolve_semantic_tokens(batch)
+        if semantic_tokens is None:
+            return None
+        if semantic_tokens.dim() == 2:
+            semantic_tokens = semantic_tokens.unsqueeze(1)
+        return self._augment_with_task_token(batch, semantic_tokens)
 
     def _resolve_semantic_tokens(self, batch: dict) -> Optional[torch.Tensor]:
         if "semantic_embeddings" in batch and batch["semantic_embeddings"] is not None:
@@ -177,6 +201,42 @@ class SemanticConditioningHelper(nn.Module):
             # SPEC:semanticgen_lora:conditioning - adapt projection to text context width.
             self._proj = nn.Linear(tokens.shape[-1], self.text_dim).to(self.device)
         return self._proj(tokens)
+
+    def _augment_with_task_token(
+        self,
+        batch: dict,
+        semantic_tokens: torch.Tensor,
+    ) -> torch.Tensor:
+        if (
+            not self.enable_task_type_conditioning_tokens
+            or self.task_type_conditioning_token_scale <= 0
+        ):
+            return semantic_tokens
+
+        token_dim = int(semantic_tokens.shape[-1])
+        if (
+            self._task_embedding is None
+            or self._task_embedding.embedding_dim != token_dim
+        ):
+            self._task_embedding = nn.Embedding(
+                len(TRANSFER_TASK_TYPES), token_dim
+            ).to(self.device)
+
+        task_type = resolve_transfer_task_type(self.args, batch=batch)
+        task_index = transfer_task_index(task_type)
+        task_ids = torch.full(
+            (semantic_tokens.shape[0],),
+            task_index,
+            device=self.device,
+            dtype=torch.long,
+        )
+        task_token = self._task_embedding(task_ids).unsqueeze(1)
+        task_token = task_token * self.task_type_conditioning_token_scale
+        task_token = task_token.to(
+            device=semantic_tokens.device,
+            dtype=semantic_tokens.dtype,
+        )
+        return torch.cat([task_token, semantic_tokens], dim=1)
 
     def _concat_context(
         self, context: List[torch.Tensor], tokens: torch.Tensor

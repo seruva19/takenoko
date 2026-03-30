@@ -77,6 +77,7 @@ from configs.qlora_config import apply_qlora_config
 from configs.rslora_config import apply_rslora_config
 from configs.video2lora_config import apply_video2lora_config
 from configs.dual_head_alignment_config import apply_dual_head_alignment_config
+from configs.reference_conditioning_config import apply_reference_conditioning_config
 
 
 def create_args_from_config(
@@ -1688,6 +1689,7 @@ def create_args_from_config(
 
     # SemanticGen LoRA settings
     parse_semanticgen_config(args, config, logger)
+    apply_reference_conditioning_config(args, config, logger)
 
     # SARA (Structural and Adversarial Representation Alignment) settings
     args.sara_enabled = config.get("sara_enabled", False)

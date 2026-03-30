@@ -106,7 +106,15 @@ except Exception:  # pragma: no cover - fallback for older torch
 
 
 @compiler_disable
-def rope_apply(x, grid_sizes, freqs, fractal=False, extra_tokens: int = 0):
+def rope_apply(
+    x,
+    grid_sizes,
+    freqs,
+    fractal=False,
+    extra_tokens: int = 0,
+    rope_offsets: Optional[torch.Tensor] = None,
+    reference_frame_token_counts: Optional[torch.Tensor] = None,
+):
     device_type = x.device.type
     with torch.amp.autocast(device_type=device_type, enabled=False):  # type: ignore
         n, c = x.size(2), x.size(3) // 2
@@ -130,13 +138,21 @@ def rope_apply(x, grid_sizes, freqs, fractal=False, extra_tokens: int = 0):
             x_i = torch.view_as_complex(
                 x_i_tokens.to(torch.float64).reshape(seq_len, n, -1, 2)
             )
-            freqs_i = torch.cat(
-                [
-                    freqs[0][:f].view(f, 1, 1, -1).expand(f, h, w, -1),
-                    freqs[1][:h].view(1, h, 1, -1).expand(f, h, w, -1),
-                    freqs[2][:w].view(1, 1, w, -1).expand(f, h, w, -1),
-                ],
-                dim=-1,
+            freq_device = freqs[0].device
+            ref_frames = 0
+            if reference_frame_token_counts is not None:
+                ref_frames = min(int(reference_frame_token_counts[i].item()), int(f))
+            offset = None
+            if rope_offsets is not None:
+                offset = rope_offsets[i].to(device=freq_device, dtype=torch.long)
+            freqs_i = _build_rotary_freqs(
+                f=f,
+                h=h,
+                w=w,
+                freqs=freqs,
+                device=freq_device,
+                reference_frame_tokens=ref_frames,
+                rope_offset=offset,
             )
 
             if fractal:
@@ -171,6 +187,47 @@ def calculate_freqs_i(fhw, c, freqs):
         dim=-1,
     ).reshape(f * h * w, 1, -1)
     return freqs_i
+
+
+def _build_rotary_freqs(
+    *,
+    f: int,
+    h: int,
+    w: int,
+    freqs: tuple[torch.Tensor, torch.Tensor, torch.Tensor],
+    device: torch.device,
+    reference_frame_tokens: int = 0,
+    rope_offset: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    base_t = torch.arange(f, device=device, dtype=torch.long).view(f, 1, 1)
+    base_h = torch.arange(h, device=device, dtype=torch.long).view(1, h, 1)
+    base_w = torch.arange(w, device=device, dtype=torch.long).view(1, 1, w)
+
+    t_idx = base_t.expand(f, h, w)
+    h_idx = base_h.expand(f, h, w)
+    w_idx = base_w.expand(f, h, w)
+    if rope_offset is not None and reference_frame_tokens > 0:
+        ref_mask = t_idx < int(reference_frame_tokens)
+        if ref_mask.any():
+            t_idx = t_idx + ref_mask.to(torch.long) * int(rope_offset[0].item())
+            h_idx = h_idx + ref_mask.to(torch.long) * int(rope_offset[1].item())
+            w_idx = w_idx + ref_mask.to(torch.long) * int(rope_offset[2].item())
+
+    if int(t_idx.max().item()) >= freqs[0].shape[0]:
+        raise ValueError("RoPE temporal offset exceeds precomputed frequency range.")
+    if int(h_idx.max().item()) >= freqs[1].shape[0]:
+        raise ValueError("RoPE height offset exceeds precomputed frequency range.")
+    if int(w_idx.max().item()) >= freqs[2].shape[0]:
+        raise ValueError("RoPE width offset exceeds precomputed frequency range.")
+
+    return torch.cat(
+        [
+            freqs[0][t_idx],
+            freqs[1][h_idx],
+            freqs[2][w_idx],
+        ],
+        dim=-1,
+    )
 
 
 # inplace version of rope_apply
@@ -324,6 +381,8 @@ class WanSelfAttention(nn.Module):
         enable_rollout_self_attn_kv_cache: bool = False,
         rollout_self_attn_kv_cache: Optional[dict] = None,
         rollout_history_frame_count: int = 0,
+        rope_offsets: Optional[torch.Tensor] = None,
+        reference_frame_token_counts: Optional[torch.Tensor] = None,
     ):
         r"""
         Args:
@@ -356,14 +415,26 @@ class WanSelfAttention(nn.Module):
             # This block is only executed if sparse attention is configured
             q_rope = (
                 rope_apply(
-                    q, grid_sizes, freqs, fractal=True, extra_tokens=extra_tokens
+                    q,
+                    grid_sizes,
+                    freqs,
+                    fractal=True,
+                    extra_tokens=extra_tokens,
+                    rope_offsets=rope_offsets,
+                    reference_frame_token_counts=reference_frame_token_counts,
                 )
                 .to(dtype=torch.bfloat16)
                 .transpose(1, 2)
             )
             k_rope = (
                 rope_apply(
-                    k, grid_sizes, freqs, fractal=True, extra_tokens=extra_tokens
+                    k,
+                    grid_sizes,
+                    freqs,
+                    fractal=True,
+                    extra_tokens=extra_tokens,
+                    rope_offsets=rope_offsets,
+                    reference_frame_token_counts=reference_frame_token_counts,
                 )
                 .to(dtype=torch.bfloat16)
                 .transpose(1, 2)
@@ -407,8 +478,13 @@ class WanSelfAttention(nn.Module):
             # Only apply RoPE when not routing with batched rotary
             if batched_rotary is None:
                 if (
+                    rope_offsets is None
+                    and reference_frame_token_counts is None
+                    and
+                    (
                     bool(getattr(self, "use_comfy_rope", False))
                     and getattr(self, "rope_func", "default") == "comfy"
+                    )
                 ):
                     try:
                         q_rope, k_rope = self.comfyrope(q, k, freqs)  # type: ignore[attr-defined]
@@ -424,10 +500,38 @@ class WanSelfAttention(nn.Module):
                 elif self.rope_on_the_fly:
                     # freqs is expected to be base frequencies tensor when rope_on_the_fly=True
                     q_rope = rope_apply(
-                        q, grid_sizes, freqs, extra_tokens=extra_tokens
+                        q,
+                        grid_sizes,
+                        freqs,
+                        extra_tokens=extra_tokens,
+                        rope_offsets=rope_offsets,
+                        reference_frame_token_counts=reference_frame_token_counts,
                     )
                     k_rope = rope_apply(
-                        k, grid_sizes, freqs, extra_tokens=extra_tokens
+                        k,
+                        grid_sizes,
+                        freqs,
+                        extra_tokens=extra_tokens,
+                        rope_offsets=rope_offsets,
+                        reference_frame_token_counts=reference_frame_token_counts,
+                    )
+                    qkv = [q_rope, k_rope, v]
+                elif rope_offsets is not None and reference_frame_token_counts is not None:
+                    q_rope = rope_apply(
+                        q,
+                        grid_sizes,
+                        freqs,
+                        extra_tokens=extra_tokens,
+                        rope_offsets=rope_offsets,
+                        reference_frame_token_counts=reference_frame_token_counts,
+                    )
+                    k_rope = rope_apply(
+                        k,
+                        grid_sizes,
+                        freqs,
+                        extra_tokens=extra_tokens,
+                        rope_offsets=rope_offsets,
+                        reference_frame_token_counts=reference_frame_token_counts,
                     )
                     qkv = [q_rope, k_rope, v]
                 else:
@@ -677,6 +781,8 @@ class WanAttentionBlock(nn.Module):
         enable_rollout_self_attn_kv_cache: bool = False,
         rollout_self_attn_kv_cache: Optional[dict] = None,
         rollout_history_frame_count: int = 0,
+        rope_offsets: torch.Tensor | None = None,
+        reference_frame_token_counts: torch.Tensor | None = None,
     ):
         r"""
         Args:
@@ -690,8 +796,11 @@ class WanAttentionBlock(nn.Module):
         x_orig_dtype = x.dtype
 
         # Optional lean attention math to avoid large fp32 intermediates (2.2 only)
-        if self.model_version != "2.1" and bool(
-            getattr(self, "_lean_attn_math", False)
+        if (
+            self.model_version != "2.1"
+            and rope_offsets is None
+            and reference_frame_token_counts is None
+            and bool(getattr(self, "_lean_attn_math", False))
         ):
             x = forward_wan22_lean_block(
                 x,
@@ -737,6 +846,8 @@ class WanAttentionBlock(nn.Module):
                 sparse_attention=sparse_attention,
                 batched_rotary=batched_rotary,  # type: ignore[arg-type]
                 extra_tokens=extra_tokens,
+                rope_offsets=rope_offsets,
+                reference_frame_token_counts=reference_frame_token_counts,
                 history_routing_config=history_routing_config,
                 block_index=block_index,
                 enable_rollout_self_attn_kv_cache=enable_rollout_self_attn_kv_cache,
@@ -786,6 +897,8 @@ class WanAttentionBlock(nn.Module):
         enable_rollout_self_attn_kv_cache: bool = False,
         rollout_self_attn_kv_cache: Optional[dict] = None,
         rollout_history_frame_count: int = 0,
+        rope_offsets: torch.Tensor | None = None,
+        reference_frame_token_counts: torch.Tensor | None = None,
     ):
         """
         Forward pass for WanAttentionBlock.
@@ -825,6 +938,8 @@ class WanAttentionBlock(nn.Module):
                 enable_rollout_self_attn_kv_cache,
                 rollout_self_attn_kv_cache,
                 rollout_history_frame_count,
+                rope_offsets,
+                reference_frame_token_counts,
                 use_reentrant=False,
             )
         return self._forward(
@@ -845,6 +960,8 @@ class WanAttentionBlock(nn.Module):
             enable_rollout_self_attn_kv_cache,
             rollout_self_attn_kv_cache,
             rollout_history_frame_count,
+            rope_offsets,
+            reference_frame_token_counts,
         )
 
 
@@ -1476,6 +1593,8 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
         enable_rollout_self_attn_kv_cache: bool = False,
         rollout_self_attn_kv_cache: Optional[dict] = None,
         rollout_history_frame_count: int = 0,
+        rope_reference_offsets: torch.Tensor | None = None,
+        reference_frame_token_counts: torch.Tensor | None = None,
     ):
         r"""
         Forward pass through the diffusion model
@@ -1752,7 +1871,13 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
 
         # arguments
         # Choose frequency argument for attention per gate
-        attn_freqs = self.freqs if self.rope_on_the_fly else freqs_list
+        use_offset_rope = (
+            rope_reference_offsets is not None
+            and reference_frame_token_counts is not None
+        )
+        attn_freqs = (
+            self.freqs if (self.rope_on_the_fly or use_offset_rope) else freqs_list
+        )
         # Propagate rope_func/comfy to attention modules when requested
         rope_mode = getattr(self, "rope_func", "default")
         if rope_mode == "comfy":
@@ -1782,6 +1907,8 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
             context_lens=context_lens,
             sparse_attention=sparse_attention,
             extra_tokens=reg_extra_tokens,
+            rope_offsets=rope_reference_offsets,
+            reference_frame_token_counts=reference_frame_token_counts,
             history_routing_config=self._self_resampling_history_routing_cfg,
             block_index=-1,
             enable_rollout_kv_cache=enable_rollout_kv_cache,
