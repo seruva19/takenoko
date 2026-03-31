@@ -77,6 +77,7 @@ from configs.qlora_config import apply_qlora_config
 from configs.rslora_config import apply_rslora_config
 from configs.video2lora_config import apply_video2lora_config
 from configs.dual_head_alignment_config import apply_dual_head_alignment_config
+from configs.manifold_consensus_config import apply_manifold_consensus_config
 from configs.reference_conditioning_config import apply_reference_conditioning_config
 
 
@@ -2100,9 +2101,10 @@ def create_args_from_config(
             f"🚀 TorchAO FP8 enabled - Weight dtype: {args.torchao_fp8_weight_dtype}"
         )
 
-    # Glance distillation mode + paper-inspired dual-head alignment configuration (WAN training)
+    # Glance distillation mode + dual-head alignment configuration (WAN training)
     apply_glance_config(args, config, logger)
     apply_dual_head_alignment_config(args, config, logger)
+    apply_manifold_consensus_config(args, config, logger)
 
     # RCM distillation pipeline configuration (root-level keys, prefixed with rcm_)
     rcm_extra_args = config.get("rcm_extra_args", {}) or {}

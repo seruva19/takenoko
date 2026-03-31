@@ -1,4 +1,4 @@
-"""Dual-head paper-inspired alignment config parsing and validation."""
+"""Dual-head alignment config parsing and validation."""
 
 from __future__ import annotations
 
@@ -124,7 +124,7 @@ def apply_dual_head_alignment_config(
 
     logger.info(
         (
-            "Dual-head alignment helper enabled (paper-inspired approximation) "
+            "Dual-head alignment helper enabled "
             "(global=%.3f, local=%.3f, window_frames=%d, window_stride=%d, "
             "teacher_mode=%s, teacher_interval=%d, start_step=%d, "
             "window_sampling=%s, max_windows=%d)"

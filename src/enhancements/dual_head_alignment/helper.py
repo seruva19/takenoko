@@ -90,7 +90,7 @@ class AffineVelocityHead(nn.Module):
 
 
 class DualHeadAlignmentHelper(nn.Module):
-    """Training-only helper for a paper-inspired global/local auxiliary objective."""
+    """Training-only helper for a global/local auxiliary objective."""
 
     def __init__(self, args: Any):
         super().__init__()

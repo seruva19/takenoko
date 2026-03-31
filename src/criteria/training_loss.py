@@ -132,6 +132,22 @@ class LossComponents:
         Mean mixed tokenwise timestep value (tau) in normalized [0, 1] scale.
     self_flow_tau_min_mean: Optional[torch.Tensor]
         Mean teacher timestep value (tau_min) in normalized [0, 1] scale.
+    manifold_consensus_loss: Optional[torch.Tensor]
+        Auxiliary multi-view consensus loss on middle-block hidden states.
+    manifold_consensus_cosine_similarity: Optional[torch.Tensor]
+        Mean cosine similarity between the trainable view and detached consensus.
+    manifold_consensus_prediction_mse: Optional[torch.Tensor]
+        Mean squared error between the trainable prediction and merged-state teacher prediction.
+    manifold_consensus_view_variance: Optional[torch.Tensor]
+        Mean variance across pooled hidden-state views before consensus.
+    manifold_consensus_active_ratio: Optional[torch.Tensor]
+        Ratio of batch items inside the configured timestep band.
+    manifold_consensus_timestep_mean: Optional[torch.Tensor]
+        Mean timestep value considered by the manifold-consensus helper.
+    manifold_consensus_view_count: Optional[torch.Tensor]
+        Number of views contributing to the detached consensus target.
+    manifold_consensus_metrics: Optional[Dict[str, float]]
+        Additional scalar metrics emitted by the manifold-consensus helper.
     det_temporal_kernel_loss: Optional[torch.Tensor]
         DeT-style temporal-kernel smoothing regularization term.
     det_dense_tracking_loss: Optional[torch.Tensor]
@@ -352,6 +368,14 @@ class LossComponents:
     self_flow_masked_token_ratio: Optional[torch.Tensor] = None
     self_flow_tau_mean: Optional[torch.Tensor] = None
     self_flow_tau_min_mean: Optional[torch.Tensor] = None
+    manifold_consensus_loss: Optional[torch.Tensor] = None
+    manifold_consensus_cosine_similarity: Optional[torch.Tensor] = None
+    manifold_consensus_prediction_mse: Optional[torch.Tensor] = None
+    manifold_consensus_view_variance: Optional[torch.Tensor] = None
+    manifold_consensus_active_ratio: Optional[torch.Tensor] = None
+    manifold_consensus_timestep_mean: Optional[torch.Tensor] = None
+    manifold_consensus_view_count: Optional[torch.Tensor] = None
+    manifold_consensus_metrics: Optional[Dict[str, float]] = None
     det_temporal_kernel_loss: Optional[torch.Tensor] = None
     det_dense_tracking_loss: Optional[torch.Tensor] = None
     det_external_tracking_loss: Optional[torch.Tensor] = None

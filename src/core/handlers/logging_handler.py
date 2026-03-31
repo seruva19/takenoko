@@ -207,6 +207,34 @@ def collect_and_log_training_metrics(
         logs["self_flow/tau_min_mean"] = float(
             loss_components.self_flow_tau_min_mean.item()
         )
+    if getattr(loss_components, "manifold_consensus_loss", None) is not None:
+        logs["loss/manifold_consensus"] = float(
+            loss_components.manifold_consensus_loss.item()
+        )
+    if getattr(loss_components, "manifold_consensus_cosine_similarity", None) is not None:
+        logs["manifold_consensus/feature_cosine_similarity"] = float(
+            loss_components.manifold_consensus_cosine_similarity.item()
+        )
+    if getattr(loss_components, "manifold_consensus_prediction_mse", None) is not None:
+        logs["manifold_consensus/prediction_mse"] = float(
+            loss_components.manifold_consensus_prediction_mse.item()
+        )
+    if getattr(loss_components, "manifold_consensus_view_variance", None) is not None:
+        logs["manifold_consensus/view_variance"] = float(
+            loss_components.manifold_consensus_view_variance.item()
+        )
+    if getattr(loss_components, "manifold_consensus_active_ratio", None) is not None:
+        logs["manifold_consensus/active_ratio"] = float(
+            loss_components.manifold_consensus_active_ratio.item()
+        )
+    if getattr(loss_components, "manifold_consensus_timestep_mean", None) is not None:
+        logs["manifold_consensus/timestep_mean"] = float(
+            loss_components.manifold_consensus_timestep_mean.item()
+        )
+    if getattr(loss_components, "manifold_consensus_view_count", None) is not None:
+        logs["manifold_consensus/view_count"] = float(
+            loss_components.manifold_consensus_view_count.item()
+        )
     attach_det_component_logs(logs, loss_components)
     if getattr(loss_components, "drifting_loss", None) is not None:
         logs["loss/drifting"] = float(loss_components.drifting_loss.item())
@@ -422,6 +450,20 @@ def collect_and_log_training_metrics(
     dual_head_metrics = getattr(loss_components, "dual_head_metrics", None)
     if isinstance(dual_head_metrics, dict):
         for key, value in dual_head_metrics.items():
+            if value is None:
+                continue
+            if isinstance(value, torch.Tensor):
+                if value.numel() == 0:
+                    continue
+                logs[key] = float(value.detach().float().mean().item())
+            else:
+                try:
+                    logs[key] = float(value)
+                except Exception:
+                    continue
+    manifold_metrics = getattr(loss_components, "manifold_consensus_metrics", None)
+    if isinstance(manifold_metrics, dict):
+        for key, value in manifold_metrics.items():
             if value is None:
                 continue
             if isinstance(value, torch.Tensor):

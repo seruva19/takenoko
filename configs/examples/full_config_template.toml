@@ -6536,6 +6536,61 @@ dual_head_alignment_max_windows = 0
 dual_head_alignment_random_seed = 42
 
 # =============================================================================
+# ⚠️ MANIFOLD CONSENSUS SETTINGS
+# =============================================================================
+# Multi-view latent consensus objective.
+# - captures pooled hidden states from a middle block range,
+# - runs extra no-grad stochastic views at the same timestep,
+# - averages per-layer states across views,
+# - runs a continuation pass with those merged states injected back into the block window,
+# - applies an auxiliary loss from the merged-state continuation output to the trainable view.
+enable_manifold_consensus = false
+
+# Auxiliary loss weight (>= 0).
+manifold_consensus_weight = 0.1
+
+# Total number of views contributing to the consensus target (>= 2).
+# This count includes the trainable view from the main forward pass.
+manifold_consensus_num_views = 3
+
+# Inclusive 0-based block range used for hidden-state capture.
+# Defaults target a middle block window used for hidden-state aggregation.
+manifold_consensus_layer_start = 20
+
+# Inclusive 0-based block range used for hidden-state capture.
+manifold_consensus_layer_end = 29
+
+# Minimum timestep for manifold consensus.
+manifold_consensus_min_timestep = 970
+
+# Maximum timestep for manifold consensus.
+manifold_consensus_max_timestep = 1000
+
+# Global training step to start applying manifold consensus (>= 0).
+manifold_consensus_start_step = 0
+
+# Apply cadence in optimizer steps (>= 1).
+# - 1: every eligible step
+# - N: every Nth eligible step after start_step
+manifold_consensus_interval_steps = 1
+
+# Additional Bernoulli gate in [0, 1].
+# Useful for reducing average compute cost without changing the step band.
+manifold_consensus_apply_prob = 1.0
+
+# Auxiliary loss type:
+# - "mse": weighted prediction-space distillation from the merged-state continuation pass
+# - "one_minus_cosine": cosine-distance distillation on flattened predictions
+manifold_consensus_loss_type = "mse"
+
+# If true, include the trainable main-view feature in the detached consensus
+# average. If false, use only the extra no-grad views as the target.
+manifold_consensus_include_student_in_target = false
+
+# If true, L2-normalize pooled features before the auxiliary loss.
+manifold_consensus_normalize_features = true
+
+# =============================================================================
 # ⚠️ CAT-LVDM CORRUPTION-AWARE TRAINING SETTINGS
 # =============================================================================
 # Enable CAT-LVDM structured corruption on conditioning embeddings (training-only).

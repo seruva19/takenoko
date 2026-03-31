@@ -46,6 +46,7 @@ from core.vae_training_core import VaeTrainingCore
 from reward.reward_training_core import RewardTrainingCore
 from enhancements.repa.repa_helper import RepaHelper
 from enhancements.self_flow.self_flow_helper import SelfFlowHelper
+from enhancements.manifold_consensus.helper import ManifoldConsensusHelper
 from enhancements.semanticgen.trainer_integration import (
     build_semantic_prepare_items,
     create_semantic_helpers,
@@ -1140,7 +1141,7 @@ class WanNetworkTrainer:
                 )
 
                 logger.info(
-                    "Dual-head alignment helper is enabled (paper-inspired approximation). Initializing module."
+                    "Dual-head alignment helper is enabled. Initializing module."
                 )
                 dual_head_alignment_helper = DualHeadAlignmentHelper(args)
                 dual_head_params = dual_head_alignment_helper.get_trainable_params()
@@ -1160,6 +1161,17 @@ class WanNetworkTrainer:
             except Exception as exc:
                 logger.warning(f"Dual-head alignment helper setup failed: {exc}")
                 dual_head_alignment_helper = None
+
+        manifold_consensus_helper = None
+        if getattr(args, "enable_manifold_consensus", False):
+            try:
+                logger.info(
+                    "Manifold consensus is enabled. Initializing helper module."
+                )
+                manifold_consensus_helper = ManifoldConsensusHelper(transformer, args)
+            except Exception as exc:
+                logger.warning(f"Manifold consensus helper setup failed: {exc}")
+                manifold_consensus_helper = None
 
         (
             semantic_conditioning_helper,
@@ -1967,6 +1979,12 @@ class WanNetworkTrainer:
                 except Exception as exc:
                     logger.warning(f"Dual-head alignment helper setup failed: {exc}")
                     dual_head_alignment_helper = None
+            if manifold_consensus_helper is not None:
+                try:
+                    manifold_consensus_helper.setup_hooks()
+                except Exception as exc:
+                    logger.warning(f"Manifold consensus setup failed: {exc}")
+                    manifold_consensus_helper = None
 
             from enhancements.haste.integration import (
                 add_haste_params,
@@ -2070,6 +2088,7 @@ class WanNetworkTrainer:
                 contrastive_attention_helper=contrastive_attention_helper,
                 dual_model_manager=dual_model_manager,
                 dual_head_alignment_helper=dual_head_alignment_helper,
+                manifold_consensus_helper=manifold_consensus_helper,
             )
 
         if "sara_helper" in locals() and sara_helper is not None:
@@ -2120,6 +2139,11 @@ class WanNetworkTrainer:
             and dual_head_alignment_helper is not None
         ):
             dual_head_alignment_helper.remove_hooks()
+        if (
+            "manifold_consensus_helper" in locals()
+            and manifold_consensus_helper is not None
+        ):
+            manifold_consensus_helper.remove_hooks()
         if "crepa_helper" in locals() and crepa_helper is not None:
             crepa_helper.remove_hooks()
         if "semantic_alignment_helper" in locals():

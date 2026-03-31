@@ -180,6 +180,7 @@ from core.handlers.adaptive_handler import handle_adaptive_timestep_sampling
 from core.handlers.self_correction_handler import handle_self_correction_update
 from core.handlers.relora_handler import handle_relora_reset
 from core.handlers.dual_head_alignment_handler import compute_dual_head_alignment_loss
+from core.handlers.manifold_consensus_handler import compute_manifold_consensus_loss
 from core.handlers.vram_validation_handler import (
     handle_vram_validation_if_enabled,
     handle_windows_shared_memory_check,
@@ -305,6 +306,8 @@ class TrainingCore:
         self.self_transcendence_helper: Optional[Any] = None
         # Self-Flow helper (set in run_training_loop when enabled)
         self.self_flow_helper: Optional[Any] = None
+        # Manifold-consensus helper (set in run_training_loop when enabled)
+        self.manifold_consensus_helper: Optional[Any] = None
 
         # Initialize temporal consistency enhancement
         self.temporal_consistency_integration = None
@@ -1418,6 +1421,7 @@ class TrainingCore:
         controlnet: Optional[Any] = None,
         dual_model_manager: Optional[Any] = None,
         dual_head_alignment_helper: Optional[Any] = None,
+        manifold_consensus_helper: Optional[Any] = None,
     ) -> Tuple[int, Any]:
         """Run the main training loop."""
 
@@ -1426,6 +1430,7 @@ class TrainingCore:
         self.internal_guidance_helper = internal_guidance_helper
         self.self_transcendence_helper = self_transcendence_helper
         self.self_flow_helper = self_flow_helper
+        self.manifold_consensus_helper = manifold_consensus_helper
         self.initialize_stable_velocity_target(args)
         ortholora_helper = (
             OrthoLoRAHelper(args)
@@ -2513,6 +2518,18 @@ class TrainingCore:
                                 )
 
                             try:
+                                if manifold_consensus_helper is not None:
+                                    try:
+                                        if manifold_consensus_helper.prepare_step(
+                                            global_step, timesteps
+                                        ):
+                                            manifold_consensus_helper.begin_student_capture()
+                                    except Exception as exc:
+                                        logger.warning(
+                                            "Manifold consensus prepare failed; skipping this step. (%s)",
+                                            exc,
+                                        )
+                                        manifold_consensus_helper.reset_step_state()
                                 model_result = self.call_dit(
                                     args,
                                     accelerator,
@@ -2530,6 +2547,11 @@ class TrainingCore:
                                     model_timesteps_override=self_flow_model_timesteps,
                                 )
                             finally:
+                                if manifold_consensus_helper is not None:
+                                    try:
+                                        manifold_consensus_helper.finish_student_capture()
+                                    except Exception:
+                                        manifold_consensus_helper.reset_step_state()
                                 restore_concept_multiplier(
                                     network=unwrapped_net_for_contrastive,
                                     previous_multiplier=prev_multiplier,
@@ -2805,6 +2827,77 @@ class TrainingCore:
                                 loss_components
                             )
                             self._attach_flexam_metrics(loss_components)
+
+                            if manifold_consensus_helper is not None:
+                                try:
+                                    (
+                                        manifold_loss,
+                                        manifold_metrics,
+                                        self._last_mixflow_stats,
+                                    ) = compute_manifold_consensus_loss(
+                                        args=args,
+                                        accelerator=accelerator,
+                                        manifold_consensus_helper=manifold_consensus_helper,
+                                        global_step=global_step,
+                                        active_transformer=active_transformer,
+                                        latents_for_dit=latents_for_dit,
+                                        batch=batch,
+                                        noise=noise,
+                                        noisy_model_input=noisy_model_input,
+                                        timesteps=timesteps,
+                                        network_dtype=network_dtype,
+                                        control_signal_processor=control_signal_processor,
+                                        controlnet=controlnet,
+                                        noise_scheduler=self.noise_scheduler,
+                                        model_pred=model_pred,
+                                        weighting=weighting,
+                                        call_dit_fn=self.call_dit,
+                                        semanticgen_state=self.semanticgen_state,
+                                        last_mixflow_stats=self._last_mixflow_stats,
+                                        model_timesteps_override=self_flow_model_timesteps,
+                                    )
+                                    if manifold_loss is not None:
+                                        loss_components.total_loss = (
+                                            loss_components.total_loss + manifold_loss
+                                        )
+                                        loss_components.manifold_consensus_loss = (
+                                            manifold_loss.detach()
+                                        )
+                                        loss_components.manifold_consensus_metrics = (
+                                            manifold_metrics
+                                        )
+                                        loss_components.manifold_consensus_cosine_similarity = getattr(
+                                            manifold_consensus_helper,
+                                            "last_feature_cosine_similarity",
+                                            None,
+                                        )
+                                        loss_components.manifold_consensus_prediction_mse = getattr(
+                                            manifold_consensus_helper,
+                                            "last_prediction_mse",
+                                            None,
+                                        )
+                                        loss_components.manifold_consensus_view_variance = getattr(
+                                            manifold_consensus_helper,
+                                            "last_view_variance",
+                                            None,
+                                        )
+                                        loss_components.manifold_consensus_active_ratio = getattr(
+                                            manifold_consensus_helper,
+                                            "last_active_ratio",
+                                            None,
+                                        )
+                                        loss_components.manifold_consensus_timestep_mean = getattr(
+                                            manifold_consensus_helper,
+                                            "last_timestep_mean",
+                                            None,
+                                        )
+                                        loss_components.manifold_consensus_view_count = getattr(
+                                            manifold_consensus_helper,
+                                            "last_view_count",
+                                            None,
+                                        )
+                                finally:
+                                    manifold_consensus_helper.reset_step_state()
 
                             if dual_head_alignment_helper is not None:
                                 (
