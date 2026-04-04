@@ -2530,6 +2530,14 @@ class TrainingCore:
                                             exc,
                                         )
                                         manifold_consensus_helper.reset_step_state()
+                                if self.self_flow_helper is not None:
+                                    mark_student_forward = getattr(
+                                        self.self_flow_helper,
+                                        "mark_student_forward",
+                                        None,
+                                    )
+                                    if callable(mark_student_forward):
+                                        mark_student_forward()
                                 model_result = self.call_dit(
                                     args,
                                     accelerator,
@@ -3420,7 +3428,8 @@ class TrainingCore:
                             )
                             if self.self_flow_helper is not None:
                                 self.self_flow_helper.update_teacher_if_needed(
-                                    active_transformer
+                                    active_transformer,
+                                    network=network,
                                 )
                         except RuntimeError as e:
                             logger.error(

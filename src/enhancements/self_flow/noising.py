@@ -17,6 +17,7 @@ class SelfFlowDualTimestepContext:
     student_model_timesteps: torch.Tensor
     teacher_model_timesteps: torch.Tensor
     base_timesteps: torch.Tensor
+    token_mask: torch.Tensor | None
     masked_token_ratio: float
     tau_mean: float
     tau_min_mean: float
@@ -198,6 +199,7 @@ def build_self_flow_alignment_context(
         student_model_timesteps=model_timesteps,
         teacher_model_timesteps=model_timesteps,
         base_timesteps=model_timesteps,
+        token_mask=None,
         masked_token_ratio=0.0,
         tau_mean=tau_mean,
         tau_min_mean=tau_mean,
@@ -272,7 +274,16 @@ def maybe_apply_self_flow_dual_timestep(
     s_tokens = s_base.unsqueeze(1).expand(-1, seq_len)
 
     mask_ratio = _select_mask_ratio(args, latents, batch=batch)
-    mask = torch.rand((bsz, seq_len), device=latents.device) < mask_ratio
+    if bool(getattr(args, "self_flow_frame_level_mask", False)) and ft > 1:
+        frame_mask = torch.rand((bsz, ft), device=latents.device) < mask_ratio
+        mask = (
+            frame_mask.unsqueeze(-1)
+            .unsqueeze(-1)
+            .expand(-1, ft, ht, wt)
+            .reshape(bsz, seq_len)
+        )
+    else:
+        mask = torch.rand((bsz, seq_len), device=latents.device) < mask_ratio
     tau_tokens = torch.where(mask, s_tokens, t_tokens)
     tau_min_tokens = torch.minimum(t_tokens, s_tokens)
 
@@ -298,6 +309,7 @@ def maybe_apply_self_flow_dual_timestep(
         student_model_timesteps=student_t.to(dtype=base_timesteps.dtype),
         teacher_model_timesteps=teacher_t.to(dtype=base_timesteps.dtype),
         base_timesteps=base_timesteps,
+        token_mask=mask.detach(),
         masked_token_ratio=float(mask.float().mean().item()),
         tau_mean=float(tau_tokens.mean().item()),
         tau_min_mean=float(tau_min_tokens.mean().item()),

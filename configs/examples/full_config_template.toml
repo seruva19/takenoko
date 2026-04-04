@@ -2306,8 +2306,8 @@ self_transcendence_uncond_mode = "zero"
 # Self-Flow integrates a self-supervised feature objective directly into flow
 # matching (no external encoder requirement). All switches are train-time only.
 # Inference graph and LoRA deployment remain unchanged.
-# Paper anchors:
-# - Dual-timestep masking and tau_min teacher asymmetry (Method, Eq. 4-6)
+# Default configuration anchors:
+# - Dual-timestep masking and tau_min teacher asymmetry
 # - EMA teacher momentum 0.9999
 # - Layer ratios l=0.3D (student), k=0.7D (teacher)
 # - Mask ratios: image=0.25, video=0.1, audio=0.5
@@ -2324,9 +2324,15 @@ self_flow_enable_dual_timestep = true
 # Enable self-supervised feature alignment objective (EMA teacher + cosine loss).
 self_flow_enable_feature_alignment = true
 
-# Strict mode keeps implementation close to the paper and blocks known-conflict
-# enhancements that alter noising semantics (FVDM, MixFlow, Self-Resampling,
-# ReflexFlow, Error Recycling). Also requires broadcast_time_embed=false.
+# Strict mode keeps implementation on the default reference recipe:
+# - dual timestep + feature alignment enabled
+# - per-modality default mask ratios via self_flow_mask_ratio_mode="auto"
+# - tokenwise timesteps, EMA teacher, negative cosine, 0.3D -> 0.7D layers
+# - no frame-level masking, masked-only loss, stochastic layer selection,
+#   temporal extensions, or other recipe-changing knobs
+# It also blocks known-conflict enhancements that alter noising semantics
+# (FVDM, MixFlow, Self-Resampling, ReflexFlow, Error Recycling) and requires
+# broadcast_time_embed=false.
 self_flow_strict_mode = true
 
 # Mask ratio selection mode:
@@ -2346,6 +2352,12 @@ self_flow_mask_ratio_video = 0.10
 # Auto mask ratio for audio (must be in [0, 0.5]).
 self_flow_mask_ratio_audio = 0.50
 
+# Optional extension. When true, sample one mask per latent frame and
+# expand it across all spatial tokens in that frame. This is useful for video
+# batches where tokenwise masking is too fragmented. For image batches or F=1
+# latents it behaves like tokenwise. Strict mode requires false.
+self_flow_frame_level_mask = false
+
 # Force tokenwise timestep conditioning for Self-Flow dual-timestep path.
 # Requires Wan 2.2 style tokenwise time embedding behavior.
 self_flow_force_tokenwise_timesteps = true
@@ -2359,7 +2371,7 @@ self_flow_timestep_upper_bound = 0.999
 
 # Representation objective weight gamma in:
 # total_loss = flow_matching_loss + gamma * self_flow_rep_loss
-# Paper training detail uses gamma=0.8.
+# Default training coefficient uses gamma=0.8.
 self_flow_rep_loss_weight = 0.8
 
 # Representation loss form:
@@ -2367,7 +2379,26 @@ self_flow_rep_loss_weight = 0.8
 # - "one_minus_cosine": numerically shifted variant (same optimum)
 self_flow_rep_loss_type = "negative_cosine"
 
-# EMA teacher controls.
+# Optional extension. When true, compute the representation loss only on
+# masked higher-noise tokens. Default false keeps supervision on all aligned
+# tokens. Strict mode requires false.
+self_flow_mask_focus_loss = false
+
+# Optional extension. Optional cap on the final Self-Flow scalar loss
+# value after summing active terms. Set to 0.0 to disable clipping. Useful when
+# Self-Flow overwhelms the base flow-matching loss early in training. Strict
+# mode requires 0.0.
+self_flow_max_loss = 0.0
+
+# Teacher source:
+# - "ema": default mode, uses an EMA teacher
+# - "base": LoRA-only extension that zeros adapter multipliers for teacher pass
+# - "partial_ema": extension using EMA only over teacher-block adapter params
+# Strict mode requires "ema".
+self_flow_teacher_mode = "ema"
+
+# Backward-compatible EMA update switch. Leave true for normal EMA teacher
+# updates. When false, the EMA/model-copy teacher stays frozen after setup.
 self_flow_teacher_use_ema = true
 
 # EMA teacher momentum.
@@ -2377,7 +2408,7 @@ self_flow_teacher_momentum = 0.9999
 self_flow_teacher_update_interval = 1
 
 # Student/teacher layer selection:
-# - ratio values are fractions of model depth D (paper defaults 0.3D / 0.7D)
+# - ratio values are fractions of model depth D (defaults 0.3D / 0.7D)
 # - explicit indices override ratio when >= 1 (1-based block indices)
 self_flow_student_layer_ratio = 0.3
 
@@ -2390,9 +2421,92 @@ self_flow_student_layer_index = -1
 # Teacher layer index.
 self_flow_teacher_layer_index = -1
 
+# Optional extension. Randomly vary the chosen student block within +/-N
+# blocks each step while keeping it below the teacher block. 0 keeps a fixed
+# student layer. Strict mode requires 0.
+self_flow_student_layer_stochastic_range = 0
+
 # Projection head width multiplier for student feature projector.
-# >=1, where 1 is lightweight/paper-friendly.
+# >=1, where 1 keeps the projector lightweight.
 self_flow_projection_hidden_multiplier = 1
+
+# Projector activation:
+# - "silu": default, matches existing Takenoko projector behavior
+# - "gelu": alternative smoother nonlinearity
+self_flow_projector_activation = "silu"
+
+# Optional projector-specific learning rate. Set to 0.0 to reuse the main
+# learning_rate * input_lr_scale optimizer value for Self-Flow params.
+self_flow_projector_lr = 0.0
+
+# Move cached teacher features to CPU between teacher and loss computation to
+# lower VRAM pressure at the cost of extra transfers.
+self_flow_offload_teacher_features = false
+
+# Move EMA teacher parameters / shadow weights to CPU. This reduces persistent
+# VRAM use but makes teacher updates and teacher passes slower. Has no effect
+# for teacher_mode="base".
+self_flow_offload_teacher_params = false
+
+# Temporal Self-Flow extension:
+# - "off": representation alignment only
+# - "frame": add frame-neighbor consistency
+# - "delta": add motion-delta consistency
+# - "hybrid": add both frame and delta consistency
+# Strict mode requires "off".
+self_flow_temporal_mode = "off"
+
+# Weight for frame-neighbor temporal consistency term.
+self_flow_lambda_temporal = 0.0
+
+# Weight for motion-delta consistency term.
+self_flow_lambda_delta = 0.0
+
+# Temporal neighbor decay factor. Larger values keep farther neighbors relevant.
+self_flow_temporal_tau = 1.0
+
+# Number of temporal neighbors on each side for frame/hybrid modes.
+self_flow_num_neighbors = 2
+
+# Temporal comparison granularity:
+# - "frame": mean-pool spatial tokens per frame
+# - "patch": preserve spatial token layout for local patch matching
+self_flow_temporal_granularity = "frame"
+
+# For patch granularity, allow matching within a local spatial window of radius N.
+# 0 means strict same-patch alignment.
+self_flow_patch_spatial_radius = 0
+
+# Patch matching mode:
+# - "hard": best local patch match
+# - "soft": softmax-weighted local neighborhood match
+self_flow_patch_match_mode = "hard"
+
+# Temperature for soft patch matching. Must be > 0.
+self_flow_patch_match_temperature = 0.1
+
+# Number of temporal delta steps included in delta/hybrid mode.
+self_flow_delta_num_steps = 1
+
+# Motion-aware weighting mode:
+# - "none": uniform weighting
+# - "teacher_delta": upweight regions with larger teacher motion deltas
+self_flow_motion_weighting = "none"
+
+# Strength of motion-aware weighting. 0 disables extra emphasis.
+self_flow_motion_weight_strength = 0.0
+
+# Schedule applied to Self-Flow weights:
+# - "constant": fixed weights
+# - "linear": decay to zero by temporal_max_steps
+# - "cosine": cosine decay to zero by temporal_max_steps
+self_flow_temporal_schedule = "constant"
+
+# Optional warmup steps before full Self-Flow temporal weights are reached.
+self_flow_temporal_warmup_steps = 0
+
+# Step where linear/cosine schedule reaches zero. 0 disables decay.
+self_flow_temporal_max_steps = 0
 
 # =============================================================================
 # ⚠️ REPA (REPRESENTATIONAL ALIGNMENT) SETTINGS

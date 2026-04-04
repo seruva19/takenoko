@@ -207,6 +207,30 @@ def collect_and_log_training_metrics(
         logs["self_flow/tau_min_mean"] = float(
             loss_components.self_flow_tau_min_mean.item()
         )
+    if getattr(loss_components, "self_flow_frame_cosine_similarity", None) is not None:
+        logs["self_flow/frame_cosine_similarity"] = float(
+            loss_components.self_flow_frame_cosine_similarity.item()
+        )
+    if getattr(loss_components, "self_flow_delta_cosine_similarity", None) is not None:
+        logs["self_flow/delta_cosine_similarity"] = float(
+            loss_components.self_flow_delta_cosine_similarity.item()
+        )
+    if getattr(loss_components, "self_flow_rep_loss_weight", None) is not None:
+        logs["self_flow/rep_loss_weight"] = float(
+            loss_components.self_flow_rep_loss_weight.item()
+        )
+    if getattr(loss_components, "self_flow_lambda_temporal", None) is not None:
+        logs["self_flow/lambda_temporal"] = float(
+            loss_components.self_flow_lambda_temporal.item()
+        )
+    if getattr(loss_components, "self_flow_lambda_delta", None) is not None:
+        logs["self_flow/lambda_delta"] = float(
+            loss_components.self_flow_lambda_delta.item()
+        )
+    if getattr(loss_components, "self_flow_ema_drift", None) is not None:
+        logs["self_flow/ema_drift"] = float(
+            loss_components.self_flow_ema_drift.item()
+        )
     if getattr(loss_components, "manifold_consensus_loss", None) is not None:
         logs["loss/manifold_consensus"] = float(
             loss_components.manifold_consensus_loss.item()

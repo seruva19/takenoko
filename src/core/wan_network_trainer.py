@@ -2346,9 +2346,13 @@ class WanNetworkTrainer:
         new_params = [p for p in trainable if id(p) not in existing]
         if not new_params:
             return
-        lr = float(getattr(args, "learning_rate", 1e-4)) * float(
-            getattr(args, "input_lr_scale", 1.0)
-        )
+        projector_lr = getattr(args, "self_flow_projector_lr", None)
+        if projector_lr is None:
+            lr = float(getattr(args, "learning_rate", 1e-4)) * float(
+                getattr(args, "input_lr_scale", 1.0)
+            )
+        else:
+            lr = float(projector_lr)
         trainable_params.append({"params": new_params, "lr": lr})
         lr_descriptions.append("videorepa_projector")
         logger.info(

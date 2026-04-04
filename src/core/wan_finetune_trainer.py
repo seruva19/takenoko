@@ -872,6 +872,12 @@ class WanFinetuneTrainer:
             )
         with accelerator.autocast():
             try:
+                if self_flow_helper is not None:
+                    mark_student_forward = getattr(
+                        self_flow_helper, "mark_student_forward", None
+                    )
+                    if callable(mark_student_forward):
+                        mark_student_forward()
                 model_result = self.training_core.call_dit(
                     args,
                     accelerator,
@@ -1139,9 +1145,13 @@ class WanFinetuneTrainer:
         new_params = [p for p in trainable if id(p) not in existing]
         if not new_params:
             return
-        lr = float(getattr(args, "learning_rate", 1e-4)) * float(
-            getattr(args, "input_lr_scale", 1.0)
-        )
+        projector_lr = getattr(args, "self_flow_projector_lr", None)
+        if projector_lr is None:
+            lr = float(getattr(args, "learning_rate", 1e-4)) * float(
+                getattr(args, "input_lr_scale", 1.0)
+            )
+        else:
+            lr = float(projector_lr)
         params_to_optimize.append({"params": new_params, "lr": lr})
         param_names.append([f"videorepa_projector.{i}" for i in range(len(new_params))])
         logger.info(
@@ -2518,7 +2528,10 @@ class WanFinetuneTrainer:
                             # Optimizer step
                             optimizer.step()
                             if self_flow_helper is not None:
-                                self_flow_helper.update_teacher_if_needed(training_model)
+                                self_flow_helper.update_teacher_if_needed(
+                                    training_model,
+                                    network=training_model,
+                                )
                             self.training_core._update_weight_ema_if_needed(
                                 accelerator, global_step
                             )
@@ -2528,7 +2541,10 @@ class WanFinetuneTrainer:
                         # Fused backward pass - optimizer.step() and zero_grad() handled by hooks
                         if accelerator.sync_gradients:
                             if self_flow_helper is not None:
-                                self_flow_helper.update_teacher_if_needed(training_model)
+                                self_flow_helper.update_teacher_if_needed(
+                                    training_model,
+                                    network=training_model,
+                                )
                             self.training_core._update_weight_ema_if_needed(
                                 accelerator, global_step
                             )
@@ -2674,6 +2690,56 @@ class WanFinetuneTrainer:
                         ):
                             logs["self_flow/tau_min_mean"] = float(
                                 loss_components.self_flow_tau_min_mean.item()
+                            )
+                        if (
+                            getattr(
+                                loss_components,
+                                "self_flow_frame_cosine_similarity",
+                                None,
+                            )
+                            is not None
+                        ):
+                            logs["self_flow/frame_cosine_similarity"] = float(
+                                loss_components.self_flow_frame_cosine_similarity.item()
+                            )
+                        if (
+                            getattr(
+                                loss_components,
+                                "self_flow_delta_cosine_similarity",
+                                None,
+                            )
+                            is not None
+                        ):
+                            logs["self_flow/delta_cosine_similarity"] = float(
+                                loss_components.self_flow_delta_cosine_similarity.item()
+                            )
+                        if (
+                            getattr(loss_components, "self_flow_rep_loss_weight", None)
+                            is not None
+                        ):
+                            logs["self_flow/rep_loss_weight"] = float(
+                                loss_components.self_flow_rep_loss_weight.item()
+                            )
+                        if (
+                            getattr(loss_components, "self_flow_lambda_temporal", None)
+                            is not None
+                        ):
+                            logs["self_flow/lambda_temporal"] = float(
+                                loss_components.self_flow_lambda_temporal.item()
+                            )
+                        if (
+                            getattr(loss_components, "self_flow_lambda_delta", None)
+                            is not None
+                        ):
+                            logs["self_flow/lambda_delta"] = float(
+                                loss_components.self_flow_lambda_delta.item()
+                            )
+                        if (
+                            getattr(loss_components, "self_flow_ema_drift", None)
+                            is not None
+                        ):
+                            logs["self_flow/ema_drift"] = float(
+                                loss_components.self_flow_ema_drift.item()
                             )
                         if (
                             getattr(loss_components, "layer_sync_loss", None)

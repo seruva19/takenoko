@@ -132,6 +132,18 @@ class LossComponents:
         Mean mixed tokenwise timestep value (tau) in normalized [0, 1] scale.
     self_flow_tau_min_mean: Optional[torch.Tensor]
         Mean teacher timestep value (tau_min) in normalized [0, 1] scale.
+    self_flow_frame_cosine_similarity: Optional[torch.Tensor]
+        Mean temporal frame-neighbor cosine similarity for Self-Flow.
+    self_flow_delta_cosine_similarity: Optional[torch.Tensor]
+        Mean temporal delta cosine similarity for Self-Flow.
+    self_flow_rep_loss_weight: Optional[torch.Tensor]
+        Effective scheduled Self-Flow representation weight used this step.
+    self_flow_lambda_temporal: Optional[torch.Tensor]
+        Effective scheduled temporal-neighbor weight used this step.
+    self_flow_lambda_delta: Optional[torch.Tensor]
+        Effective scheduled temporal-delta weight used this step.
+    self_flow_ema_drift: Optional[torch.Tensor]
+        Mean EMA shadow drift before the latest teacher update, when available.
     manifold_consensus_loss: Optional[torch.Tensor]
         Auxiliary multi-view consensus loss on middle-block hidden states.
     manifold_consensus_cosine_similarity: Optional[torch.Tensor]
@@ -368,6 +380,12 @@ class LossComponents:
     self_flow_masked_token_ratio: Optional[torch.Tensor] = None
     self_flow_tau_mean: Optional[torch.Tensor] = None
     self_flow_tau_min_mean: Optional[torch.Tensor] = None
+    self_flow_frame_cosine_similarity: Optional[torch.Tensor] = None
+    self_flow_delta_cosine_similarity: Optional[torch.Tensor] = None
+    self_flow_rep_loss_weight: Optional[torch.Tensor] = None
+    self_flow_lambda_temporal: Optional[torch.Tensor] = None
+    self_flow_lambda_delta: Optional[torch.Tensor] = None
+    self_flow_ema_drift: Optional[torch.Tensor] = None
     manifold_consensus_loss: Optional[torch.Tensor] = None
     manifold_consensus_cosine_similarity: Optional[torch.Tensor] = None
     manifold_consensus_prediction_mse: Optional[torch.Tensor] = None
@@ -1525,6 +1543,12 @@ class TrainingLossComputer:
         self_flow_masked_token_ratio_value: Optional[torch.Tensor] = None
         self_flow_tau_mean_value: Optional[torch.Tensor] = None
         self_flow_tau_min_mean_value: Optional[torch.Tensor] = None
+        self_flow_frame_cosine_similarity_value: Optional[torch.Tensor] = None
+        self_flow_delta_cosine_similarity_value: Optional[torch.Tensor] = None
+        self_flow_rep_loss_weight_value: Optional[torch.Tensor] = None
+        self_flow_lambda_temporal_value: Optional[torch.Tensor] = None
+        self_flow_lambda_delta_value: Optional[torch.Tensor] = None
+        self_flow_ema_drift_value: Optional[torch.Tensor] = None
         if getattr(args, "enable_self_flow", False) and self_flow_helper is not None:
             try:
                 self_flow_loss = self_flow_helper.compute_loss(
@@ -1532,6 +1556,8 @@ class TrainingLossComputer:
                     network_dtype=network_dtype,
                     batch=batch,
                     context=self_flow_context,
+                    network=network,
+                    global_step=global_step,
                 )
                 if self_flow_loss is not None:
                     loss = loss + self_flow_loss
@@ -1540,6 +1566,12 @@ class TrainingLossComputer:
                 sf_cosine = getattr(self_flow_helper, "last_cosine_similarity", None)
                 if sf_cosine is not None and torch.is_tensor(sf_cosine):
                     self_flow_cosine_similarity_value = sf_cosine.detach()
+                sf_frame = getattr(self_flow_helper, "last_frame_cosine", None)
+                if sf_frame is not None and torch.is_tensor(sf_frame):
+                    self_flow_frame_cosine_similarity_value = sf_frame.detach()
+                sf_delta = getattr(self_flow_helper, "last_delta_cosine", None)
+                if sf_delta is not None and torch.is_tensor(sf_delta):
+                    self_flow_delta_cosine_similarity_value = sf_delta.detach()
 
                 if self_flow_context is not None:
                     self_flow_masked_token_ratio_value = loss.detach().new_tensor(
@@ -1551,6 +1583,18 @@ class TrainingLossComputer:
                     self_flow_tau_min_mean_value = loss.detach().new_tensor(
                         float(getattr(self_flow_context, "tau_min_mean", 0.0))
                     )
+                self_flow_rep_loss_weight_value = loss.detach().new_tensor(
+                    float(getattr(self_flow_helper, "current_rep_loss_weight", 0.0))
+                )
+                self_flow_lambda_temporal_value = loss.detach().new_tensor(
+                    float(getattr(self_flow_helper, "current_lambda_temporal", 0.0))
+                )
+                self_flow_lambda_delta_value = loss.detach().new_tensor(
+                    float(getattr(self_flow_helper, "current_lambda_delta", 0.0))
+                )
+                ema_drift = getattr(self_flow_helper, "last_ema_drift", None)
+                if ema_drift is not None:
+                    self_flow_ema_drift_value = loss.detach().new_tensor(float(ema_drift))
             except Exception as e:
                 logger.warning("Self-Flow loss computation failed: %s", e)
 
@@ -2555,6 +2599,12 @@ class TrainingLossComputer:
             self_flow_masked_token_ratio=self_flow_masked_token_ratio_value,
             self_flow_tau_mean=self_flow_tau_mean_value,
             self_flow_tau_min_mean=self_flow_tau_min_mean_value,
+            self_flow_frame_cosine_similarity=self_flow_frame_cosine_similarity_value,
+            self_flow_delta_cosine_similarity=self_flow_delta_cosine_similarity_value,
+            self_flow_rep_loss_weight=self_flow_rep_loss_weight_value,
+            self_flow_lambda_temporal=self_flow_lambda_temporal_value,
+            self_flow_lambda_delta=self_flow_lambda_delta_value,
+            self_flow_ema_drift=self_flow_ema_drift_value,
             **det_component_values,
             drifting_loss=drifting_loss_value,
             drifting_drift_norm_mean=drifting_drift_norm_mean_value,
