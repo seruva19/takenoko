@@ -10,7 +10,6 @@ import argparse
 import math
 import os
 import random
-import re
 from multiprocessing import Value
 from typing import Any, Dict, List, Optional
 import torch
@@ -51,6 +50,17 @@ from enhancements.self_flow.noising import (
     build_self_flow_alignment_context,
     maybe_apply_self_flow_dual_timestep,
     reduce_model_timesteps_for_runtime,
+)
+from enhancements.motion_preservation.trainer_integration import (
+    attach_motion_preservation_logs,
+    apply_ewc_penalty,
+    build_full_ft_optimizer_groups,
+    create_ewc_helper,
+    create_motion_preservation_helper,
+    prepare_motion_preservation_helper,
+    register_motion_preservation_state_hooks,
+    run_full_ft_motion_replay,
+    summarize_full_ft_motion_controls,
 )
 from enhancements.repa.trainer_integration import (
     maybe_add_vae_repa_params_for_finetune,
@@ -543,17 +553,51 @@ class WanFinetuneTrainer:
         Prepare optimizer parameters for full fine-tuning.
         Supports both DiT-only and DiT+T5 training based on finetune_text_encoder flag.
         """
-        # Always include DiT transformer parameters
-        dit_params = list(transformer.named_parameters())
-
-        params_to_optimize = []
-        param_names = []
-
-        # DiT parameters (primary training target)
-        params_to_optimize.append(
-            {"params": [p for _, p in dit_params], "lr": args.learning_rate}
+        motion_preservation_summary = summarize_full_ft_motion_controls(
+            transformer=transformer,
+            args=args,
+            logger=logger,
         )
-        param_names.append([n for n, _ in dit_params])
+        (
+            params_to_optimize,
+            param_names,
+            trainable_by_block,
+            lr_scales_applied,
+            trainable_attn_geometry_tensors,
+        ) = build_full_ft_optimizer_groups(
+            transformer=transformer,
+            args=args,
+            motion_preservation_summary=motion_preservation_summary,
+        )
+
+        if not params_to_optimize:
+            raise ValueError(
+                "No trainable transformer parameters remain after full-finetune "
+                "motion preservation controls were applied."
+            )
+        logger.info(
+            "Full-FT optimizer LR groups: %s",
+            [
+                {
+                    "lr": f"{group['lr']:.6g}",
+                    "params": len(group["params"]),
+                }
+                for group in params_to_optimize
+            ],
+        )
+        setattr(args, "_full_ft_lr_group_scales", sorted(lr_scales_applied))
+        setattr(args, "_full_ft_frozen_blocks_applied", motion_preservation_summary["frozen_blocks"])
+        setattr(args, "_full_ft_trainable_by_block", trainable_by_block)
+        setattr(
+            args,
+            "_full_ft_trainable_attn_geometry_tensors",
+            int(trainable_attn_geometry_tensors),
+        )
+        setattr(
+            args,
+            "_full_ft_frozen_attn_geometry_tensors",
+            int(motion_preservation_summary.get("geometry_frozen_tensors", 0)),
+        )
 
         # Conditionally add T5 text encoder parameters
         if getattr(args, "finetune_text_encoder", False) and text_encoder is not None:
@@ -577,7 +621,11 @@ class WanFinetuneTrainer:
         logger.info(f"Total number of trainable parameters: {n_params:,}")
 
         # Count transformer parameters
-        dit_params_count = sum(p.numel() for p in params_to_optimize[0]["params"])
+        dit_params_count = sum(
+            p.numel()
+            for group in params_to_optimize[: len(lr_groups)]
+            for p in group["params"]
+        )
         logger.info(f"DiT transformer parameters being trained: {dit_params_count:,}")
 
         # Log layer structure information
@@ -1642,6 +1690,19 @@ class WanFinetuneTrainer:
         if self_flow_helper is not None:
             self._register_self_flow_state_hooks(accelerator, self_flow_helper)
 
+        motion_preservation_helper = create_motion_preservation_helper(
+            args=args,
+            training_core=self.training_core,
+            config=self.config,
+            mode="full_finetune",
+            logger=logger,
+        )
+        if motion_preservation_helper is not None:
+            register_motion_preservation_state_hooks(
+                accelerator,
+                motion_preservation_helper,
+            )
+
         # Log detailed network information if verbose mode is enabled
         if getattr(args, "verbose_network", False):
             NetworkLoggingUtils.log_detailed_network_info(transformer, args)
@@ -1798,6 +1859,29 @@ class WanFinetuneTrainer:
             **_train_loader_kwargs,
         )
 
+        motion_preservation_helper = prepare_motion_preservation_helper(
+            helper=motion_preservation_helper,
+            args=args,
+            transformer=transformer,
+            accelerator=accelerator,
+            train_dataloader=train_dataloader,
+            network_dtype=transformer.dtype,
+            timestep_distribution=self.timestep_distribution,
+            logger=logger,
+            blocks_to_swap=self.blocks_to_swap,
+            fail_on_missing_temporal=bool(
+                getattr(args, "motion_prior_cache_only", False)
+            ),
+        )
+        if bool(getattr(args, "motion_prior_cache_only", False)):
+            logger.info(
+                "motion_prior_cache_only enabled: cache build phase finished (anchors=%d). Exiting before optimization.",
+                0
+                if motion_preservation_helper is None
+                else len(motion_preservation_helper.anchor_cache),
+            )
+            return
+
         # Initialize loss recorder for proper loss tracking
         loss_recorder = LossRecorder()
 
@@ -1925,6 +2009,8 @@ class WanFinetuneTrainer:
             optimizer, train_dataloader, lr_scheduler
         )
         self.optimizer_manager.register_optimizer_checkpoint_hook(accelerator, optimizer)
+        underlying_optimizer = getattr(optimizer, "optimizer", optimizer)
+        fused_step_state = {"defer_step": False, "suspend_step": False}
 
         # Apply fused backward pass AFTER accelerator.prepare() when optimizer is wrapped
         if self.fused_backward_pass:
@@ -1932,8 +2018,6 @@ class WanFinetuneTrainer:
             try:
                 import modules.adafactor_fused as adafactor_fused
 
-                # Patch the underlying optimizer inside the AcceleratedOptimizer wrapper
-                underlying_optimizer = getattr(optimizer, "optimizer", optimizer)
                 adafactor_fused.patch_adafactor_fused(
                     underlying_optimizer,
                     self.use_stochastic_rounding,
@@ -1961,11 +2045,20 @@ class WanFinetuneTrainer:
                                         )
 
                                     # Apply optimizer step to this parameter immediately
-                                    if accelerator.sync_gradients:
+                                    if (
+                                        accelerator.sync_gradients
+                                        and not fused_step_state["suspend_step"]
+                                        and not fused_step_state["defer_step"]
+                                    ):
                                         underlying_optimizer.step_param(tensor, p_group)
 
-                                    # Clear gradient immediately to free memory
-                                    tensor.grad = None
+                                    # Clear gradient only when step is not being deferred.
+                                    if (
+                                        accelerator.sync_gradients
+                                        and not fused_step_state["suspend_step"]
+                                        and not fused_step_state["defer_step"]
+                                    ):
+                                        tensor.grad = None
 
                                 return grad_hook
 
@@ -1979,6 +2072,21 @@ class WanFinetuneTrainer:
                     "⚠️  Fused backward pass module not found, falling back to standard optimization"
                 )
                 self.fused_backward_pass = False
+
+        ewc_helper = create_ewc_helper(
+            args=args,
+            training_core=self.training_core,
+            accelerator=accelerator,
+            transformer=transformer,
+            train_dataloader=train_dataloader,
+            optimizer=optimizer,
+            network_dtype=self.mixed_precision_dtype,
+            logger=logger,
+            fused_step_state=(
+                fused_step_state if self.fused_backward_pass else None
+            ),
+            timestep_distribution=self.timestep_distribution,
+        )
 
         # Register checkpoint hooks for proper fine-tuning save/load (matching LoRA approach)
         CheckpointUtils.register_hooks_for_finetuning(accelerator, args)
@@ -2510,9 +2618,49 @@ class WanFinetuneTrainer:
                         current_epoch=epoch + 1,
                     )
                     loss = loss_components.total_loss
+                    loss = apply_ewc_penalty(
+                        args=args,
+                        ewc_helper=ewc_helper,
+                        loss=loss,
+                        loss_components=loss_components,
+                        model=training_model,
+                        accelerator=accelerator,
+                    )
 
-                    # Backward pass
-                    accelerator.backward(loss)
+                    (
+                        loss,
+                        motion_preservation_loss,
+                        separate_motion_backward,
+                        fused_defer_motion_step,
+                    ) = run_full_ft_motion_replay(
+                        args=args,
+                        accelerator=accelerator,
+                        training_model=training_model,
+                        motion_preservation_helper=motion_preservation_helper,
+                        global_step=global_step,
+                        loss=loss,
+                        loss_components=loss_components,
+                        fused_backward_pass=self.fused_backward_pass,
+                    )
+                    fused_step_state["defer_step"] = fused_defer_motion_step
+
+                    if separate_motion_backward:
+                        accelerator.backward(loss)
+
+                    if separate_motion_backward:
+                        if motion_preservation_loss is not None:
+                            fused_step_state["defer_step"] = False
+                            accelerator.backward(motion_preservation_loss)
+                            loss = loss + motion_preservation_loss
+                        elif fused_defer_motion_step and accelerator.sync_gradients:
+                            fused_step_state["defer_step"] = False
+                            underlying_optimizer.step()
+                            optimizer.zero_grad(set_to_none=True)
+                    else:
+                        if motion_preservation_loss is not None:
+                            loss = loss + motion_preservation_loss
+                        accelerator.backward(loss)
+                    loss_components.total_loss = loss
 
                     # Optimizer step with proper synchronization
                     if not self.fused_backward_pass:
@@ -2740,6 +2888,24 @@ class WanFinetuneTrainer:
                         ):
                             logs["self_flow/ema_drift"] = float(
                                 loss_components.self_flow_ema_drift.item()
+                            )
+                        attach_motion_preservation_logs(logs, loss_components)
+                        if getattr(loss_components, "ewc_loss", None) is not None:
+                            logs["loss/ewc"] = float(loss_components.ewc_loss.item())
+                        if getattr(loss_components, "ewc_penalty_raw", None) is not None:
+                            logs["ewc/raw"] = float(
+                                loss_components.ewc_penalty_raw.item()
+                            )
+                        if getattr(loss_components, "ewc_used_tensors", None) is not None:
+                            logs["ewc/used_tensors"] = float(
+                                loss_components.ewc_used_tensors.item()
+                            )
+                        if (
+                            getattr(loss_components, "ewc_skipped_tensors", None)
+                            is not None
+                        ):
+                            logs["ewc/skipped_tensors"] = float(
+                                loss_components.ewc_skipped_tensors.item()
                             )
                         if (
                             getattr(loss_components, "layer_sync_loss", None)

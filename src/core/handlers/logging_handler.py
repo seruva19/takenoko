@@ -231,6 +231,124 @@ def collect_and_log_training_metrics(
         logs["self_flow/ema_drift"] = float(
             loss_components.self_flow_ema_drift.item()
         )
+    if getattr(loss_components, "motion_preservation_loss", None) is not None:
+        logs["loss/motion_preservation"] = float(
+            loss_components.motion_preservation_loss.item()
+        )
+    if getattr(loss_components, "motion_preservation_weight", None) is not None:
+        logs["motion_preservation/weight"] = float(
+            loss_components.motion_preservation_weight.item()
+        )
+    if getattr(loss_components, "motion_preservation_sigma", None) is not None:
+        logs["motion_preservation/sigma"] = float(
+            loss_components.motion_preservation_sigma.item()
+        )
+    if getattr(loss_components, "motion_preservation_anchor_source", None) is not None:
+        logs["motion_preservation/anchor_source_synthetic"] = float(
+            loss_components.motion_preservation_anchor_source.item()
+        )
+    if (
+        getattr(loss_components, "motion_preservation_temporal_fallback", None)
+        is not None
+    ):
+        logs["motion_preservation/temporal_fallback"] = float(
+            loss_components.motion_preservation_temporal_fallback.item()
+        )
+    if (
+        getattr(loss_components, "motion_attention_preservation_loss", None)
+        is not None
+    ):
+        logs["loss/motion_attention_preservation"] = float(
+            loss_components.motion_attention_preservation_loss.item()
+        )
+    if getattr(loss_components, "motion_preservation_anchor_frames", None) is not None:
+        logs["motion_preservation/anchor_frames"] = float(
+            loss_components.motion_preservation_anchor_frames.item()
+        )
+    if (
+        getattr(loss_components, "motion_preservation_total_to_task_ratio", None)
+        is not None
+    ):
+        logs["motion_preservation/total_to_task"] = float(
+            loss_components.motion_preservation_total_to_task_ratio.item()
+        )
+    if getattr(loss_components, "motion_preservation_apply_rate", None) is not None:
+        logs["motion_preservation/apply_rate"] = float(
+            loss_components.motion_preservation_apply_rate.item()
+        )
+    if (
+        getattr(loss_components, "motion_preservation_schedule_skip_rate", None)
+        is not None
+    ):
+        logs["motion_preservation/schedule_skip_rate"] = float(
+            loss_components.motion_preservation_schedule_skip_rate.item()
+        )
+    if (
+        getattr(loss_components, "motion_preservation_zero_weight_skip_rate", None)
+        is not None
+    ):
+        logs["motion_preservation/zero_weight_skip_rate"] = float(
+            loss_components.motion_preservation_zero_weight_skip_rate.item()
+        )
+    if (
+        getattr(loss_components, "motion_preservation_no_anchor_skip_rate", None)
+        is not None
+    ):
+        logs["motion_preservation/no_anchor_skip_rate"] = float(
+            loss_components.motion_preservation_no_anchor_skip_rate.item()
+        )
+    if (
+        getattr(loss_components, "motion_preservation_invalid_anchor_skip_rate", None)
+        is not None
+    ):
+        logs["motion_preservation/invalid_anchor_skip_rate"] = float(
+            loss_components.motion_preservation_invalid_anchor_skip_rate.item()
+        )
+    if (
+        getattr(loss_components, "motion_preservation_temporal_fallback_rate", None)
+        is not None
+    ):
+        logs["motion_preservation/temporal_fallback_rate"] = float(
+            loss_components.motion_preservation_temporal_fallback_rate.item()
+        )
+    if (
+        getattr(loss_components, "motion_preservation_attention_apply_rate", None)
+        is not None
+    ):
+        logs["motion_preservation/attention_apply_rate"] = float(
+            loss_components.motion_preservation_attention_apply_rate.item()
+        )
+    if (
+        getattr(loss_components, "motion_preservation_anchor_cache_size", None)
+        is not None
+    ):
+        logs["motion_preservation/anchor_cache_size"] = float(
+            loss_components.motion_preservation_anchor_cache_size.item()
+        )
+    if (
+        getattr(loss_components, "motion_preservation_temporal_anchor_ratio", None)
+        is not None
+    ):
+        logs["motion_preservation/temporal_anchor_ratio"] = float(
+            loss_components.motion_preservation_temporal_anchor_ratio.item()
+        )
+    if (
+        getattr(loss_components, "motion_preservation_synthetic_anchor_ratio", None)
+        is not None
+    ):
+        logs["motion_preservation/synthetic_anchor_ratio"] = float(
+            loss_components.motion_preservation_synthetic_anchor_ratio.item()
+        )
+    if getattr(loss_components, "ewc_loss", None) is not None:
+        logs["loss/ewc"] = float(loss_components.ewc_loss.item())
+    if getattr(loss_components, "ewc_penalty_raw", None) is not None:
+        logs["ewc/raw"] = float(loss_components.ewc_penalty_raw.item())
+    if getattr(loss_components, "ewc_used_tensors", None) is not None:
+        logs["ewc/used_tensors"] = float(loss_components.ewc_used_tensors.item())
+    if getattr(loss_components, "ewc_skipped_tensors", None) is not None:
+        logs["ewc/skipped_tensors"] = float(
+            loss_components.ewc_skipped_tensors.item()
+        )
     if getattr(loss_components, "manifold_consensus_loss", None) is not None:
         logs["loss/manifold_consensus"] = float(
             loss_components.manifold_consensus_loss.item()

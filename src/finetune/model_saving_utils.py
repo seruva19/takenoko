@@ -13,6 +13,7 @@ import logging
 from typing import Any
 import torch
 from accelerate import Accelerator
+from utils.safetensors_utils import MemoryEfficientSafeOpen
 
 try:
     from common.logger import get_logger
@@ -155,6 +156,81 @@ class ModelSavingUtils:
 
         logger.info(f"✅ BF16 conversion completed: {bf16_path}")
 
+    @staticmethod
+    def _prepare_state_dict_for_save(
+        state_dict: dict[str, torch.Tensor],
+        args: argparse.Namespace,
+    ) -> tuple[dict[str, torch.Tensor], dict[str, str] | None]:
+        """Optionally convert to Comfy-style keys and merge with the source checkpoint."""
+        save_comfy_format = bool(getattr(args, "save_comfy_format", False))
+        save_merged_checkpoint = bool(getattr(args, "save_merged_checkpoint", False))
+        if not save_comfy_format and not save_merged_checkpoint:
+            return state_dict, None
+
+        renamed: dict[str, torch.Tensor] = {}
+        for key, value in state_dict.items():
+            if key.startswith("model.diffusion_model."):
+                new_key = key
+            elif key.startswith("model."):
+                new_key = "model.diffusion_model." + key[len("model.") :]
+            else:
+                new_key = "model.diffusion_model." + key
+            renamed[new_key] = value
+
+        extra_metadata: dict[str, str] | None = None
+        if not save_merged_checkpoint:
+            return renamed, extra_metadata
+
+        checkpoint_path = getattr(args, "dit", None)
+        if not checkpoint_path or str(checkpoint_path).startswith(("http://", "https://")):
+            logger.warning(
+                "save_merged_checkpoint requires a local dit checkpoint path; exporting Comfy-format weights without merge."
+            )
+            return renamed, extra_metadata
+
+        logger.info(
+            "Merging finetuned checkpoint with original Wan checkpoint: %s",
+            checkpoint_path,
+        )
+        with MemoryEfficientSafeOpen(str(checkpoint_path)) as handle:
+            all_keys = handle.keys()
+            missing_keys: list[str] = []
+            dtype_fixed = 0
+            for key in all_keys:
+                overlap_key = key if key in renamed else None
+                if overlap_key is None:
+                    if key.startswith("model."):
+                        prefixed_key = "model.diffusion_model." + key[len("model.") :]
+                    elif key.startswith("model.diffusion_model."):
+                        prefixed_key = key
+                    else:
+                        prefixed_key = "model.diffusion_model." + key
+                    if prefixed_key in renamed:
+                        overlap_key = prefixed_key
+                if overlap_key is None:
+                    missing_keys.append(key)
+                    continue
+                original_dtype = handle.get_tensor(key).dtype
+                if renamed[overlap_key].dtype != original_dtype:
+                    renamed[overlap_key] = renamed[overlap_key].to(original_dtype)
+                    dtype_fixed += 1
+            if dtype_fixed:
+                logger.info(
+                    "Restored original dtype for %d overlapping checkpoint tensors",
+                    dtype_fixed,
+                )
+            for key in missing_keys:
+                renamed[key] = handle.get_tensor(key)
+            original_metadata = handle.metadata()
+            if original_metadata and "config" in original_metadata:
+                extra_metadata = {"config": original_metadata["config"]}
+        logger.info(
+            "Merged checkpoint has %d keys (%d copied from original).",
+            len(renamed),
+            len(missing_keys),
+        )
+        return renamed, extra_metadata
+
     def save_model_safetensors(
         self,
         args: argparse.Namespace,
@@ -176,6 +252,10 @@ class ModelSavingUtils:
             # Convert to target dtype
             for key in list(state_dict.keys()):
                 state_dict[key] = state_dict[key].to(self.mixed_precision_dtype)
+            state_dict, extra_metadata = self._prepare_state_dict_for_save(
+                state_dict,
+                args,
+            )
 
             # Create metadata
             metadata = {
@@ -185,7 +265,287 @@ class ModelSavingUtils:
                 "fused_backward_pass": str(self.fused_backward_pass),
                 "mem_eff_save": str(self.mem_eff_save),
                 "architecture": "WanFinetune",
+                "ss_save_comfy_format": str(
+                    bool(getattr(args, "save_comfy_format", False))
+                ),
+                "ss_save_merged_checkpoint": str(
+                    bool(getattr(args, "save_merged_checkpoint", False))
+                ),
+                "ss_motion_preservation": str(
+                    bool(getattr(args, "motion_preservation", False))
+                ),
+                "ss_motion_preservation_mode": str(
+                    getattr(args, "motion_preservation_mode", "temporal")
+                ),
+                "ss_motion_preservation_multiplier": str(
+                    getattr(args, "motion_preservation_multiplier", 0.0)
+                ),
+                "ss_motion_preservation_anchor_cache_size": str(
+                    getattr(args, "motion_preservation_anchor_cache_size", 0)
+                ),
+                "ss_motion_preservation_anchor_cache_auto": str(
+                    bool(getattr(args, "motion_preservation_anchor_cache_auto", False))
+                ),
+                "ss_motion_preservation_anchor_cache_path": str(
+                    getattr(args, "motion_preservation_anchor_cache_path", None)
+                ),
+                "ss_motion_preservation_anchor_cache_rebuild": str(
+                    bool(
+                        getattr(
+                            args, "motion_preservation_anchor_cache_rebuild", False
+                        )
+                    )
+                ),
+                "ss_motion_preservation_anchor_source": str(
+                    getattr(args, "motion_preservation_anchor_source", "synthetic")
+                ),
+                "ss_motion_preservation_warmup_steps": str(
+                    getattr(args, "motion_preservation_warmup_steps", 0)
+                ),
+                "ss_motion_preservation_interval": str(
+                    getattr(args, "motion_preservation_interval", 1)
+                ),
+                "ss_motion_preservation_probability": str(
+                    getattr(args, "motion_preservation_probability", None)
+                ),
+                "ss_motion_preservation_num_sigmas": str(
+                    getattr(args, "motion_preservation_num_sigmas", 1)
+                ),
+                "ss_motion_preservation_sigma_values": str(
+                    getattr(args, "motion_preservation_sigma_values", None)
+                ),
+                "ss_motion_preservation_sigma_min": str(
+                    getattr(args, "motion_preservation_sigma_min", 0.2)
+                ),
+                "ss_motion_preservation_sigma_max": str(
+                    getattr(args, "motion_preservation_sigma_max", 0.8)
+                ),
+                "ss_motion_preservation_sigma_sampling": str(
+                    getattr(args, "motion_preservation_sigma_sampling", "uniform")
+                ),
+                "ss_motion_preservation_sigma_sampling_power": str(
+                    getattr(args, "motion_preservation_sigma_sampling_power", 1.0)
+                ),
+                "ss_motion_preservation_second_order_weight": str(
+                    getattr(args, "motion_preservation_second_order_weight", 0.0)
+                ),
+                "ss_motion_preservation_teacher_chunk_frames": str(
+                    getattr(args, "motion_preservation_teacher_chunk_frames", 0)
+                ),
+                "ss_motion_preservation_separate_backward": str(
+                    bool(
+                        getattr(args, "motion_preservation_separate_backward", False)
+                    )
+                ),
+                "ss_motion_preservation_fused_defer_step": str(
+                    bool(
+                        getattr(args, "motion_preservation_fused_defer_step", False)
+                    )
+                ),
+                "ss_motion_prior_cache_only": str(
+                    bool(getattr(args, "motion_prior_cache_only", False))
+                ),
+                "ss_motion_prior_require_temporal": str(
+                    bool(getattr(args, "motion_prior_require_temporal", False))
+                ),
+                "ss_motion_attention_preservation": str(
+                    bool(getattr(args, "motion_attention_preservation", False))
+                ),
+                "ss_motion_attention_preservation_weight": str(
+                    getattr(args, "motion_attention_preservation_weight", 0.0)
+                ),
+                "ss_motion_attention_preservation_loss": str(
+                    getattr(args, "motion_attention_preservation_loss", "kl")
+                ),
+                "ss_motion_attention_preservation_queries": str(
+                    getattr(args, "motion_attention_preservation_queries", 32)
+                ),
+                "ss_motion_attention_preservation_keys": str(
+                    getattr(args, "motion_attention_preservation_keys", 64)
+                ),
+                "ss_motion_attention_preservation_per_head": str(
+                    bool(
+                        getattr(args, "motion_attention_preservation_per_head", False)
+                    )
+                ),
+                "ss_motion_attention_preservation_temperature": str(
+                    getattr(args, "motion_attention_preservation_temperature", 1.0)
+                ),
+                "ss_motion_attention_preservation_symmetric_kl": str(
+                    bool(
+                        getattr(
+                            args,
+                            "motion_attention_preservation_symmetric_kl",
+                            False,
+                        )
+                    )
+                ),
+                "ss_motion_attention_preservation_blocks": str(
+                    getattr(args, "motion_attention_preservation_blocks", None)
+                ),
+                "ss_motion_attention_preservation_active": str(
+                    bool(
+                        getattr(args, "_motion_attention_preservation_active", False)
+                    )
+                ),
+                "ss_motion_attention_preservation_module_count": str(
+                    int(
+                        getattr(
+                            args,
+                            "_motion_attention_preservation_module_count",
+                            0,
+                        )
+                    )
+                ),
+                "ss_motion_preservation_runtime_anchor_cache_size": str(
+                    getattr(args, "_motion_preservation_runtime_anchor_cache_size", 0)
+                ),
+                "ss_motion_preservation_runtime_temporal_anchor_count": str(
+                    getattr(
+                        args,
+                        "_motion_preservation_runtime_temporal_anchor_count",
+                        0,
+                    )
+                ),
+                "ss_motion_preservation_runtime_synthetic_anchor_count": str(
+                    getattr(
+                        args,
+                        "_motion_preservation_runtime_synthetic_anchor_count",
+                        0,
+                    )
+                ),
+                "ss_motion_preservation_runtime_dataset_anchor_count": str(
+                    getattr(
+                        args,
+                        "_motion_preservation_runtime_dataset_anchor_count",
+                        0,
+                    )
+                ),
+                "ss_motion_preservation_runtime_cache_loaded": str(
+                    bool(
+                        getattr(
+                            args,
+                            "_motion_preservation_runtime_cache_loaded",
+                            False,
+                        )
+                    )
+                ),
+                "ss_motion_preservation_runtime_cache_built": str(
+                    bool(
+                        getattr(
+                            args,
+                            "_motion_preservation_runtime_cache_built",
+                            False,
+                        )
+                    )
+                ),
+                "ss_motion_preservation_runtime_invocations": str(
+                    getattr(args, "_motion_preservation_runtime_invocations", 0)
+                ),
+                "ss_motion_preservation_runtime_applied": str(
+                    getattr(args, "_motion_preservation_runtime_applied", 0)
+                ),
+                "ss_motion_preservation_runtime_apply_rate": str(
+                    getattr(args, "_motion_preservation_runtime_apply_rate", 0.0)
+                ),
+                "ss_motion_preservation_runtime_schedule_skip_rate": str(
+                    getattr(
+                        args,
+                        "_motion_preservation_runtime_schedule_skip_rate",
+                        0.0,
+                    )
+                ),
+                "ss_motion_preservation_runtime_zero_weight_skip_rate": str(
+                    getattr(
+                        args,
+                        "_motion_preservation_runtime_zero_weight_skip_rate",
+                        0.0,
+                    )
+                ),
+                "ss_motion_preservation_runtime_no_anchor_skip_rate": str(
+                    getattr(
+                        args,
+                        "_motion_preservation_runtime_no_anchor_skip_rate",
+                        0.0,
+                    )
+                ),
+                "ss_motion_preservation_runtime_invalid_anchor_skip_rate": str(
+                    getattr(
+                        args,
+                        "_motion_preservation_runtime_invalid_anchor_skip_rate",
+                        0.0,
+                    )
+                ),
+                "ss_motion_preservation_runtime_temporal_fallback_rate": str(
+                    getattr(
+                        args,
+                        "_motion_preservation_runtime_temporal_fallback_rate",
+                        0.0,
+                    )
+                ),
+                "ss_motion_preservation_runtime_attention_apply_rate": str(
+                    getattr(
+                        args,
+                        "_motion_preservation_runtime_attention_apply_rate",
+                        0.0,
+                    )
+                ),
+                "ss_motion_preservation_runtime_temporal_anchor_ratio": str(
+                    getattr(
+                        args,
+                        "_motion_preservation_runtime_temporal_anchor_ratio",
+                        0.0,
+                    )
+                ),
+                "ss_motion_preservation_runtime_last_error": str(
+                    getattr(args, "_motion_preservation_runtime_last_error", "")
+                ),
+                "ss_ewc_lambda": str(getattr(args, "ewc_lambda", 0.0)),
+                "ss_ewc_num_batches": str(getattr(args, "ewc_num_batches", 0)),
+                "ss_ewc_target": str(
+                    getattr(args, "ewc_target", "attn_norm_bias")
+                ),
+                "ss_ewc_max_param_tensors": str(
+                    getattr(args, "ewc_max_param_tensors", 0)
+                ),
+                "ss_ewc_cache_path": str(getattr(args, "ewc_cache_path", None)),
+                "ss_ewc_cache_rebuild": str(
+                    bool(getattr(args, "ewc_cache_rebuild", False))
+                ),
+                "ss_freeze_early_blocks": str(
+                    getattr(args, "freeze_early_blocks", 0)
+                ),
+                "ss_freeze_block_indices": str(
+                    getattr(args, "freeze_block_indices", None)
+                ),
+                "ss_block_lr_scales": str(getattr(args, "block_lr_scales", None)),
+                "ss_non_block_lr_scale": str(
+                    getattr(args, "non_block_lr_scale", 1.0)
+                ),
+                "ss_attn_geometry_lr_scale": str(
+                    getattr(args, "attn_geometry_lr_scale", 1.0)
+                ),
+                "ss_freeze_attn_geometry": str(
+                    bool(getattr(args, "freeze_attn_geometry", False))
+                ),
+                "ss_full_ft_lr_group_scales": str(
+                    getattr(args, "_full_ft_lr_group_scales", None)
+                ),
+                "ss_full_ft_frozen_blocks_applied": str(
+                    getattr(args, "_full_ft_frozen_blocks_applied", None)
+                ),
+                "ss_full_ft_trainable_by_block": str(
+                    getattr(args, "_full_ft_trainable_by_block", None)
+                ),
+                "ss_full_ft_trainable_attn_geometry_tensors": str(
+                    getattr(args, "_full_ft_trainable_attn_geometry_tensors", 0)
+                ),
+                "ss_full_ft_frozen_attn_geometry_tensors": str(
+                    getattr(args, "_full_ft_frozen_attn_geometry_tensors", 0)
+                ),
             }
+            if extra_metadata:
+                metadata.update(extra_metadata)
 
             # Save with memory-efficient method if enabled
             if self.mem_eff_save:

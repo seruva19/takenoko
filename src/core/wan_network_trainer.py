@@ -46,6 +46,11 @@ from core.vae_training_core import VaeTrainingCore
 from reward.reward_training_core import RewardTrainingCore
 from enhancements.repa.repa_helper import RepaHelper
 from enhancements.self_flow.self_flow_helper import SelfFlowHelper
+from enhancements.motion_preservation.trainer_integration import (
+    create_motion_preservation_helper,
+    prepare_motion_preservation_helper,
+    register_motion_preservation_state_hooks,
+)
 from enhancements.manifold_consensus.helper import ManifoldConsensusHelper
 from enhancements.semanticgen.trainer_integration import (
     build_semantic_prepare_items,
@@ -1133,6 +1138,19 @@ class WanNetworkTrainer:
         if self_flow_helper is not None:
             self._register_self_flow_state_hooks(accelerator, self_flow_helper)
 
+        motion_preservation_helper = create_motion_preservation_helper(
+            args=args,
+            training_core=self.training_core,
+            config=self.config,
+            mode="lora",
+            logger=logger,
+        )
+        if motion_preservation_helper is not None:
+            register_motion_preservation_state_hooks(
+                accelerator,
+                motion_preservation_helper,
+            )
+
         dual_head_alignment_helper = None
         if getattr(args, "enable_dual_head_alignment", False):
             try:
@@ -1243,6 +1261,31 @@ class WanNetworkTrainer:
                 num_workers=args.max_data_loader_n_workers,
                 **_val_loader_kwargs,
             )
+
+        motion_preservation_helper = prepare_motion_preservation_helper(
+            helper=motion_preservation_helper,
+            args=args,
+            transformer=transformer,
+            accelerator=accelerator,
+            train_dataloader=train_dataloader,
+            network_dtype=transformer.dtype,
+            timestep_distribution=self.timestep_distribution,
+            logger=logger,
+            blocks_to_swap=blocks_to_swap,
+            network=network,
+            use_base_model_teacher=True,
+            fail_on_missing_temporal=bool(
+                getattr(args, "motion_prior_cache_only", False)
+            ),
+        )
+        if bool(getattr(args, "motion_prior_cache_only", False)):
+            logger.info(
+                "motion_prior_cache_only enabled: cache build phase finished (anchors=%d). Exiting before optimization.",
+                0
+                if motion_preservation_helper is None
+                else len(motion_preservation_helper.anchor_cache),
+            )
+            return
 
         # ========== Training Parameters ==========
         if args.max_train_epochs is not None:
@@ -2084,6 +2127,7 @@ class WanNetworkTrainer:
                 internal_guidance_helper=internal_guidance_helper,
                 self_transcendence_helper=self_transcendence_helper,
                 self_flow_helper=self_flow_helper,
+                motion_preservation_helper=motion_preservation_helper,
                 haste_helper=haste_helper,
                 contrastive_attention_helper=contrastive_attention_helper,
                 dual_model_manager=dual_model_manager,
@@ -2410,4 +2454,3 @@ class WanNetworkTrainer:
 
         accelerator.register_save_state_pre_hook(save_hook)
         accelerator.register_load_state_pre_hook(load_hook)
-

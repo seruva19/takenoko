@@ -69,6 +69,61 @@ except Exception:
     flex = flex_attention
 
 
+def _sample_motion_attention_indices(
+    length: int, count: int, *, device: torch.device
+) -> torch.Tensor:
+    if length <= 0:
+        return torch.empty((0,), dtype=torch.long, device=device)
+    if count <= 0 or count >= length:
+        return torch.arange(length, dtype=torch.long, device=device)
+    idx = torch.linspace(0, length - 1, steps=count, device=device)
+    return torch.unique(idx.round().to(torch.long), sorted=True)
+
+
+def _maybe_record_motion_attention_map(
+    module: nn.Module,
+    q: torch.Tensor,
+    k: torch.Tensor,
+) -> None:
+    if not bool(getattr(module, "_motion_record_enabled", False)):
+        return
+
+    capture_grad = bool(getattr(module, "_motion_record_capture_grad", False))
+    keep_heads = bool(getattr(module, "_motion_record_keep_heads", False))
+    max_queries = int(getattr(module, "_motion_record_max_queries", 32) or 32)
+    max_keys = int(getattr(module, "_motion_record_max_keys", 64) or 64)
+
+    q_src = q if capture_grad else q.detach()
+    k_src = k if capture_grad else k.detach()
+    q_heads = q_src.permute(0, 2, 1, 3).to(torch.float32)
+    k_heads = k_src.permute(0, 2, 1, 3).to(torch.float32)
+
+    query_idx = _sample_motion_attention_indices(
+        q_heads.shape[2],
+        max_queries,
+        device=q_heads.device,
+    )
+    key_idx = _sample_motion_attention_indices(
+        k_heads.shape[2],
+        max_keys,
+        device=k_heads.device,
+    )
+    if query_idx.numel() == 0 or key_idx.numel() == 0:
+        setattr(module, "_motion_record_attn_map", None)
+        return
+
+    q_sel = q_heads.index_select(2, query_idx)
+    k_sel = k_heads.index_select(2, key_idx)
+    scale = 1.0 / math.sqrt(max(1, q_sel.shape[-1]))
+    logits = torch.matmul(q_sel, k_sel.transpose(-1, -2)) * scale
+    attn = torch.softmax(logits, dim=-1)
+    if not keep_heads:
+        attn = attn.mean(dim=1)
+    if not capture_grad:
+        attn = attn.detach()
+    setattr(module, "_motion_record_attn_map", attn)
+
+
 def sinusoidal_embedding_1d(dim, position, use_float32=False):
     # preprocess
     assert dim % 2 == 0
@@ -545,6 +600,7 @@ class WanSelfAttention(nn.Module):
             else:
                 qkv = [q, k, v]
             del q, k, v
+            _maybe_record_motion_attention_map(self, qkv[0], qkv[1])
             routed_x = maybe_route_history_attention(
                 q=qkv[0],
                 k=qkv[1],

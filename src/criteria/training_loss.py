@@ -144,6 +144,50 @@ class LossComponents:
         Effective scheduled temporal-delta weight used this step.
     self_flow_ema_drift: Optional[torch.Tensor]
         Mean EMA shadow drift before the latest teacher update, when available.
+    motion_preservation_loss: Optional[torch.Tensor]
+        Replay loss used to preserve base motion priors during full fine-tuning.
+    motion_preservation_weight: Optional[torch.Tensor]
+        Effective motion-preservation multiplier after warmup scheduling.
+    motion_preservation_sigma: Optional[torch.Tensor]
+        Sigma value used for the sampled replay anchor.
+    motion_preservation_anchor_source: Optional[torch.Tensor]
+        1.0 for synthetic anchors, 0.0 for dataset anchors.
+    motion_preservation_temporal_fallback: Optional[torch.Tensor]
+        1.0 when temporal replay fell back to full-output matching for this anchor.
+    motion_attention_preservation_loss: Optional[torch.Tensor]
+        Auxiliary attention-distribution replay loss during motion preservation.
+    motion_preservation_anchor_frames: Optional[torch.Tensor]
+        Number of frames in the sampled replay anchor.
+    motion_preservation_total_to_task_ratio: Optional[torch.Tensor]
+        Ratio between total replay loss magnitude and the base task loss magnitude.
+    motion_preservation_apply_rate: Optional[torch.Tensor]
+        Fraction of replay invocations that produced an actual replay loss.
+    motion_preservation_schedule_skip_rate: Optional[torch.Tensor]
+        Fraction of replay invocations skipped by the replay interval/probability schedule.
+    motion_preservation_zero_weight_skip_rate: Optional[torch.Tensor]
+        Fraction of replay invocations skipped because the warmup-scaled weight was zero.
+    motion_preservation_no_anchor_skip_rate: Optional[torch.Tensor]
+        Fraction of replay invocations skipped because no anchor cache was available.
+    motion_preservation_invalid_anchor_skip_rate: Optional[torch.Tensor]
+        Fraction of replay invocations skipped because the selected anchor failed validation.
+    motion_preservation_temporal_fallback_rate: Optional[torch.Tensor]
+        Fraction of applied replay steps that fell back from temporal to full-output matching.
+    motion_preservation_attention_apply_rate: Optional[torch.Tensor]
+        Fraction of applied replay steps that also applied attention-preservation loss.
+    motion_preservation_anchor_cache_size: Optional[torch.Tensor]
+        Number of cached replay anchors currently available.
+    motion_preservation_temporal_anchor_ratio: Optional[torch.Tensor]
+        Fraction of cached replay anchors that contain multiple frames.
+    motion_preservation_synthetic_anchor_ratio: Optional[torch.Tensor]
+        Fraction of cached replay anchors built from synthetic motion rather than dataset latents.
+    ewc_loss: Optional[torch.Tensor]
+        Elastic Weight Consolidation penalty after applying ewc_lambda.
+    ewc_penalty_raw: Optional[torch.Tensor]
+        Raw unscaled EWC penalty before applying ewc_lambda.
+    ewc_used_tensors: Optional[torch.Tensor]
+        Number of trainable parameter tensors contributing to the EWC penalty.
+    ewc_skipped_tensors: Optional[torch.Tensor]
+        Number of EWC tensors skipped due to device mismatch.
     manifold_consensus_loss: Optional[torch.Tensor]
         Auxiliary multi-view consensus loss on middle-block hidden states.
     manifold_consensus_cosine_similarity: Optional[torch.Tensor]
@@ -386,6 +430,28 @@ class LossComponents:
     self_flow_lambda_temporal: Optional[torch.Tensor] = None
     self_flow_lambda_delta: Optional[torch.Tensor] = None
     self_flow_ema_drift: Optional[torch.Tensor] = None
+    motion_preservation_loss: Optional[torch.Tensor] = None
+    motion_preservation_weight: Optional[torch.Tensor] = None
+    motion_preservation_sigma: Optional[torch.Tensor] = None
+    motion_preservation_anchor_source: Optional[torch.Tensor] = None
+    motion_preservation_temporal_fallback: Optional[torch.Tensor] = None
+    motion_attention_preservation_loss: Optional[torch.Tensor] = None
+    motion_preservation_anchor_frames: Optional[torch.Tensor] = None
+    motion_preservation_total_to_task_ratio: Optional[torch.Tensor] = None
+    motion_preservation_apply_rate: Optional[torch.Tensor] = None
+    motion_preservation_schedule_skip_rate: Optional[torch.Tensor] = None
+    motion_preservation_zero_weight_skip_rate: Optional[torch.Tensor] = None
+    motion_preservation_no_anchor_skip_rate: Optional[torch.Tensor] = None
+    motion_preservation_invalid_anchor_skip_rate: Optional[torch.Tensor] = None
+    motion_preservation_temporal_fallback_rate: Optional[torch.Tensor] = None
+    motion_preservation_attention_apply_rate: Optional[torch.Tensor] = None
+    motion_preservation_anchor_cache_size: Optional[torch.Tensor] = None
+    motion_preservation_temporal_anchor_ratio: Optional[torch.Tensor] = None
+    motion_preservation_synthetic_anchor_ratio: Optional[torch.Tensor] = None
+    ewc_loss: Optional[torch.Tensor] = None
+    ewc_penalty_raw: Optional[torch.Tensor] = None
+    ewc_used_tensors: Optional[torch.Tensor] = None
+    ewc_skipped_tensors: Optional[torch.Tensor] = None
     manifold_consensus_loss: Optional[torch.Tensor] = None
     manifold_consensus_cosine_similarity: Optional[torch.Tensor] = None
     manifold_consensus_prediction_mse: Optional[torch.Tensor] = None
@@ -812,6 +878,7 @@ class TrainingLossComputer:
         internal_guidance_helper: Optional[Any] = None,
         self_transcendence_helper: Optional[Any] = None,
         self_flow_helper: Optional[Any] = None,
+        motion_preservation_helper: Optional[Any] = None,
         self_flow_context: Optional[Any] = None,
         drifting_helper: Optional[Any] = None,
         global_step: Optional[int] = None,
@@ -1549,6 +1616,24 @@ class TrainingLossComputer:
         self_flow_lambda_temporal_value: Optional[torch.Tensor] = None
         self_flow_lambda_delta_value: Optional[torch.Tensor] = None
         self_flow_ema_drift_value: Optional[torch.Tensor] = None
+        motion_preservation_loss_value: Optional[torch.Tensor] = None
+        motion_preservation_weight_value: Optional[torch.Tensor] = None
+        motion_preservation_sigma_value: Optional[torch.Tensor] = None
+        motion_preservation_anchor_source_value: Optional[torch.Tensor] = None
+        motion_preservation_temporal_fallback_value: Optional[torch.Tensor] = None
+        motion_attention_preservation_loss_value: Optional[torch.Tensor] = None
+        motion_preservation_anchor_frames_value: Optional[torch.Tensor] = None
+        motion_preservation_total_to_task_ratio_value: Optional[torch.Tensor] = None
+        motion_preservation_apply_rate_value: Optional[torch.Tensor] = None
+        motion_preservation_schedule_skip_rate_value: Optional[torch.Tensor] = None
+        motion_preservation_zero_weight_skip_rate_value: Optional[torch.Tensor] = None
+        motion_preservation_no_anchor_skip_rate_value: Optional[torch.Tensor] = None
+        motion_preservation_invalid_anchor_skip_rate_value: Optional[torch.Tensor] = None
+        motion_preservation_temporal_fallback_rate_value: Optional[torch.Tensor] = None
+        motion_preservation_attention_apply_rate_value: Optional[torch.Tensor] = None
+        motion_preservation_anchor_cache_size_value: Optional[torch.Tensor] = None
+        motion_preservation_temporal_anchor_ratio_value: Optional[torch.Tensor] = None
+        motion_preservation_synthetic_anchor_ratio_value: Optional[torch.Tensor] = None
         if getattr(args, "enable_self_flow", False) and self_flow_helper is not None:
             try:
                 self_flow_loss = self_flow_helper.compute_loss(
@@ -1597,6 +1682,110 @@ class TrainingLossComputer:
                     self_flow_ema_drift_value = loss.detach().new_tensor(float(ema_drift))
             except Exception as e:
                 logger.warning("Self-Flow loss computation failed: %s", e)
+
+        # ---- Optional Motion Preservation Loss ----
+        if (
+            getattr(args, "motion_preservation", False)
+            and motion_preservation_helper is not None
+            and transformer is not None
+        ):
+            try:
+                motion_preservation_loss = motion_preservation_helper.compute_loss(
+                    accelerator,
+                    transformer,
+                    network_dtype,
+                    global_step=int(global_step or 0),
+                    base_task_loss=loss,
+                )
+                if motion_preservation_loss is not None:
+                    loss = loss + motion_preservation_loss
+                    motion_preservation_loss_value = (
+                        motion_preservation_helper.last_loss
+                    )
+                    motion_preservation_weight_value = (
+                        motion_preservation_helper.last_weight
+                    )
+                    motion_preservation_sigma_value = (
+                        motion_preservation_helper.last_sigma
+                    )
+                    motion_preservation_anchor_source_value = (
+                        motion_preservation_helper.last_anchor_source
+                    )
+                    motion_preservation_temporal_fallback_value = (
+                        motion_preservation_helper.last_temporal_fallback
+                    )
+                    motion_attention_preservation_loss_value = (
+                        motion_preservation_helper.last_attention_loss
+                    )
+                    motion_preservation_anchor_frames_value = (
+                        motion_preservation_helper.last_anchor_frames
+                    )
+                    motion_preservation_total_to_task_ratio_value = (
+                        motion_preservation_helper.last_total_to_task_ratio
+                    )
+            except Exception as e:
+                logger.warning("Motion preservation loss computation failed: %s", e)
+            try:
+                snapshot = motion_preservation_helper.health.as_dict()
+                metric_device = loss.device
+                metric_dtype = loss.dtype
+                motion_preservation_apply_rate_value = torch.tensor(
+                    float(snapshot.get("apply_rate", 0.0)),
+                    device=metric_device,
+                    dtype=metric_dtype,
+                )
+                motion_preservation_schedule_skip_rate_value = torch.tensor(
+                    float(snapshot.get("schedule_skip_rate", 0.0)),
+                    device=metric_device,
+                    dtype=metric_dtype,
+                )
+                motion_preservation_zero_weight_skip_rate_value = torch.tensor(
+                    float(snapshot.get("zero_weight_skip_rate", 0.0)),
+                    device=metric_device,
+                    dtype=metric_dtype,
+                )
+                motion_preservation_no_anchor_skip_rate_value = torch.tensor(
+                    float(snapshot.get("no_anchor_skip_rate", 0.0)),
+                    device=metric_device,
+                    dtype=metric_dtype,
+                )
+                motion_preservation_invalid_anchor_skip_rate_value = torch.tensor(
+                    float(snapshot.get("invalid_anchor_skip_rate", 0.0)),
+                    device=metric_device,
+                    dtype=metric_dtype,
+                )
+                motion_preservation_temporal_fallback_rate_value = torch.tensor(
+                    float(snapshot.get("temporal_fallback_rate", 0.0)),
+                    device=metric_device,
+                    dtype=metric_dtype,
+                )
+                motion_preservation_attention_apply_rate_value = torch.tensor(
+                    float(snapshot.get("attention_apply_rate", 0.0)),
+                    device=metric_device,
+                    dtype=metric_dtype,
+                )
+                motion_preservation_anchor_cache_size_value = torch.tensor(
+                    float(snapshot.get("anchor_cache_size", 0.0)),
+                    device=metric_device,
+                    dtype=metric_dtype,
+                )
+                motion_preservation_temporal_anchor_ratio_value = torch.tensor(
+                    float(snapshot.get("temporal_anchor_ratio", 0.0)),
+                    device=metric_device,
+                    dtype=metric_dtype,
+                )
+                anchor_cache_size = max(
+                    1.0,
+                    float(snapshot.get("anchor_cache_size", 0.0)),
+                )
+                motion_preservation_synthetic_anchor_ratio_value = torch.tensor(
+                    float(snapshot.get("synthetic_anchor_count", 0.0))
+                    / anchor_cache_size,
+                    device=metric_device,
+                    dtype=metric_dtype,
+                )
+            except Exception as e:
+                logger.debug("Motion preservation health snapshot failed: %s", e)
 
         # ---- Optional Drifting Loss ----
         drifting_loss_value: Optional[torch.Tensor] = None
@@ -2605,6 +2794,24 @@ class TrainingLossComputer:
             self_flow_lambda_temporal=self_flow_lambda_temporal_value,
             self_flow_lambda_delta=self_flow_lambda_delta_value,
             self_flow_ema_drift=self_flow_ema_drift_value,
+            motion_preservation_loss=motion_preservation_loss_value,
+            motion_preservation_weight=motion_preservation_weight_value,
+            motion_preservation_sigma=motion_preservation_sigma_value,
+            motion_preservation_anchor_source=motion_preservation_anchor_source_value,
+            motion_preservation_temporal_fallback=motion_preservation_temporal_fallback_value,
+            motion_attention_preservation_loss=motion_attention_preservation_loss_value,
+            motion_preservation_anchor_frames=motion_preservation_anchor_frames_value,
+            motion_preservation_total_to_task_ratio=motion_preservation_total_to_task_ratio_value,
+            motion_preservation_apply_rate=motion_preservation_apply_rate_value,
+            motion_preservation_schedule_skip_rate=motion_preservation_schedule_skip_rate_value,
+            motion_preservation_zero_weight_skip_rate=motion_preservation_zero_weight_skip_rate_value,
+            motion_preservation_no_anchor_skip_rate=motion_preservation_no_anchor_skip_rate_value,
+            motion_preservation_invalid_anchor_skip_rate=motion_preservation_invalid_anchor_skip_rate_value,
+            motion_preservation_temporal_fallback_rate=motion_preservation_temporal_fallback_rate_value,
+            motion_preservation_attention_apply_rate=motion_preservation_attention_apply_rate_value,
+            motion_preservation_anchor_cache_size=motion_preservation_anchor_cache_size_value,
+            motion_preservation_temporal_anchor_ratio=motion_preservation_temporal_anchor_ratio_value,
+            motion_preservation_synthetic_anchor_ratio=motion_preservation_synthetic_anchor_ratio_value,
             **det_component_values,
             drifting_loss=drifting_loss_value,
             drifting_drift_norm_mean=drifting_drift_norm_mean_value,

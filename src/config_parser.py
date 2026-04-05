@@ -449,7 +449,60 @@ def create_args_from_config(
     args = apply_q_galore_config(args, config, logger)
     args.ivon_ess = config.get("ivon_ess")
     args.learning_rate = config.get("learning_rate", 5e-5)
+    from enhancements.motion_preservation.config_parser import (
+        parse_motion_preservation_config,
+    )
+
+    parse_motion_preservation_config(config, args, logger)
+    args.save_comfy_format = bool(config.get("save_comfy_format", False))
+    args.save_merged_checkpoint = bool(config.get("save_merged_checkpoint", False))
     args.max_grad_norm = config.get("max_grad_norm", 1.0)
+
+    if args.save_merged_checkpoint:
+        args.save_comfy_format = True
+        if not getattr(args, "dit", None):
+            logger.warning(
+                "save_merged_checkpoint is enabled but dit is empty; disabling merged checkpoint export."
+            )
+            args.save_merged_checkpoint = False
+        elif str(args.dit).startswith("http://") or str(args.dit).startswith("https://"):
+            logger.warning(
+                "save_merged_checkpoint currently requires a local dit checkpoint path; disabling merged checkpoint export for URL source %s.",
+                args.dit,
+            )
+            args.save_merged_checkpoint = False
+    if args.motion_prior_cache_only and not args.motion_preservation:
+        logger.warning(
+            "motion_prior_cache_only requires motion_preservation; enabling motion_preservation for cache build."
+        )
+        args.motion_preservation = True
+    if args.motion_attention_preservation and not args.motion_preservation:
+        logger.warning(
+            "motion_attention_preservation requires motion_preservation anchors. Disabling it."
+        )
+        args.motion_attention_preservation = False
+    if args.motion_attention_preservation and bool(
+        getattr(args, "gradient_checkpointing", False)
+    ):
+        logger.warning(
+            "motion_attention_preservation with gradient_checkpointing enabled can increase runtime and memory usage."
+        )
+    if (
+        args.motion_preservation_separate_backward
+        and bool(config.get("fused_backward_pass", False))
+        and not args.motion_preservation_fused_defer_step
+    ):
+        logger.warning(
+            "motion_preservation_separate_backward with fused_backward_pass requires motion_preservation_fused_defer_step; disabling separate backward."
+        )
+        args.motion_preservation_separate_backward = False
+    if args.motion_preservation_fused_defer_step and not bool(
+        config.get("fused_backward_pass", False)
+    ):
+        logger.warning(
+            "motion_preservation_fused_defer_step is set without fused_backward_pass; ignoring it."
+        )
+        args.motion_preservation_fused_defer_step = False
 
     # LR Scheduler settings
     args.lr_scheduler = config.get("lr_scheduler", "constant")

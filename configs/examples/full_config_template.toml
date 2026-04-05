@@ -374,6 +374,303 @@ q_galore_stochastic_round = false
 # Learning rate
 learning_rate = 2.0e-5
 
+# =============================================================================
+# ⚠️ MOTION PRESERVATION CONTROLS
+# =============================================================================
+#
+# Scope: full FT only.
+# Freeze transformer blocks [0, N) before building optimizer param groups.
+# 0 disables early-block freezing.
+freeze_early_blocks = 0
+
+# Scope: full FT only.
+# Additional block indices/ranges to freeze.
+# Accepts:
+# - a comma-separated string, e.g. "0-7,10,12-15"
+# - or a TOML array of strings, e.g. ["0-7", "10", "12-15"]
+# Empty / null disables explicit extra freezing.
+# freeze_block_indices = []
+
+# Scope: full FT only.
+# Per-block LR scale rules.
+# Format per entry:
+# - "start-end:scale"
+# - "start-:scale"   (open-ended range)
+# - "idx:scale"
+# Example:
+# block_lr_scales = ["0-11:0.1", "12-23:0.4", "24-:1.0"]
+# A scale of 0.0 effectively freezes matching blocks.
+# block_lr_scales = []
+
+# Scope: full FT only.
+# LR scale for non-transformer-block parameters.
+# 1.0 keeps the base learning_rate.
+# 0.0 freezes non-block parameters.
+non_block_lr_scale = 1.0
+
+# Scope: full FT only.
+# Additional LR scale for attention geometry parameters:
+# - self_attn.q / self_attn.k / self_attn.norm_q / self_attn.norm_k
+# - cross_attn.q / cross_attn.k / cross_attn.norm_q / cross_attn.norm_k
+# Effective LR = learning_rate * block_or_non_block_scale * attn_geometry_lr_scale
+# 1.0 keeps inherited LR, 0.0 freezes only geometry params.
+attn_geometry_lr_scale = 1.0
+
+# Scope: full FT only.
+# Freeze attention geometry parameters entirely.
+# This overrides any positive attn_geometry_lr_scale.
+freeze_attn_geometry = false
+
+# Scope: LoRA + full FT.
+# Enable replay-style motion preservation.
+# In full finetuning this compares the trainable transformer against cached base
+# predictions. In LoRA/network training this uses the base model as teacher
+# (adapter multiplier forced to 0) and the adapter-enabled model as student.
+motion_preservation = false
+
+# Scope: LoRA + full FT.
+# Fail fast on malformed replay anchors or incompatible replay state instead of
+# silently skipping them. Disable only if you explicitly want best-effort runs.
+motion_preservation_strict_mode = true
+
+# Scope: LoRA + full FT.
+# Multiplier applied to the replay loss before adding it to the main objective.
+# 0.0 disables the effect even if anchors are built.
+motion_preservation_multiplier = 0.0
+
+# Scope: LoRA + full FT.
+# Replay loss mode:
+# - "temporal": match first-order frame deltas (and optional second-order deltas)
+# - "full": match the full predicted latent output tensor directly
+motion_preservation_mode = "temporal"
+
+# Scope: LoRA + full FT.
+# Number of cached motion anchors to build before training starts.
+# Each anchor stores base-model predictions and replay inputs in memory.
+# 0 disables anchor caching unless auto sizing is enabled below.
+motion_preservation_anchor_cache_size = 0
+
+# Scope: LoRA + full FT.
+# Automatically choose anchor cache size from the train dataloader length.
+# When enabled and motion_preservation_anchor_cache_size <= 0, the cache size is:
+# clamp(ceil(len(train_dataloader) * motion_preservation_anchor_cache_auto_ratio),
+#       motion_preservation_anchor_cache_auto_min,
+#       motion_preservation_anchor_cache_auto_max)
+motion_preservation_anchor_cache_auto = false
+
+# Scope: LoRA + full FT.
+# Ratio of training samples to use for anchor cache when auto sizing is enabled.
+# 0.2 means 20% of training samples will be used for anchor cache.
+motion_preservation_anchor_cache_auto_ratio = 0.2
+
+# Scope: LoRA + full FT.
+# Minimum number of anchors to use when auto sizing is enabled.
+motion_preservation_anchor_cache_auto_min = 8
+
+# Scope: LoRA + full FT.
+# Maximum number of anchors to use when auto sizing is enabled.
+motion_preservation_anchor_cache_auto_max = 256
+
+# Scope: LoRA + full FT.
+# Anchor source for replay cache:
+# - "dataset": use real training latents as anchors
+# - "synthetic": build temporally-correlated synthetic anchors
+# - "hybrid": mix dataset and synthetic anchors
+motion_preservation_anchor_source = "synthetic"
+
+# Scope: LoRA + full FT.
+# Number of frames to generate for synthetic anchors.
+# Must be >= 2. Ignored for pure dataset anchors.
+motion_preservation_synthetic_frames = 8
+
+# Scope: LoRA + full FT.
+# Temporal AR(1) correlation for synthetic anchor generation.
+# 0.0 is independent noise, values near 1.0 produce smoother motion evolution.
+motion_preservation_synthetic_temporal_corr = 0.92
+
+# Scope: LoRA + full FT.
+# For hybrid anchors, fraction of anchors drawn from the real dataset.
+# 0.0 means all synthetic, 1.0 means all dataset anchors.
+motion_preservation_synthetic_dataset_mix = 0.25
+
+# Scope: LoRA + full FT.
+# Seed synthetic motion from the first real latent frame when available.
+# This preserves semantic structure while the synthetic sequence evolves.
+motion_preservation_synthetic_content_seeded = true
+
+# Scope: LoRA + full FT.
+# Replay loss warmup in optimizer steps.
+# The motion multiplier ramps linearly from 0 to motion_preservation_multiplier.
+motion_preservation_warmup_steps = 0
+
+# Scope: LoRA + full FT.
+# Replay scheduling interval in optimizer steps.
+# Used only when motion_preservation_probability is not set.
+motion_preservation_interval = 1
+
+# Scope: LoRA + full FT.
+# Emit an aggregated replay-health summary every N replay invocations/skips.
+# 0 disables periodic summary logging.
+motion_preservation_health_log_interval = 100
+
+# Scope: LoRA + full FT.
+# Optional replay probability per optimizer step in [0, 1].
+# When set, this overrides motion_preservation_interval.
+# motion_preservation_probability = 0.5
+
+# Scope: LoRA + full FT.
+# Number of replay sigmas to cache for each anchor.
+# 1 means a single replay target sampled from the active training schedule.
+# Values > 1 build evenly-spaced sigma targets between sigma_min and sigma_max.
+motion_preservation_num_sigmas = 1
+
+# Scope: LoRA + full FT.
+# Optional explicit sigma list in [0, 1], e.g. [0.25, 0.5, 0.75].
+# When set, this overrides motion_preservation_num_sigmas / sigma_min / sigma_max.
+# motion_preservation_sigma_values = []
+
+# Scope: LoRA + full FT.
+# Min sigma used when motion_preservation_num_sigmas > 1.
+motion_preservation_sigma_min = 0.2
+
+# Scope: LoRA + full FT.
+# Max sigma used when motion_preservation_num_sigmas > 1.
+motion_preservation_sigma_max = 0.8
+
+# Scope: LoRA + full FT.
+# Replay sigma sampling mode when multiple sigmas are cached:
+# - "uniform": choose each cached sigma equally
+# - "logsnr": bias toward mid-noise replay points
+motion_preservation_sigma_sampling = "uniform"
+
+# Scope: LoRA + full FT.
+# Extra exponent applied to sigma sampling weights when using "logsnr".
+# Values > 1 sharpen the preference; values in (0, 1) flatten it.
+motion_preservation_sigma_sampling_power = 1.0
+
+# Scope: LoRA + full FT.
+# Optional second-order temporal replay weight.
+# Only used in motion_preservation_mode = "temporal" with at least 3 frames.
+motion_preservation_second_order_weight = 0.0
+
+# Scope: LoRA + full FT.
+# Optional path for a disk-backed motion anchor cache.
+# When set, built anchors are saved here and reused on later runs if the
+# cache signature matches the current checkpoint / dataset / replay settings.
+# motion_preservation_anchor_cache_path = "cache/motion_anchors.pt"
+
+# Scope: LoRA + full FT.
+# Force rebuilding the motion anchor cache even if a cache file exists.
+motion_preservation_anchor_cache_rebuild = false
+
+# Scope: LoRA + full FT.
+# Optional teacher chunk size for replay loss when teacher targets live on CPU.
+# This reduces peak VRAM by streaming teacher targets in frame chunks.
+# 0 disables chunked replay-loss evaluation.
+motion_preservation_teacher_chunk_frames = 0
+
+# Scope: full FT only.
+# Compute replay loss in a separate backward pass after the main task loss.
+motion_preservation_separate_backward = false
+
+# Scope: full FT only.
+# When using fused_backward_pass together with motion_preservation_separate_backward,
+# defer fused optimizer stepping until the replay backward pass runs.
+motion_preservation_fused_defer_step = false
+
+# Scope: LoRA + full FT.
+# Build the motion-prior cache and exit before optimization starts.
+# Useful for preparing reusable replay caches ahead of large runs.
+motion_prior_cache_only = false
+
+# Scope: LoRA + full FT.
+# Require at least one multi-frame anchor in the replay cache.
+# If enabled and only single-frame anchors are available, replay is disabled
+# unless motion_prior_cache_only is active, in which case config loading fails.
+motion_prior_require_temporal = false
+
+# Scope: LoRA + full FT.
+# Preserve self-attention routing in addition to output-space motion replay.
+# This records sampled attention maps during anchor-cache build and matches them
+# during replay steps.
+motion_attention_preservation = false
+
+# Scope: LoRA + full FT.
+# Weight for attention-preservation replay loss.
+motion_attention_preservation_weight = 0.0
+
+# Scope: LoRA + full FT.
+# Attention replay loss type:
+# - "kl": KL divergence between teacher and student attention distributions
+# - "mse": mean squared error on normalized attention maps
+motion_attention_preservation_loss = "kl"
+
+# Scope: LoRA + full FT.
+# Number of sampled query positions per attention module for replay matching.
+motion_attention_preservation_queries = 32
+
+# Scope: LoRA + full FT.
+# Number of sampled key positions per attention module for replay matching.
+motion_attention_preservation_keys = 64
+
+# Scope: LoRA + full FT.
+# Preserve per-head attention distributions instead of averaging heads first.
+motion_attention_preservation_per_head = false
+
+# Scope: LoRA + full FT.
+# Temperature applied before normalizing attention distributions.
+motion_attention_preservation_temperature = 1.0
+
+# Scope: LoRA + full FT.
+# Use symmetric KL instead of teacher->student KL only.
+motion_attention_preservation_symmetric_kl = false
+
+# Scope: LoRA + full FT.
+# Optional transformer block filter for attention replay.
+# Accepts a comma-separated string such as "0-11,18,20-23".
+# motion_attention_preservation_blocks = "0-11"
+
+# Scope: full FT only.
+# Elastic Weight Consolidation (EWC) regularization.
+# This estimates Fisher information on the base objective before training and
+# penalizes drifting away from important pretrained parameters.
+ewc_lambda = 0.0
+
+# Scope: full FT only.
+# Number of batches used to estimate Fisher statistics.
+ewc_num_batches = 8
+
+# Scope: full FT only.
+# EWC parameter target set:
+# - "attn_norm_bias": q/k bias and q/k norm weights only
+# - "attn_geometry": all attention geometry parameters
+# - "all_trainable": all trainable parameters, capped by ewc_max_param_tensors
+ewc_target = "attn_norm_bias"
+
+# Scope: full FT only.
+# Maximum number of parameter tensors tracked by EWC.
+# 0 disables capping.
+ewc_max_param_tensors = 256
+
+# Scope: full FT only.
+# Optional disk cache for Fisher / EWC statistics.
+# ewc_cache_path = "cache/ewc_stats.pt"
+
+# Scope: full FT only.
+# Force rebuilding the EWC cache even if the cache file exists.
+ewc_cache_rebuild = false
+
+# Save checkpoints with ComfyUI-style Wan key names by prefixing transformer
+# tensors with "model.diffusion_model.".
+# This is only an export-format change; training itself is unaffected.
+save_comfy_format = false
+
+# Save a merged checkpoint that contains the finetuned Wan transformer weights
+# plus any non-overlapping tensors from the original base checkpoint in `dit`.
+# This is useful when the source checkpoint contains extra keys alongside the
+# transformer, and implies save_comfy_format = true.
+save_merged_checkpoint = false
+
 # Max gradient norm, 0 for no clipping
 max_grad_norm = 1.0
 

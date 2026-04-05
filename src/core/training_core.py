@@ -306,6 +306,8 @@ class TrainingCore:
         self.self_transcendence_helper: Optional[Any] = None
         # Self-Flow helper (set in run_training_loop when enabled)
         self.self_flow_helper: Optional[Any] = None
+        # Motion-preservation helper (set in run_training_loop when enabled)
+        self.motion_preservation_helper: Optional[Any] = None
         # Manifold-consensus helper (set in run_training_loop when enabled)
         self.manifold_consensus_helper: Optional[Any] = None
 
@@ -1416,6 +1418,7 @@ class TrainingCore:
         internal_guidance_helper: Optional[Any] = None,
         self_transcendence_helper: Optional[Any] = None,
         self_flow_helper: Optional[Any] = None,
+        motion_preservation_helper: Optional[Any] = None,
         haste_helper: Optional[Any] = None,
         contrastive_attention_helper: Optional[Any] = None,
         controlnet: Optional[Any] = None,
@@ -1430,6 +1433,7 @@ class TrainingCore:
         self.internal_guidance_helper = internal_guidance_helper
         self.self_transcendence_helper = self_transcendence_helper
         self.self_flow_helper = self_flow_helper
+        self.motion_preservation_helper = motion_preservation_helper
         self.manifold_consensus_helper = manifold_consensus_helper
         self.initialize_stable_velocity_target(args)
         ortholora_helper = (
@@ -2813,6 +2817,7 @@ class TrainingCore:
                                 internal_guidance_helper=internal_guidance_helper,
                                 self_transcendence_helper=self.self_transcendence_helper,
                                 self_flow_helper=self.self_flow_helper,
+                                motion_preservation_helper=self.motion_preservation_helper,
                                 self_flow_context=self_flow_context,
                                 drifting_helper=self.drifting_helper,
                                 haste_helper=haste_helper,
@@ -3315,6 +3320,7 @@ class TrainingCore:
                                         crepa_helper=crepa_helper,
                                         haste_helper=haste_helper,
                                         self_flow_helper=self.self_flow_helper,
+                                        motion_preservation_helper=self.motion_preservation_helper,
                                         self_flow_context=self_flow_context,
                                         contrastive_attention_helper=contrastive_attention_helper,
                                         transition_loss_context=transition_loss_context,
@@ -3372,6 +3378,7 @@ class TrainingCore:
                             crepa_helper=crepa_helper,
                             haste_helper=haste_helper,
                             self_flow_helper=self.self_flow_helper,
+                            motion_preservation_helper=self.motion_preservation_helper,
                             self_flow_context=self_flow_context,
                             contrastive_attention_helper=contrastive_attention_helper,
                             transition_loss_context=transition_loss_context,
