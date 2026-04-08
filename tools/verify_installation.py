@@ -516,13 +516,13 @@ def test_config_loading():
     print("\nTesting default configuration loading...")
 
     try:
-        import toml
+        import tomllib
 
         config_path = "configs/examples/full_config_template.toml"
 
         if os.path.exists(config_path):
-            with open(config_path, "r", encoding="utf-8") as f:
-                config = toml.load(f)
+            with open(config_path, "rb") as f:
+                config = tomllib.load(f)
             print(f"🟢 Configuration loaded from {config_path}")
             return True
         else:
