@@ -58,7 +58,8 @@ dependencies = [
   "torchvision>=0.24.1,<0.25",
   "tqdm==4.67.1",
   "transformers==4.46.3",
-  "triton-windows<=3.2.0.post19",
+  "triton-windows<=3.2.0.post19; sys_platform == 'win32'",
+  "triton>=3.2.0; sys_platform == 'linux'",
   "voluptuous==0.15.2",
 
 ]
