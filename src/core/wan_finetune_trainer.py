@@ -13,6 +13,7 @@ import random
 from multiprocessing import Value
 from typing import Any, Dict, List, Optional
 import torch
+import torch.utils.data
 from tqdm import tqdm
 from accelerate.utils import set_seed
 from accelerate import Accelerator
@@ -599,6 +600,8 @@ class WanFinetuneTrainer:
             int(motion_preservation_summary.get("geometry_frozen_tensors", 0)),
         )
 
+        dit_group_count = len(params_to_optimize)
+
         # Conditionally add T5 text encoder parameters
         if getattr(args, "finetune_text_encoder", False) and text_encoder is not None:
             t5_params = list(text_encoder.named_parameters())
@@ -623,7 +626,7 @@ class WanFinetuneTrainer:
         # Count transformer parameters
         dit_params_count = sum(
             p.numel()
-            for group in params_to_optimize[: len(lr_groups)]
+            for group in params_to_optimize[:dit_group_count]
             for p in group["params"]
         )
         logger.info(f"DiT transformer parameters being trained: {dit_params_count:,}")
@@ -723,6 +726,7 @@ class WanFinetuneTrainer:
         self_flow_helper: Optional[Any] = None,
         haste_helper: Optional[Any] = None,
         contrastive_attention_helper: Optional[Any] = None,
+        internal_guidance_helper: Optional[Any] = None,
         vae: Optional[Any] = None,
         global_step: Optional[int] = None,
         current_epoch: Optional[Any] = None,
@@ -1503,8 +1507,6 @@ class WanFinetuneTrainer:
             val_collator = collator_class(
                 val_current_epoch, val_current_step, val_ds_for_collator
             )
-
-            import torch.utils.data
 
             val_dataloader = torch.utils.data.DataLoader(
                 val_dataset_group,
@@ -2526,7 +2528,7 @@ class WanFinetuneTrainer:
         # Calculate total steps for progress bar
         total_steps = (
             args.max_train_epochs * len(train_dataloader)
-            if hasattr(args, "max_train_epochs")
+            if getattr(args, "max_train_epochs", None) is not None
             else len(train_dataloader)
         )
         progress_bar = tqdm(
@@ -2613,6 +2615,7 @@ class WanFinetuneTrainer:
                         self_flow_helper=self_flow_helper,
                         haste_helper=haste_helper,
                         contrastive_attention_helper=contrastive_attention_helper,
+                        internal_guidance_helper=internal_guidance_helper,
                         vae=vae,
                         global_step=global_step,
                         current_epoch=epoch + 1,
