@@ -1405,6 +1405,28 @@ def create_args_from_config(
     # None disables bucketing; set to >=2 to enable
     args.num_timestep_buckets = config.get("num_timestep_buckets")
 
+    args.enable_hfato = bool(config.get("enable_hfato", False))
+    hfato_ratio = float(config.get("hfato_downsample_ratio", 0.5))
+    if not (0.0 < hfato_ratio < 1.0):
+        raise ValueError(
+            f"hfato_downsample_ratio must be in (0, 1), got {hfato_ratio}"
+        )
+    args.hfato_downsample_ratio = hfato_ratio
+    hfato_interp = str(config.get("hfato_interpolation", "bilinear")).lower()
+    allowed_hfato_modes = {"bilinear", "bicubic", "area", "nearest"}
+    if hfato_interp not in allowed_hfato_modes:
+        raise ValueError(
+            f"hfato_interpolation must be one of {sorted(allowed_hfato_modes)},"
+            f" got {hfato_interp!r}"
+        )
+    args.hfato_interpolation = hfato_interp
+    hfato_weight = float(config.get("hfato_weight", 1.0))
+    if not (0.0 <= hfato_weight <= 1.0):
+        raise ValueError(
+            f"hfato_weight must be in [0, 1], got {hfato_weight}"
+        )
+    args.hfato_weight = hfato_weight
+
     # Dispersive Loss Regularization settings
     args.enable_dispersive_loss = config.get("enable_dispersive_loss", False)
     args.dispersive_loss_lambda = config.get("dispersive_loss_lambda", 0.25)

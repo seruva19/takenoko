@@ -2059,6 +2059,22 @@ mixflow_time_dist_shift = 1.0
 mixflow_log_every_n_steps = 0
 
 # =============================================================================
+# ⚠️ HFATO SETTINGS
+# =============================================================================
+
+# Enable HFATO x0-reconstruction objective (replaces or mixes with FM loss).
+enable_hfato = false
+
+# DU ratio, strictly in (0, 1).
+hfato_downsample_ratio = 0.5
+
+# Interpolation mode for DU: "bilinear", "bicubic", "area", or "nearest".
+hfato_interpolation = "bilinear"
+
+# 1.0 = replace FM with HFATO. Values in [0, 1) give a convex mix (hfato_weight * HFATO + (1 - hfato_weight) * FM).
+hfato_weight = 1.0
+
+# =============================================================================
 # ⚠️ DISPERSIVE LOSS SETTINGS
 # =============================================================================
 

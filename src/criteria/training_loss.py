@@ -410,6 +410,7 @@ class LossComponents:
 
     total_loss: torch.Tensor
     base_loss: Optional[torch.Tensor] = None
+    hfato_loss: Optional[torch.Tensor] = None
     dop_loss: Optional[torch.Tensor] = None
     blank_prompt_loss: Optional[torch.Tensor] = None
     dispersive_loss: Optional[torch.Tensor] = None

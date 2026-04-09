@@ -132,6 +132,10 @@ from scheduling.timestep_utils import (
 )
 from core.validation_core import ValidationCore
 from criteria.training_loss import TrainingLossComputer
+from criteria.hfato_loss import (
+    build_hfato_noisy_input,
+    compute_hfato_x0_reconstruction_loss,
+)
 from core.loi_utils import run_loi_extra_backward
 from common.context_memory_manager import ContextMemoryManager
 
@@ -1989,6 +1993,30 @@ class TrainingCore:
                                 )
                             )
 
+                    # HFATO (ViBe / Relay LoRA): degrade the noisy input now,
+                    # override the base loss after the forward pass.
+                    hfato_clean_target: Optional[torch.Tensor] = None
+                    hfato_sigmas_snapshot: Optional[torch.Tensor] = None
+                    if getattr(args, "enable_hfato", False):
+                        if sigmas is None:
+                            logger.warning(
+                                "HFATO enabled but sigmas is None — skipping."
+                            )
+                        else:
+                            hfato_clean_target = latents
+                            hfato_sigmas_snapshot = sigmas
+                            noisy_model_input = build_hfato_noisy_input(
+                                clean_latents=latents,
+                                noise=noise,
+                                sigmas=sigmas,
+                                ratio=float(
+                                    getattr(args, "hfato_downsample_ratio", 0.5)
+                                ),
+                                mode=str(
+                                    getattr(args, "hfato_interpolation", "bilinear")
+                                ),
+                            ).to(dtype=dit_dtype)
+
                     transition_reference_timesteps = None
                     need_intermediate = False
                     active_transition_manager = None
@@ -2840,6 +2868,61 @@ class TrainingCore:
                                 loss_components
                             )
                             self._attach_flexam_metrics(loss_components)
+
+                            # HFATO override: swap the FM base loss for the
+                            # x0-reconstruction loss against the undegraded
+                            # latent.
+                            if (
+                                hfato_clean_target is not None
+                                and hfato_sigmas_snapshot is not None
+                                and model_pred is not None
+                            ):
+                                try:
+                                    hfato_base = (
+                                        compute_hfato_x0_reconstruction_loss(
+                                            noisy_model_input=noisy_model_input,
+                                            sigmas=hfato_sigmas_snapshot,
+                                            model_pred=model_pred,
+                                            target_clean=hfato_clean_target,
+                                        )
+                                    )
+                                    hfato_w = max(
+                                        0.0,
+                                        min(
+                                            1.0,
+                                            float(
+                                                getattr(args, "hfato_weight", 1.0)
+                                            ),
+                                        ),
+                                    )
+                                    prev_base = loss_components.base_loss
+                                    if hfato_w >= 1.0 or prev_base is None:
+                                        new_base = hfato_base
+                                    else:
+                                        new_base = (
+                                            (1.0 - hfato_w) * prev_base
+                                            + hfato_w * hfato_base
+                                        )
+                                    if prev_base is not None:
+                                        loss_components.total_loss = (
+                                            loss_components.total_loss
+                                            - prev_base
+                                            + new_base
+                                        )
+                                    else:
+                                        loss_components.total_loss = (
+                                            loss_components.total_loss
+                                            + new_base
+                                        )
+                                    loss_components.base_loss = new_base
+                                    loss_components.hfato_loss = (
+                                        hfato_base.detach()
+                                    )
+                                except Exception as hfato_exc:
+                                    logger.warning(
+                                        "HFATO loss override failed: %s",
+                                        hfato_exc,
+                                    )
 
                             if manifold_consensus_helper is not None:
                                 try:
