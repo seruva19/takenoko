@@ -67,6 +67,7 @@ from configs.ufo_config import apply_ufo_config
 from configs.pissa_config import apply_pissa_config
 from configs.adalora_config import apply_adalora_config
 from configs.mora_config import apply_mora_config
+from configs.flex_config import apply_flex_config
 from configs.oftv2_config import apply_oftv2_config
 from configs.vera_config import apply_vera_config
 from configs.stella_config import apply_stella_config
@@ -618,6 +619,7 @@ def create_args_from_config(
     apply_mixflow_config(args, config, logger)
     apply_drifting_config(args, config, logger)
     apply_s2d_config(args, config, logger)
+    apply_flex_config(args, config, logger)
     args.training_comment = config.get("training_comment", "trained with Takenoko")
     args.dim_from_weights = config.get("dim_from_weights", False)
     args.lycoris = config.get("lycoris", False)
@@ -2314,4 +2316,3 @@ def create_args_from_config(
     args = apply_euphonium_config(args, config, logger)
 
     return args
-

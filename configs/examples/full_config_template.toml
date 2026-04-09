@@ -2164,6 +2164,61 @@ s2d_include_text_encoder = false
 s2d_use_abs_response = true
 
 # ============================================================================
+# ⚠️ FLEX (FOURIER-BASED LORA REGULARIZATION) SETTINGS
+# ============================================================================
+
+# FleX adds a train-time Fourier-domain penalty on unmerged LoRA tensors.
+# It does not change inference behavior or adapter serialization because the
+# penalty is applied only as an auxiliary loss during training.
+# Enable FleX Fourier-domain LoRA regularization (bool).
+enable_flex = false
+
+# Auxiliary FleX loss multiplier lambda (float >= 0).
+# Paper best value for the unmerged setup: 0.02.
+flex_lambda = 0.02
+
+# Fraction of the RFFT spectrum used for the low-to-high frequency ramp (float in (0, 1]).
+# 0.5 keeps the lowest half least penalized and ramps into the higher-penalty regime
+# across the remaining bins.
+flex_frequency_threshold = 0.5
+
+# Low-frequency preservation coefficient phi_low (float in [0, 1]).
+# The helper converts preservation weights into penalties as rho = 1 - phi,
+# so phi_low = 1.0 means the lowest frequencies are effectively unpenalized.
+flex_phi_low = 1.0
+
+# High-frequency preservation coefficient phi_high (float in [0, 1], must be <= flex_phi_low).
+# Lower values increase the penalty on higher-frequency LoRA components.
+flex_phi_high = 0.1
+
+# Include text-encoder LoRA modules in FleX regularization (bool).
+# false keeps the regularizer on the main UNet/DiT adapter path only.
+flex_include_text_encoder = false
+
+# Which unmerged LoRA tensors to regularize:
+# - "both": regularize lora_up and lora_down
+# - "up": regularize only lora_up
+# - "down": regularize only lora_down
+flex_target_tensors = "both"
+
+# Optional regex allow-list over FleX LoRA module names.
+# Patterns match Takenoko's `lora_name` values after dots are converted to underscores,
+# for example `blocks.0.ffn.0` -> `lora_unet_blocks_0_ffn_0`.
+# Use this to reproduce the paper's MLP-only setup without narrowing the whole run globally.
+# Use [] or omit the key entirely to keep all active LoRA modules eligible.
+flex_include_patterns = []
+
+# Optional regex deny-list over FleX LoRA module names.
+# Applied before include_patterns so you can carve out attention/time modules.
+# Use [] or omit the key entirely to disable deny-list filtering.
+flex_exclude_patterns = []
+
+# Example WAN DiT MLP-only targeting for unet/DiT LoRAs:
+# flex_include_patterns = [
+#   "^lora_unet_.*_ffn_(0|2)$"
+# ]
+
+# ============================================================================
 # ⚠️ BLOCKWISE FLOW MATCHING SETTINGS
 # ============================================================================
 

@@ -406,6 +406,8 @@ class LossComponents:
         Mean FC reweighting factor.
     s2d_loss: Optional[torch.Tensor]
         Selective Spectral Decay regularization loss (if enabled).
+    flex_loss: Optional[torch.Tensor]
+        FleX Fourier-domain regularization loss (if enabled).
     """
 
     total_loss: torch.Tensor
@@ -562,6 +564,7 @@ class LossComponents:
     reflexflow_exposure_bias_mean: Optional[torch.Tensor] = None
     reflexflow_weight_mean: Optional[torch.Tensor] = None
     s2d_loss: Optional[torch.Tensor] = None
+    flex_loss: Optional[torch.Tensor] = None
 
 
 class TrainingLossComputer:
@@ -582,6 +585,7 @@ class TrainingLossComputer:
         self._cached_blank_prompt_embeds: Dict[torch.device, torch.Tensor] = {}
         self._vcd_loss_helper: Optional[Any] = None
         self._s2d_regularizer: Optional[Any] = None
+        self._flex_regularizer: Optional[Any] = None
 
     def _get_vcd_loss_helper(self, args: Any, device: torch.device) -> Optional[Any]:
         if not getattr(args, "enable_video_consistency_distance", False):
@@ -609,6 +613,15 @@ class TrainingLossComputer:
 
             self._s2d_regularizer = S2DRegularizer(args)
         return self._s2d_regularizer
+
+    def _get_flex_regularizer(self, args: Any) -> Optional[Any]:
+        if not getattr(args, "enable_flex", False):
+            return None
+        if self._flex_regularizer is None:
+            from enhancements.flex.helper import FleXRegularizer
+
+            self._flex_regularizer = FleXRegularizer(args)
+        return self._flex_regularizer
 
     # ---- Internal helpers ----
     def _compute_seq_len(self, latents: torch.Tensor) -> int:
@@ -921,6 +934,7 @@ class TrainingLossComputer:
         bfm_semfeat_similarity_value: Optional[torch.Tensor] = None
         bfm_frn_loss_value: Optional[torch.Tensor] = None
         s2d_loss_value: Optional[torch.Tensor] = None
+        flex_loss_value: Optional[torch.Tensor] = None
 
         if getattr(args, "enable_blockwise_flow_matching", False) and getattr(
             args, "bfm_use_segment_objective", True
@@ -2621,6 +2635,21 @@ class TrainingLossComputer:
             except Exception as e:
                 logger.warning("S2D regularization failed: %s", e)
 
+        # ---- Optional FleX Fourier-domain regularization ----
+        if getattr(args, "enable_flex", False):
+            try:
+                flex_regularizer = self._get_flex_regularizer(args)
+                if flex_regularizer is not None and network is not None:
+                    flex_loss = flex_regularizer.compute_loss(
+                        network=network,
+                        global_step=global_step,
+                    )
+                    if flex_loss is not None:
+                        loss = loss + flex_loss
+                        flex_loss_value = flex_loss.detach()
+            except Exception as e:
+                logger.warning("FleX regularization failed: %s", e)
+
         # ---- Optional Orthogonal LoRA regularization (T-LoRA orthogonal mode) ----
         ortho_p_val: Optional[torch.Tensor] = None
         ortho_q_val: Optional[torch.Tensor] = None
@@ -2862,6 +2891,7 @@ class TrainingLossComputer:
             reflexflow_exposure_bias_mean=reflexflow_exposure_bias_mean_value,
             reflexflow_weight_mean=reflexflow_weight_mean_value,
             s2d_loss=s2d_loss_value,
+            flex_loss=flex_loss_value,
         )
 
     @torch.no_grad()
