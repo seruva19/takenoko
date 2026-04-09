@@ -410,6 +410,20 @@ def collect_and_log_training_metrics(
         logs["drifting/encoder_feature_dim"] = float(
             loss_components.drifting_encoder_feature_dim.item()
         )
+    if getattr(loss_components, "isofm_loss", None) is not None:
+        logs["loss/isofm"] = float(loss_components.isofm_loss.item())
+    if getattr(loss_components, "isofm_weight_mean", None) is not None:
+        logs["isofm/weight_mean"] = float(loss_components.isofm_weight_mean.item())
+    if getattr(loss_components, "isofm_eps_mean", None) is not None:
+        logs["isofm/eps_mean"] = float(loss_components.isofm_eps_mean.item())
+    if getattr(loss_components, "isofm_speed_mean", None) is not None:
+        logs["isofm/speed_mean"] = float(loss_components.isofm_speed_mean.item())
+    if getattr(loss_components, "isofm_active_ratio", None) is not None:
+        logs["isofm/active_ratio"] = float(loss_components.isofm_active_ratio.item())
+    if getattr(loss_components, "isofm_timestep_mean", None) is not None:
+        logs["isofm/timestep_mean"] = float(
+            loss_components.isofm_timestep_mean.item()
+        )
     if getattr(loss_components, "moalign_loss", None) is not None:
         logs["loss/moalign"] = float(loss_components.moalign_loss.item())
     if loss_components.repa_loss is not None:

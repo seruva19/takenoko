@@ -47,6 +47,7 @@ from enhancements.drifting.drifting_helper import DriftingLossHelper
 from enhancements.frame_aware_history_corruption.frame_aware_history_corruption_helper import (
     FrameAwareHistoryCorruptionHelper,
 )
+from enhancements.isofm.helper import IsokineticFlowMatchingHelper
 from enhancements.reflexflow.reflexflow_helper import ReflexFlowHelper
 from enhancements.self_resampling.self_resampling_helper import SelfResamplingHelper
 from enhancements.stable_velocity.stablevm_target_helper import StableVMTargetHelper
@@ -359,6 +360,7 @@ class TrainingCore:
         self._warned_self_resampling_fast_rollout_fallback = False
         self._warned_frame_aware_history_corruption_eqm = False
         self.drifting_helper: Optional[DriftingLossHelper] = None
+        self.isofm_helper: Optional[IsokineticFlowMatchingHelper] = None
         self.reflexflow_helper: Optional[ReflexFlowHelper] = None
         self._warned_reflexflow_eqm = False
         self._warned_reflexflow_clean_pred = False
@@ -1598,6 +1600,25 @@ class TrainingCore:
                 except Exception as exc:
                     logger.warning("Drifting setup failed: %s", exc)
                     self.drifting_helper = None
+
+        # Initialize Iso-FM helper (train-only, LoRA-gated, inference-neutral)
+        self.isofm_helper = None
+        if bool(getattr(args, "enable_isofm", False)):
+            network_module = str(getattr(args, "network_module", "")).lower()
+            train_arch = str(getattr(args, "train_architecture", "lora")).lower()
+            if "lora" not in network_module and train_arch != "lora":
+                logger.warning(
+                    "IsoFM requires LoRA training; disabling for network_module=%s.",
+                    network_module or "<unset>",
+                )
+            else:
+                try:
+                    self.isofm_helper = IsokineticFlowMatchingHelper(args)
+                    self.isofm_helper.setup_hooks()
+                    logger.info("IsoFM auxiliary loss enabled for this run.")
+                except Exception as exc:
+                    logger.warning("IsoFM setup failed: %s", exc)
+                    self.isofm_helper = None
 
         # Calculate starting epoch when resuming from checkpoint
         if global_step > 0:
@@ -3130,6 +3151,88 @@ class TrainingCore:
                                 reflexflow_state=reflexflow_state,
                                 global_step=global_step,
                             )
+
+                            if self.isofm_helper is not None and model_pred is not None:
+                                saved_semantic_kl = self.semanticgen_state.kl_loss
+                                saved_semantic_tokens = (
+                                    self.semanticgen_state.tokens_for_alignment
+                                )
+                                saved_mixflow_stats = self._last_mixflow_stats
+
+                                def _predict_isofm_lookahead(
+                                    lookahead_input: torch.Tensor,
+                                    lookahead_timesteps: torch.Tensor,
+                                ) -> torch.Tensor:
+                                    try:
+                                        with suspend_memflow_guidance():
+                                            lookahead_result = self.call_dit(
+                                                args,
+                                                accelerator,
+                                                active_transformer,
+                                                latents_for_dit,
+                                                batch,
+                                                noise,
+                                                lookahead_input,
+                                                lookahead_timesteps,
+                                                network_dtype,
+                                                control_signal_processor,
+                                                controlnet,
+                                                global_step=global_step,
+                                                reg_cls_token=None,
+                                                model_timesteps_override=lookahead_timesteps,
+                                                apply_stable_velocity_target=False,
+                                            )
+                                        if (
+                                            isinstance(lookahead_result, (tuple, list))
+                                            and len(lookahead_result) > 0
+                                            and torch.is_tensor(lookahead_result[0])
+                                        ):
+                                            return lookahead_result[0].detach()
+                                        raise RuntimeError(
+                                            "IsoFM lookahead forward returned no prediction tensor."
+                                        )
+                                    finally:
+                                        self.semanticgen_state.kl_loss = saved_semantic_kl
+                                        self.semanticgen_state.tokens_for_alignment = (
+                                            saved_semantic_tokens
+                                        )
+                                        self._last_mixflow_stats = saved_mixflow_stats
+
+                                try:
+                                    isofm_result = self.isofm_helper.compute_loss(
+                                        model_pred=model_pred,
+                                        noisy_model_input=noisy_model_input,
+                                        model_timesteps=self_flow_model_timesteps,
+                                        predict_lookahead=_predict_isofm_lookahead,
+                                        global_step=global_step,
+                                    )
+                                except Exception as exc:
+                                    logger.warning("IsoFM loss skipped for this step: %s", exc)
+                                    isofm_result = None
+
+                                if isofm_result is not None:
+                                    weighted_isofm = (
+                                        self.isofm_helper.weight * isofm_result.loss
+                                    )
+                                    loss_components.total_loss = (
+                                        loss_components.total_loss + weighted_isofm
+                                    )
+                                    loss_components.isofm_loss = isofm_result.loss.detach()
+                                    loss_components.isofm_weight_mean = (
+                                        isofm_result.metrics["isofm/weight_mean"].detach()
+                                    )
+                                    loss_components.isofm_eps_mean = (
+                                        isofm_result.metrics["isofm/eps_mean"].detach()
+                                    )
+                                    loss_components.isofm_speed_mean = (
+                                        isofm_result.metrics["isofm/speed_mean"].detach()
+                                    )
+                                    loss_components.isofm_active_ratio = (
+                                        isofm_result.metrics["isofm/active_ratio"].detach()
+                                    )
+                                    loss_components.isofm_timestep_mean = (
+                                        isofm_result.metrics["isofm/timestep_mean"].detach()
+                                    )
 
                     memflow_loss = None
                     if (

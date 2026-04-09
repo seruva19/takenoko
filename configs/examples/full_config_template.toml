@@ -3093,6 +3093,62 @@ stable_velocity_stablevm_numerical_eps = 1e-8
 stable_velocity_stablevm_log_interval = 100
 
 # =============================================================================
+# ⚠️ ISOKINETIC FLOW MATCHING (ISO-FM) SETTINGS
+# =============================================================================
+
+# Enable Iso-FM auxiliary straightening regularization during LoRA training.
+# Default false to preserve existing behavior and keep inference unchanged.
+# When enabled, Takenoko performs one additional no-grad lookahead forward per active step
+# and penalizes velocity drift along the model's own path.
+enable_isofm = false
+
+# Iso-FM loss weight 
+# Higher values more strongly suppress pathwise acceleration, but can over-regularize if
+# pushed too high on small or unstable finetunes.
+isofm_lambda = 4.0
+
+# Time-weight exponent alpha for w = (1 - t)^alpha / eps.
+# alpha = 2.0 emphasizes earlier/noisier steps.
+isofm_time_weight_exponent = 2.0
+
+# Minimum normalized lookahead step epsilon in (0, 1).
+# Smaller values better approximate the material derivative but weaken the regularizer.
+# Takenoko samples epsilon uniformly in [isofm_lookahead_eps_min, isofm_lookahead_eps_max].
+isofm_lookahead_eps_min = 0.02
+
+# Maximum normalized lookahead step epsilon in (0, 1], must be >= isofm_lookahead_eps_min.
+# Keeping this small avoids overly aggressive latent extrapolation on noisy steps.
+isofm_lookahead_eps_max = 0.05
+
+# Minimum normalized timestep t in [0, 1) where Iso-FM may activate.
+# Increase this if you want to avoid applying the regularizer at the very clean end.
+isofm_min_t = 0.0
+
+# Maximum normalized timestep t in (0, 1] where Iso-FM may activate.
+# Values slightly below 1.0 avoid zero-length lookahead steps near the terminal noise endpoint.
+isofm_max_t = 0.98
+
+# Probability of applying Iso-FM to an eligible batch.
+# 1.0 = always apply; lower values reduce compute overhead from the extra lookahead forward.
+isofm_apply_prob = 1.0
+
+# Optional warmup before Iso-FM activates.
+# 0 = start immediately; positive values delay the auxiliary term until the base FM objective stabilizes.
+isofm_warmup_steps = 0
+
+# Normalize velocity-difference residuals by the detached current-speed norm.
+# true follows the paper's speed-normalized formulation with stability constant zeta.
+# false uses an unnormalized velocity-consistency penalty.
+isofm_normalize_by_speed = true
+
+# Stability constant zeta added to the detached current-speed norm when normalization is enabled.
+# Must be > 0 to avoid division by zero on near-stationary predictions.
+isofm_speed_epsilon = 1e-6
+
+# Logging cadence for Iso-FM diagnostics (weight/epsilon/speed/active ratio).
+isofm_log_interval = 100
+
+# =============================================================================
 # ⚠️ REG (REPRESENTATION ENTANGLEMENT FOR GENERATION) SETTINGS
 # =============================================================================
 

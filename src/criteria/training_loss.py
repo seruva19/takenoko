@@ -310,6 +310,18 @@ class LossComponents:
         Whether external drifting feature encoder was active on this step (0/1).
     drifting_encoder_feature_dim: Optional[torch.Tensor]
         Mean encoded feature dimensionality used for drifting loss.
+    isofm_loss: Optional[torch.Tensor]
+        Raw Iso-FM auxiliary loss before applying the configured lambda.
+    isofm_weight_mean: Optional[torch.Tensor]
+        Mean per-sample temporal Iso-FM weighting applied on active samples.
+    isofm_eps_mean: Optional[torch.Tensor]
+        Mean effective lookahead step used by Iso-FM.
+    isofm_speed_mean: Optional[torch.Tensor]
+        Mean detached current-velocity norm used for Iso-FM normalization.
+    isofm_active_ratio: Optional[torch.Tensor]
+        Fraction of samples active for Iso-FM on the current step.
+    isofm_timestep_mean: Optional[torch.Tensor]
+        Mean normalized timestep of active Iso-FM samples.
     moalign_loss: Optional[torch.Tensor]
         The MOALIGN motion-centric relational alignment loss, if enabled.
     repa_loss: Optional[torch.Tensor]
@@ -516,6 +528,12 @@ class LossComponents:
     drifting_queue_neg_size: Optional[torch.Tensor] = None
     drifting_encoder_active: Optional[torch.Tensor] = None
     drifting_encoder_feature_dim: Optional[torch.Tensor] = None
+    isofm_loss: Optional[torch.Tensor] = None
+    isofm_weight_mean: Optional[torch.Tensor] = None
+    isofm_eps_mean: Optional[torch.Tensor] = None
+    isofm_speed_mean: Optional[torch.Tensor] = None
+    isofm_active_ratio: Optional[torch.Tensor] = None
+    isofm_timestep_mean: Optional[torch.Tensor] = None
     moalign_loss: Optional[torch.Tensor] = None
     repa_loss: Optional[torch.Tensor] = None
     stable_velocity_weight_mean: Optional[torch.Tensor] = None
