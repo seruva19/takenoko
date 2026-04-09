@@ -64,6 +64,7 @@ network_module = "networks.wan_finetune"
 
 fine_tune_ratio = 1.0
 finetune_text_encoder = false
+freeze_dit = false
 full_bf16 = true
 direct_checkpoint_loading = true
 fused_backward_pass = true

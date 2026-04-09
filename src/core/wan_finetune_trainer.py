@@ -174,6 +174,9 @@ class WanFinetuneTrainer:
         # Full fine-tuning optimization arguments
         if hasattr(args, "fused_backward_pass"):
             self.fused_backward_pass = args.fused_backward_pass
+            if self.fused_backward_pass and getattr(args, "freeze_dit", False):
+                logger.info("freeze_dit=True: disabling fused_backward_pass (not needed for T5-only training)")
+                self.fused_backward_pass = False
 
             # Validate optimizer compatibility with fused backward pass
             if self.fused_backward_pass and hasattr(args, "optimizer_type"):
@@ -512,10 +515,11 @@ class WanFinetuneTrainer:
 
     def load_t5_encoder(
         self, args: argparse.Namespace, accelerator: Accelerator
-    ) -> torch.nn.Module:
+    ) -> "T5EncoderModel":
         """
         Load T5 text encoder for fine-tuning.
         Only called when finetune_text_encoder=True.
+        Returns a T5EncoderModel with .model in train mode and requires_grad.
         """
         if not hasattr(args, "t5") or args.t5 is None:
             raise ValueError(
@@ -523,26 +527,56 @@ class WanFinetuneTrainer:
             )
 
         try:
-            # Import T5 encoder from WAN modules
             from wan.modules.t5 import T5EncoderModel
+            from wan.configs.shared_config import wan_shared_cfg
 
-            logger.info(f"Loading T5 encoder from {args.t5}")
-            text_encoder = T5EncoderModel.from_pretrained(args.t5)
+            t5_path = args.t5
+            text_len = getattr(args, "text_len", wan_shared_cfg.text_len)  # default 512
+            dtype = torch.bfloat16 if args.mixed_precision == "bf16" else torch.float32
 
-            # Set to training mode for fine-tuning
-            text_encoder.train()
+            logger.info(f"Loading T5 encoder for fine-tuning from {t5_path}")
+            text_encoder = T5EncoderModel(
+                text_len=text_len,
+                dtype=dtype,
+                device=accelerator.device,
+                weight_path=t5_path,
+            )
 
-            # Apply gradient checkpointing if enabled
-            if getattr(args, "gradient_checkpointing", False):
-                text_encoder.gradient_checkpointing_enable()
-                logger.info("T5 gradient checkpointing enabled")
+            # Enable training: unfreeze all parameters
+            text_encoder.model.train()
+            text_encoder.model.requires_grad_(True)
 
-            logger.info("T5 text encoder loaded successfully for fine-tuning")
+            trainable = sum(p.numel() for p in text_encoder.model.parameters() if p.requires_grad)
+            logger.info(f"T5 text encoder loaded for fine-tuning: {trainable:,} trainable parameters")
+
             return text_encoder
 
         except Exception as e:
             logger.error(f"Failed to load T5 encoder: {e}")
             raise
+
+    @staticmethod
+    def save_text_encoder(text_encoder, save_path: str, step: int = 0):
+        """Save T5 text encoder weights as safetensors."""
+        from safetensors.torch import save_file as st_save
+        state_dict = text_encoder.model.state_dict()
+        # Ensure all on CPU for saving
+        state_dict = {k: v.cpu() for k, v in state_dict.items()}
+        metadata = {"step": str(step), "architecture": "wan_t5_umt5_xxl", "type": "text_encoder"}
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        st_save(state_dict, save_path, metadata=metadata)
+        logger.info(f"Saved T5 text encoder to {save_path}")
+
+    @staticmethod
+    def load_text_encoder_checkpoint(text_encoder, load_path: str):
+        """Load T5 text encoder weights from safetensors checkpoint."""
+        if not os.path.exists(load_path):
+            logger.warning(f"T5 checkpoint not found: {load_path}, using base weights")
+            return
+        from safetensors.torch import load_file
+        state_dict = load_file(load_path)
+        text_encoder.model.load_state_dict(state_dict, strict=True, assign=True)
+        logger.info(f"Loaded T5 text encoder checkpoint from {load_path}")
 
     def prepare_optimizer_params(
         self,
@@ -552,26 +586,45 @@ class WanFinetuneTrainer:
     ) -> List[Dict]:
         """
         Prepare optimizer parameters for full fine-tuning.
-        Supports both DiT-only and DiT+T5 training based on finetune_text_encoder flag.
+        Supports DiT-only, DiT+T5, or T5-only (freeze_dit) training.
         """
-        motion_preservation_summary = summarize_full_ft_motion_controls(
-            transformer=transformer,
-            args=args,
-            logger=logger,
-        )
-        (
-            params_to_optimize,
-            param_names,
-            trainable_by_block,
-            lr_scales_applied,
-            trainable_attn_geometry_tensors,
-        ) = build_full_ft_optimizer_groups(
-            transformer=transformer,
-            args=args,
-            motion_preservation_summary=motion_preservation_summary,
-        )
+        freeze_dit = getattr(args, "freeze_dit", False)
 
-        if not params_to_optimize:
+        if freeze_dit and not getattr(args, "finetune_text_encoder", False):
+            raise ValueError(
+                "freeze_dit=True requires finetune_text_encoder=True. "
+                "Nothing to train if both DiT and text encoder are frozen."
+            )
+
+        if freeze_dit:
+            # Freeze all DiT parameters — only T5 will be trained
+            for p in transformer.parameters():
+                p.requires_grad_(False)
+            params_to_optimize = []
+            param_names = []
+            trainable_by_block = {}
+            lr_scales_applied = set()
+            trainable_attn_geometry_tensors = 0
+            logger.info("DiT frozen (freeze_dit=True). Only text encoder will be trained.")
+        else:
+            motion_preservation_summary = summarize_full_ft_motion_controls(
+                transformer=transformer,
+                args=args,
+                logger=logger,
+            )
+            (
+                params_to_optimize,
+                param_names,
+                trainable_by_block,
+                lr_scales_applied,
+                trainable_attn_geometry_tensors,
+            ) = build_full_ft_optimizer_groups(
+                transformer=transformer,
+                args=args,
+                motion_preservation_summary=motion_preservation_summary,
+            )
+
+        if not params_to_optimize and not freeze_dit:
             raise ValueError(
                 "No trainable transformer parameters remain after full-finetune "
                 "motion preservation controls were applied."
@@ -587,7 +640,8 @@ class WanFinetuneTrainer:
             ],
         )
         setattr(args, "_full_ft_lr_group_scales", sorted(lr_scales_applied))
-        setattr(args, "_full_ft_frozen_blocks_applied", motion_preservation_summary["frozen_blocks"])
+        setattr(args, "_full_ft_frozen_blocks_applied",
+                motion_preservation_summary["frozen_blocks"] if not freeze_dit else [])
         setattr(args, "_full_ft_trainable_by_block", trainable_by_block)
         setattr(
             args,
@@ -597,16 +651,21 @@ class WanFinetuneTrainer:
         setattr(
             args,
             "_full_ft_frozen_attn_geometry_tensors",
-            int(motion_preservation_summary.get("geometry_frozen_tensors", 0)),
+            int(motion_preservation_summary.get("geometry_frozen_tensors", 0)) if not freeze_dit else 0,
         )
 
         dit_group_count = len(params_to_optimize)
 
         # Conditionally add T5 text encoder parameters
         if getattr(args, "finetune_text_encoder", False) and text_encoder is not None:
-            t5_params = list(text_encoder.named_parameters())
-            # Use lower learning rate for text encoder (typically 10x lower)
-            t5_lr = args.learning_rate * 0.1
+            t5_params = [(n, p) for n, p in text_encoder.model.named_parameters() if p.requires_grad]
+            # When training T5 alongside DiT, use 10x lower LR. When T5-only (freeze_dit), use full LR.
+            # Use explicit text_encoder_lr if set, otherwise: full LR when T5-only, 0.1x when joint
+            te_lr = getattr(args, "text_encoder_lr", None)
+            if te_lr is not None:
+                t5_lr = te_lr
+            else:
+                t5_lr = args.learning_rate if freeze_dit else args.learning_rate * 0.1
 
             params_to_optimize.append(
                 {"params": [p for _, p in t5_params], "lr": t5_lr}
@@ -679,8 +738,11 @@ class WanFinetuneTrainer:
                 logger.info(f"  ✅ {name}")
 
         if getattr(args, "finetune_text_encoder", False) and text_encoder is not None:
-            t5_params_count = sum(p.numel() for p in params_to_optimize[1]["params"])
-            logger.info(f"T5 text encoder parameters: {t5_params_count:,}")
+            # T5 group is at index dit_group_count (0 when freeze_dit, else after DiT groups)
+            t5_group_idx = dit_group_count
+            if t5_group_idx < len(params_to_optimize):
+                t5_params_count = sum(p.numel() for p in params_to_optimize[t5_group_idx]["params"])
+                logger.info(f"T5 text encoder parameters: {t5_params_count:,}")
 
         # Validate parameters and log warnings
         NetworkLoggingUtils.log_parameter_validation_info(
@@ -750,12 +812,20 @@ class WanFinetuneTrainer:
         )
         begin_contrastive_step(contrastive_attention_helper, batch, global_step)
 
-        # Use batch["t5"] context for text embeddings - no early conversion
-        if "t5" in batch:
-            # Use T5 embeddings from batch (convert later)
+        # Text embeddings: live encoding (for TE fine-tuning) or cached
+        if text_encoder is not None and getattr(args, "finetune_text_encoder", False):
+            # Live T5 encoding — gradients flow through text encoder
+            captions = batch.get("captions", None)
+            if not captions or all(c == "" for c in captions):
+                raise ValueError(
+                    "finetune_text_encoder=True but captions are empty. "
+                    "Ensure TE cache was built with captions in metadata."
+                )
+            context = text_encoder(captions, device)
+        elif "t5" in batch:
+            # Use cached T5 embeddings (no TE gradients)
             context = batch["t5"]
         elif "text_embeds" in batch:
-            # Fallback to cached embeddings for compatibility (convert later)
             context = [batch["text_embeds"]]
         else:
             raise ValueError(
@@ -1541,6 +1611,19 @@ class WanFinetuneTrainer:
         if getattr(args, "finetune_text_encoder", False):
             logger.info("Loading T5 text encoder for fine-tuning")
             text_encoder = self.load_t5_encoder(args, accelerator)
+
+            # Check for existing T5 checkpoint to resume from
+            te_checkpoint = getattr(args, "text_encoder_checkpoint", None)
+            if te_checkpoint is None and getattr(args, "auto_resume", False):
+                # Auto-find latest T5 checkpoint in output_dir
+                output_dir = getattr(args, "output_dir", "output")
+                import glob
+                te_files = sorted(glob.glob(os.path.join(output_dir, "*_text_encoder.safetensors")))
+                if te_files:
+                    te_checkpoint = te_files[-1]
+                    logger.info(f"Auto-resume: found T5 checkpoint {te_checkpoint}")
+            if te_checkpoint:
+                self.load_text_encoder_checkpoint(text_encoder, te_checkpoint)
 
         # Prepare optimizer parameters for full fine-tuning
         params_to_optimize, param_names = self.prepare_optimizer_params(
@@ -3147,6 +3230,14 @@ class WanFinetuneTrainer:
                                 self.model_saving_utils.handle_step_saving(
                                     args, accelerator, training_model, global_step
                                 )
+                                # Save T5 alongside DiT checkpoint
+                                if getattr(args, "finetune_text_encoder", False) and text_encoder is not None:
+                                    save_every = getattr(args, "save_every_n_steps", 0)
+                                    if save_every and global_step % save_every == 0 and global_step > 0:
+                                        output_dir = getattr(args, "output_dir", "output")
+                                        output_name = getattr(args, "output_name", "wan_finetune")
+                                        te_path = os.path.join(output_dir, f"{output_name}-step{global_step:06d}_text_encoder.safetensors")
+                                        self.save_text_encoder(text_encoder, te_path, global_step)
 
                         # Check if we should validate
                         should_validate = (
@@ -3203,6 +3294,14 @@ class WanFinetuneTrainer:
                                 self.model_saving_utils.handle_step_saving(
                                     args, accelerator, training_model, global_step
                                 )
+                                # Save T5 alongside DiT checkpoint
+                                if getattr(args, "finetune_text_encoder", False) and text_encoder is not None:
+                                    save_every = getattr(args, "save_every_n_steps", 0)
+                                    if save_every and global_step % save_every == 0 and global_step > 0:
+                                        output_dir = getattr(args, "output_dir", "output")
+                                        output_name = getattr(args, "output_name", "wan_finetune")
+                                        te_path = os.path.join(output_dir, f"{output_name}-step{global_step:06d}_text_encoder.safetensors")
+                                        self.save_text_encoder(text_encoder, te_path, global_step)
 
                         # Handle additional state saving based on save_state_every_n_steps
                         if should_save_state_at_step(args, global_step):
@@ -3220,6 +3319,13 @@ class WanFinetuneTrainer:
                             step_file = os.path.join(state_dir, "step.txt")
                             with open(step_file, "w") as f:
                                 f.write(str(global_step))
+
+                            # Save T5 text encoder checkpoint if fine-tuning
+                            if getattr(args, "finetune_text_encoder", False) and text_encoder is not None:
+                                te_path = os.path.join(
+                                    output_dir, f"{output_name}-step{global_step:06d}_text_encoder.safetensors"
+                                )
+                                self.save_text_encoder(text_encoder, te_path, global_step)
 
                 if (
                     hasattr(args, "max_train_steps")
@@ -3319,6 +3425,13 @@ class WanFinetuneTrainer:
                 global_step,
                 final=True,
             )
+
+            # Save T5 text encoder checkpoint if fine-tuning
+            if getattr(args, "finetune_text_encoder", False) and text_encoder is not None:
+                te_final_path = os.path.join(
+                    output_dir, f"{output_name}_final_text_encoder.safetensors"
+                )
+                self.save_text_encoder(text_encoder, te_final_path, global_step)
 
             # Also save final state for resuming if needed
             final_state_dir = os.path.join(output_dir, f"{output_name}-final-state")

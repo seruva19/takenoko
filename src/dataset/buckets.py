@@ -320,6 +320,7 @@ class BucketBatchManager:
         batch_tensor_data = {}
         varlen_keys = set()
         weights = []  # Collect weights for the batch
+        captions = []  # Collect captions for live text encoder fine-tuning
         control_signals = []  # Collect control signals for the batch
         control_signal_present = []  # Tracks per-item control/reference availability
         mask_signals = []  # Collect mask signals for the batch
@@ -337,6 +338,17 @@ class BucketBatchManager:
 
             if item_info.text_encoder_output_cache_path is not None:
                 sd_te = load_file(item_info.text_encoder_output_cache_path)
+                # Extract caption from TE cache metadata for live text encoder fine-tuning
+                if not hasattr(item_info, "_caption_restored") or not item_info._caption_restored:
+                    try:
+                        from safetensors import safe_open
+                        with safe_open(item_info.text_encoder_output_cache_path, framework="pt") as f:
+                            meta = f.metadata()
+                            if meta and "caption1" in meta:
+                                item_info.caption = meta["caption1"]
+                                item_info._caption_restored = True
+                    except Exception:
+                        pass
             else:
                 sd_te = {}
 
@@ -372,6 +384,7 @@ class BucketBatchManager:
             # This is the key change: determine the weight for this specific item
             loss_weight = self.prior_loss_weight if item_info.is_reg else 1.0
             weights.append(loss_weight)
+            captions.append(getattr(item_info, "caption", "") or "")
             concept_id = getattr(item_info, "concept_id", None)
             if concept_id is None:
                 concept_id = getattr(item_info, "dataset_index", None)
@@ -600,6 +613,8 @@ class BucketBatchManager:
         batch_tensor_data["control_signal_present"] = torch.tensor(
             control_signal_present, dtype=torch.bool
         )
+        # Captions for live text encoder fine-tuning (list of strings, not tensor)
+        batch_tensor_data["captions"] = captions
 
         # Add control signals to batch if any are available
         if any(cs is not None for cs in control_signals):

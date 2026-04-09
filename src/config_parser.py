@@ -1158,6 +1158,9 @@ def create_args_from_config(
     # WanFinetune specific settings
     args.fine_tune_ratio = config.get("fine_tune_ratio", 1.0)
     args.finetune_text_encoder = config.get("finetune_text_encoder", False)
+    args.freeze_dit = config.get("freeze_dit", False)
+    args.text_encoder_lr = config.get("text_encoder_lr", None)  # explicit LR for T5; None = auto
+    args.text_encoder_checkpoint = config.get("text_encoder_checkpoint", None)  # path to T5 checkpoint for resume
     args.fused_backward_pass = config.get("fused_backward_pass", False)
     args.mem_eff_save = config.get("mem_eff_save", True)
     args.verify_weight_dynamics_every_n_steps = config.get(
