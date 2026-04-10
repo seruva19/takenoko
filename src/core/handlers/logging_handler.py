@@ -187,6 +187,50 @@ def collect_and_log_training_metrics(
         )
     if loss_components.optical_flow_loss is not None:
         logs["loss/optical_flow"] = float(loss_components.optical_flow_loss.item())
+    if getattr(loss_components, "split_video_anchor_loss", None) is not None:
+        logs["loss/video_anchor"] = float(loss_components.split_video_anchor_loss.item())
+    if getattr(loss_components, "split_video_temporal_loss", None) is not None:
+        logs["loss/video_temporal"] = float(
+            loss_components.split_video_temporal_loss.item()
+        )
+    if getattr(loss_components, "split_video_loss_delta", None) is not None:
+        logs["video_loss/delta"] = float(loss_components.split_video_loss_delta.item())
+    if getattr(loss_components, "split_video_anchor_weight", None) is not None:
+        logs["video_loss/anchor_weight"] = float(
+            loss_components.split_video_anchor_weight.item()
+        )
+    if getattr(loss_components, "split_video_temporal_weight", None) is not None:
+        logs["video_loss/temporal_weight"] = float(
+            loss_components.split_video_temporal_weight.item()
+        )
+    if getattr(loss_components, "spatiotemporal_guidance_loss", None) is not None:
+        logs["loss/spatiotemporal_guidance"] = float(
+            loss_components.spatiotemporal_guidance_loss.item()
+        )
+    if getattr(loss_components, "spatiotemporal_guidance_raw_loss", None) is not None:
+        logs["spatiotemporal_guidance/raw"] = float(
+            loss_components.spatiotemporal_guidance_raw_loss.item()
+        )
+    if getattr(loss_components, "spatiotemporal_guidance_anchor_loss", None) is not None:
+        logs["spatiotemporal_guidance/anchor_loss"] = float(
+            loss_components.spatiotemporal_guidance_anchor_loss.item()
+        )
+    if getattr(loss_components, "spatiotemporal_guidance_temporal_loss", None) is not None:
+        logs["spatiotemporal_guidance/temporal_loss"] = float(
+            loss_components.spatiotemporal_guidance_temporal_loss.item()
+        )
+    if getattr(loss_components, "spatiotemporal_guidance_scale", None) is not None:
+        logs["spatiotemporal_guidance/scale"] = float(
+            loss_components.spatiotemporal_guidance_scale.item()
+        )
+    if getattr(loss_components, "spatiotemporal_guidance_anchor_weight", None) is not None:
+        logs["spatiotemporal_guidance/anchor_weight"] = float(
+            loss_components.spatiotemporal_guidance_anchor_weight.item()
+        )
+    if getattr(loss_components, "spatiotemporal_guidance_temporal_weight", None) is not None:
+        logs["spatiotemporal_guidance/temporal_weight"] = float(
+            loss_components.spatiotemporal_guidance_temporal_weight.item()
+        )
     if getattr(loss_components, "ufo_motion_sub_loss", None) is not None:
         logs["loss/ufo_motion_sub"] = float(loss_components.ufo_motion_sub_loss.item())
     if getattr(loss_components, "video_consistency_distance_loss", None) is not None:

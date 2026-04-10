@@ -82,6 +82,10 @@ from configs.dual_head_alignment_config import apply_dual_head_alignment_config
 from configs.manifold_consensus_config import apply_manifold_consensus_config
 from configs.reference_conditioning_config import apply_reference_conditioning_config
 from configs.diagnostic_metrics_config import apply_diagnostic_metrics_config
+from configs.split_video_loss_config import apply_split_video_loss_config
+from configs.spatiotemporal_guidance_weighting_config import (
+    apply_spatiotemporal_guidance_weighting_config,
+)
 from configs.vae_refinement_validation_config import (
     apply_vae_refinement_validation_profile,
 )
@@ -816,6 +820,8 @@ def create_args_from_config(
     # Extra training metrics (periodic)
     args.log_extra_train_metrics = config.get("log_extra_train_metrics", True)
     args.train_metrics_interval = config.get("train_metrics_interval", 50)
+    apply_split_video_loss_config(args, config, logger)
+    apply_spatiotemporal_guidance_weighting_config(args, config, logger)
 
     # Gradient norm and parameter statistics logging
     args.log_gradient_norm = config.get("log_gradient_norm", False)

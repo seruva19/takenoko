@@ -2032,6 +2032,42 @@ stepped_multiplier = 10.0
 # mean([1,2,3,4]) for video vs mean([1,2,3]) for image
 use_explicit_video_loss_reduction = false
 
+# Anchor-vs-temporal video loss reduction inspired by URSA's split between
+# image-like anchor supervision and continuation-frame temporal supervision.
+# When enabled for video tensors, Takenoko separately averages frame 0 and frames 1..N,
+# then recombines them with the weights below. Defaults preserve the normal full mean.
+enable_split_video_loss = false
+
+# Weight applied to the frame-0 anchor portion of the reduced video loss.
+# Must be >= 0. Set above 1.0 to emphasize the anchor frame more strongly.
+split_video_loss_anchor_weight = 1.0
+
+# Weight applied to continuation frames (frames 1..N-1) in the reduced video loss.
+# Must be >= 0. Set above 1.0 to emphasize temporal continuation more strongly.
+split_video_loss_temporal_weight = 1.0
+
+# Spatiotemporal guidance weighting. Adds an auxiliary loss on top of the base objective:
+# - anchor term: frame-0 reconstruction
+# - temporal term: adjacent-frame delta consistency
+# The two branches are combined with the weights below, then multiplied by spatiotemporal_guidance_scale and added to the total loss.
+enable_spatiotemporal_guidance_weighting = false
+
+# Global multiplier for the spatiotemporal guidance term.
+# Must be > 0 when enable_spatiotemporal_guidance_weighting = true.
+spatiotemporal_guidance_scale = 0.1
+
+# Weight applied to the frame-0 anchor guidance branch.
+# Must be >= 0.
+spatiotemporal_guidance_anchor_weight = 1.0
+
+# Weight applied to the temporal-delta guidance branch.
+# Must be >= 0.
+spatiotemporal_guidance_temporal_weight = 1.0
+
+# Loss type for both anchor and temporal guidance branches.
+# Valid: "mse", "l1", "smooth_l1", "sml1"
+spatiotemporal_guidance_loss_type = "mse"
+
 # Custom loss target via noise_scheduler.get_loss_target() hook
 # For schedulers with non-standard flow matching targets
 enable_custom_loss_target = false

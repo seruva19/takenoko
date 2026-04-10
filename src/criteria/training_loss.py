@@ -21,6 +21,8 @@ from criteria.det_loss_utils import extract_det_component_tensors
 from criteria.dispersive_loss import dispersive_loss_info_nce
 from criteria.loss_factory import conditional_loss_with_pseudo_huber
 from criteria.physics_guided_motion_loss import compute_physics_guided_motion_loss
+from criteria.split_video_loss import reduce_split_video_loss
+from criteria.spatiotemporal_guidance import compute_spatiotemporal_guidance_loss
 from core.masked_training_manager import (
     create_masked_training_manager,
     MaskedTrainingManager,
@@ -420,6 +422,30 @@ class LossComponents:
         Selective Spectral Decay regularization loss (if enabled).
     flex_loss: Optional[torch.Tensor]
         FleX Fourier-domain regularization loss (if enabled).
+    split_video_anchor_loss: Optional[torch.Tensor]
+        Mean frame-0 anchor loss before auxiliary losses are added.
+    split_video_temporal_loss: Optional[torch.Tensor]
+        Mean continuation-frame loss before auxiliary losses are added.
+    split_video_loss_delta: Optional[torch.Tensor]
+        Continuation minus anchor loss for the split video reduction path.
+    split_video_anchor_weight: Optional[torch.Tensor]
+        Runtime anchor-frame weight used by split video loss reduction.
+    split_video_temporal_weight: Optional[torch.Tensor]
+        Runtime continuation-frame weight used by split video loss reduction.
+    spatiotemporal_guidance_loss: Optional[torch.Tensor]
+        Scaled URSA-inspired spatiotemporal guidance loss added to training.
+    spatiotemporal_guidance_raw_loss: Optional[torch.Tensor]
+        Unscaled weighted combination of anchor and temporal guidance losses.
+    spatiotemporal_guidance_anchor_loss: Optional[torch.Tensor]
+        Anchor-frame guidance loss before scaling.
+    spatiotemporal_guidance_temporal_loss: Optional[torch.Tensor]
+        Temporal-delta guidance loss before scaling.
+    spatiotemporal_guidance_scale: Optional[torch.Tensor]
+        Runtime scale used for the spatiotemporal guidance term.
+    spatiotemporal_guidance_anchor_weight: Optional[torch.Tensor]
+        Runtime anchor weight used by spatiotemporal guidance weighting.
+    spatiotemporal_guidance_temporal_weight: Optional[torch.Tensor]
+        Runtime temporal weight used by spatiotemporal guidance weighting.
     """
 
     total_loss: torch.Tensor
@@ -583,6 +609,18 @@ class LossComponents:
     reflexflow_weight_mean: Optional[torch.Tensor] = None
     s2d_loss: Optional[torch.Tensor] = None
     flex_loss: Optional[torch.Tensor] = None
+    split_video_anchor_loss: Optional[torch.Tensor] = None
+    split_video_temporal_loss: Optional[torch.Tensor] = None
+    split_video_loss_delta: Optional[torch.Tensor] = None
+    split_video_anchor_weight: Optional[torch.Tensor] = None
+    split_video_temporal_weight: Optional[torch.Tensor] = None
+    spatiotemporal_guidance_loss: Optional[torch.Tensor] = None
+    spatiotemporal_guidance_raw_loss: Optional[torch.Tensor] = None
+    spatiotemporal_guidance_anchor_loss: Optional[torch.Tensor] = None
+    spatiotemporal_guidance_temporal_loss: Optional[torch.Tensor] = None
+    spatiotemporal_guidance_scale: Optional[torch.Tensor] = None
+    spatiotemporal_guidance_anchor_weight: Optional[torch.Tensor] = None
+    spatiotemporal_guidance_temporal_weight: Optional[torch.Tensor] = None
 
 
 class TrainingLossComputer:
@@ -1308,7 +1346,39 @@ class TrainingLossComputer:
 
         # ---- Explicit video-aware loss reduction
         use_explicit = getattr(args, "use_explicit_video_loss_reduction", False)
-        if use_explicit and loss.dim() > 1:
+        split_video_anchor_loss_value: Optional[torch.Tensor] = None
+        split_video_temporal_loss_value: Optional[torch.Tensor] = None
+        split_video_loss_delta_value: Optional[torch.Tensor] = None
+        split_video_anchor_weight_value: Optional[torch.Tensor] = None
+        split_video_temporal_weight_value: Optional[torch.Tensor] = None
+        spatiotemporal_guidance_loss_value: Optional[torch.Tensor] = None
+        spatiotemporal_guidance_raw_loss_value: Optional[torch.Tensor] = None
+        spatiotemporal_guidance_anchor_loss_value: Optional[torch.Tensor] = None
+        spatiotemporal_guidance_temporal_loss_value: Optional[torch.Tensor] = None
+        spatiotemporal_guidance_scale_value: Optional[torch.Tensor] = None
+        spatiotemporal_guidance_anchor_weight_value: Optional[torch.Tensor] = None
+        spatiotemporal_guidance_temporal_weight_value: Optional[torch.Tensor] = None
+        if (
+            getattr(args, "enable_split_video_loss", False)
+            and loss.dim() > 1
+            and len(model_pred.shape) == 5
+        ):
+            split_result = reduce_split_video_loss(
+                loss,
+                anchor_weight=float(
+                    getattr(args, "split_video_loss_anchor_weight", 1.0)
+                ),
+                temporal_weight=float(
+                    getattr(args, "split_video_loss_temporal_weight", 1.0)
+                ),
+            )
+            loss = split_result.reduced_loss
+            split_video_anchor_loss_value = split_result.anchor_loss
+            split_video_temporal_loss_value = split_result.temporal_loss
+            split_video_loss_delta_value = split_result.delta
+            split_video_anchor_weight_value = split_result.anchor_weight
+            split_video_temporal_weight_value = split_result.temporal_weight
+        elif use_explicit and loss.dim() > 1:
             # Dimension-aware reduction: handle video (5D) vs image (4D) tensors explicitly
             if len(model_pred.shape) == 5:
                 # Video: (B, C, F, H, W) -> reduce [1, 2, 3, 4]
@@ -1335,6 +1405,53 @@ class TrainingLossComputer:
                     directional_value.size(0), -1
                 ).mean(dim=1)
             loss = loss + transition_directional_weight * directional_value.mean()
+
+        if (
+            getattr(args, "enable_spatiotemporal_guidance_weighting", False)
+            and model_pred.dim() == 5
+            and base_target.dim() == 5
+        ):
+            try:
+                st_guidance_result = compute_spatiotemporal_guidance_loss(
+                    model_pred.to(network_dtype),
+                    base_target.to(network_dtype),
+                    scale=float(getattr(args, "spatiotemporal_guidance_scale", 0.0)),
+                    anchor_weight=float(
+                        getattr(args, "spatiotemporal_guidance_anchor_weight", 1.0)
+                    ),
+                    temporal_weight=float(
+                        getattr(args, "spatiotemporal_guidance_temporal_weight", 1.0)
+                    ),
+                    loss_type=str(
+                        getattr(args, "spatiotemporal_guidance_loss_type", "mse")
+                    ).lower(),
+                )
+                if st_guidance_result.scaled_loss is not None:
+                    loss = loss + st_guidance_result.scaled_loss
+                    spatiotemporal_guidance_loss_value = (
+                        st_guidance_result.scaled_loss.detach()
+                    )
+                    spatiotemporal_guidance_raw_loss_value = (
+                        st_guidance_result.raw_loss
+                    )
+                    spatiotemporal_guidance_anchor_loss_value = (
+                        st_guidance_result.anchor_loss
+                    )
+                    spatiotemporal_guidance_temporal_loss_value = (
+                        st_guidance_result.temporal_loss
+                    )
+                    spatiotemporal_guidance_scale_value = st_guidance_result.scale
+                    spatiotemporal_guidance_anchor_weight_value = (
+                        st_guidance_result.anchor_weight
+                    )
+                    spatiotemporal_guidance_temporal_weight_value = (
+                        st_guidance_result.temporal_weight
+                    )
+            except Exception as e:
+                logger.warning(
+                    "Spatiotemporal guidance weighting computation failed: %s",
+                    e,
+                )
 
         # ---- Optional UFO motion-sub loss (training-only) ----
         ufo_motion_sub_loss_value: Optional[torch.Tensor] = None
@@ -2910,6 +3027,18 @@ class TrainingLossComputer:
             reflexflow_weight_mean=reflexflow_weight_mean_value,
             s2d_loss=s2d_loss_value,
             flex_loss=flex_loss_value,
+            split_video_anchor_loss=split_video_anchor_loss_value,
+            split_video_temporal_loss=split_video_temporal_loss_value,
+            split_video_loss_delta=split_video_loss_delta_value,
+            split_video_anchor_weight=split_video_anchor_weight_value,
+            split_video_temporal_weight=split_video_temporal_weight_value,
+            spatiotemporal_guidance_loss=spatiotemporal_guidance_loss_value,
+            spatiotemporal_guidance_raw_loss=spatiotemporal_guidance_raw_loss_value,
+            spatiotemporal_guidance_anchor_loss=spatiotemporal_guidance_anchor_loss_value,
+            spatiotemporal_guidance_temporal_loss=spatiotemporal_guidance_temporal_loss_value,
+            spatiotemporal_guidance_scale=spatiotemporal_guidance_scale_value,
+            spatiotemporal_guidance_anchor_weight=spatiotemporal_guidance_anchor_weight_value,
+            spatiotemporal_guidance_temporal_weight=spatiotemporal_guidance_temporal_weight_value,
         )
 
     @torch.no_grad()
