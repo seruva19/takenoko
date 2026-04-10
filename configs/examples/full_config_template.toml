@@ -248,6 +248,7 @@ rope_use_float32 = false
 # - "AdamW8bit": bitsandbytes 8-bit AdamW (quantized GPU states)
 # - "PagedAdamW8bit": bitsandbytes paged 8-bit AdamW (QLoRA-friendly memory behavior)
 # - "PagedAdamW32bit": bitsandbytes paged 32-bit AdamW
+# - "TorchAOAdamW8bit", "TorchAOAdamW4bit", "TorchAOAdamWFp8": torchao low-precision AdamW variants
 # - "RavenAdamW": CPU-offloaded AdamW with BF16/FP32 states
 # - "RavenAdamW8bit": CPU-offloaded 8-bit quantized AdamW
 # - "AdaFactor": Memory-efficient adaptive optimizer with relative_step scheduling
@@ -271,6 +272,13 @@ optimizer_type = "adamw8bit"
 # Additional arguments for optimizer (like "weight_decay=0.01 betas=0.9,0.999 ...")
 # Format: key=value pairs as strings. Values are parsed as Python literals.
 # optimizer_args = ["weight_decay=0.01", "betas=(0.9,0.999)", "log_muon_metrics=True"]
+#
+# TorchAO low-precision AdamW arguments:
+# - Requires `torchao==0.15.0` or a compatible build exposing AdamW8bit / AdamW4bit / AdamWFp8.
+# - Use optimizer_type = "TorchAOAdamW8bit", "TorchAOAdamW4bit", or "TorchAOAdamWFp8".
+# - block_size: Quantized optimizer-state block size. Defaults: 256 for 8bit/FP8, 128 for 4bit.
+# - bf16_stochastic_round: Enable stochastic rounding when trainable params are BF16. Default: false.
+# - amsgrad: Enable AMSGrad variant. Default: false.
 #
 # Muon-specific arguments:
 # - log_muon_metrics: Enable expensive metric logging (grad consistency, update ratio). Default: False.

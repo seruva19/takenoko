@@ -36,6 +36,48 @@ def create_stochastic_adamw_optimizer(
     return optimizer_class, optimizer
 
 
+def create_torchao_adamw8bit_optimizer(
+    trainable_params: List[Any],
+    lr: float,
+    optimizer_kwargs: Dict[str, Any],
+    logger: Any,
+) -> Tuple[Any, torch.optim.Optimizer]:
+    logger.info(f"using TorchAOAdamW8bit optimizer | {optimizer_kwargs}")
+    from optimizers.torchao_optimizers import TorchAOAdamW8bit
+
+    optimizer_class = TorchAOAdamW8bit
+    optimizer = optimizer_class(trainable_params, lr=lr, **optimizer_kwargs)
+    return optimizer_class, optimizer
+
+
+def create_torchao_adamw4bit_optimizer(
+    trainable_params: List[Any],
+    lr: float,
+    optimizer_kwargs: Dict[str, Any],
+    logger: Any,
+) -> Tuple[Any, torch.optim.Optimizer]:
+    logger.info(f"using TorchAOAdamW4bit optimizer | {optimizer_kwargs}")
+    from optimizers.torchao_optimizers import TorchAOAdamW4bit
+
+    optimizer_class = TorchAOAdamW4bit
+    optimizer = optimizer_class(trainable_params, lr=lr, **optimizer_kwargs)
+    return optimizer_class, optimizer
+
+
+def create_torchao_adamwfp8_optimizer(
+    trainable_params: List[Any],
+    lr: float,
+    optimizer_kwargs: Dict[str, Any],
+    logger: Any,
+) -> Tuple[Any, torch.optim.Optimizer]:
+    logger.info(f"using TorchAOAdamWFp8 optimizer | {optimizer_kwargs}")
+    from optimizers.torchao_optimizers import TorchAOAdamWFp8
+
+    optimizer_class = TorchAOAdamWFp8
+    optimizer = optimizer_class(trainable_params, lr=lr, **optimizer_kwargs)
+    return optimizer_class, optimizer
+
+
 def create_adafactor_optimizer(
     args: Any,
     trainable_params: List[Any],

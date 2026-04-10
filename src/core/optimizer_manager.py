@@ -301,6 +301,42 @@ class OptimizerManager:
                 logger,
             )
 
+        elif optimizer_type in {"torchaoadamw8bit", "torchao_adamw8bit"}:
+            from optimizers.factory.standard_factory import (
+                create_torchao_adamw8bit_optimizer,
+            )
+
+            optimizer_class, optimizer = create_torchao_adamw8bit_optimizer(
+                trainable_params,
+                lr,
+                optimizer_kwargs,
+                logger,
+            )
+
+        elif optimizer_type in {"torchaoadamw4bit", "torchao_adamw4bit"}:
+            from optimizers.factory.standard_factory import (
+                create_torchao_adamw4bit_optimizer,
+            )
+
+            optimizer_class, optimizer = create_torchao_adamw4bit_optimizer(
+                trainable_params,
+                lr,
+                optimizer_kwargs,
+                logger,
+            )
+
+        elif optimizer_type in {"torchaoadamwfp8", "torchao_adamwfp8"}:
+            from optimizers.factory.standard_factory import (
+                create_torchao_adamwfp8_optimizer,
+            )
+
+            optimizer_class, optimizer = create_torchao_adamwfp8_optimizer(
+                trainable_params,
+                lr,
+                optimizer_kwargs,
+                logger,
+            )
+
         elif is_q_galore_optimizer_type(optimizer_type):
             from optimizers.factory.q_galore_factory import (
                 create_q_galore_adamw8bit_optimizer,
