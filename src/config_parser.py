@@ -82,6 +82,12 @@ from configs.dual_head_alignment_config import apply_dual_head_alignment_config
 from configs.manifold_consensus_config import apply_manifold_consensus_config
 from configs.reference_conditioning_config import apply_reference_conditioning_config
 from configs.diagnostic_metrics_config import apply_diagnostic_metrics_config
+from configs.deco_band_balanced_loss_config import (
+    apply_deco_band_balanced_loss_config,
+)
+from configs.deco_frequency_diagnostics_config import (
+    apply_deco_frequency_diagnostics_config,
+)
 from configs.split_video_loss_config import apply_split_video_loss_config
 from configs.spatiotemporal_guidance_weighting_config import (
     apply_spatiotemporal_guidance_weighting_config,
@@ -822,6 +828,8 @@ def create_args_from_config(
     args.train_metrics_interval = config.get("train_metrics_interval", 50)
     apply_split_video_loss_config(args, config, logger)
     apply_spatiotemporal_guidance_weighting_config(args, config, logger)
+    apply_deco_frequency_diagnostics_config(args, config, logger)
+    apply_deco_band_balanced_loss_config(args, config, logger)
 
     # Gradient norm and parameter statistics logging
     args.log_gradient_norm = config.get("log_gradient_norm", False)

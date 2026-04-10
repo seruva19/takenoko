@@ -231,6 +231,70 @@ def collect_and_log_training_metrics(
         logs["spatiotemporal_guidance/temporal_weight"] = float(
             loss_components.spatiotemporal_guidance_temporal_weight.item()
         )
+    if getattr(loss_components, "deco_pred_low_freq_energy", None) is not None:
+        logs["deco_freq/pred_low"] = float(
+            loss_components.deco_pred_low_freq_energy.item()
+        )
+    if getattr(loss_components, "deco_pred_high_freq_energy", None) is not None:
+        logs["deco_freq/pred_high"] = float(
+            loss_components.deco_pred_high_freq_energy.item()
+        )
+    if getattr(loss_components, "deco_pred_high_low_ratio", None) is not None:
+        logs["deco_freq/pred_high_low_ratio"] = float(
+            loss_components.deco_pred_high_low_ratio.item()
+        )
+    if getattr(loss_components, "deco_target_low_freq_energy", None) is not None:
+        logs["deco_freq/target_low"] = float(
+            loss_components.deco_target_low_freq_energy.item()
+        )
+    if getattr(loss_components, "deco_target_high_freq_energy", None) is not None:
+        logs["deco_freq/target_high"] = float(
+            loss_components.deco_target_high_freq_energy.item()
+        )
+    if getattr(loss_components, "deco_target_high_low_ratio", None) is not None:
+        logs["deco_freq/target_high_low_ratio"] = float(
+            loss_components.deco_target_high_low_ratio.item()
+        )
+    if getattr(loss_components, "deco_high_low_ratio_gap", None) is not None:
+        logs["deco_freq/high_low_ratio_gap"] = float(
+            loss_components.deco_high_low_ratio_gap.item()
+        )
+    if getattr(loss_components, "deco_block_size", None) is not None:
+        logs["deco_freq/block_size"] = float(loss_components.deco_block_size.item())
+    if getattr(loss_components, "deco_low_freq_extent", None) is not None:
+        logs["deco_freq/low_extent"] = float(
+            loss_components.deco_low_freq_extent.item()
+        )
+    if getattr(loss_components, "band_balanced_loss", None) is not None:
+        logs["loss/band_balanced"] = float(loss_components.band_balanced_loss.item())
+    if getattr(loss_components, "band_balanced_raw_loss", None) is not None:
+        logs["band_balanced/raw"] = float(
+            loss_components.band_balanced_raw_loss.item()
+        )
+    if getattr(loss_components, "band_balanced_low_freq_loss", None) is not None:
+        logs["band_balanced/low_loss"] = float(
+            loss_components.band_balanced_low_freq_loss.item()
+        )
+    if getattr(loss_components, "band_balanced_high_freq_loss", None) is not None:
+        logs["band_balanced/high_loss"] = float(
+            loss_components.band_balanced_high_freq_loss.item()
+        )
+    if getattr(loss_components, "band_balanced_low_freq_weight", None) is not None:
+        logs["band_balanced/low_weight"] = float(
+            loss_components.band_balanced_low_freq_weight.item()
+        )
+    if getattr(loss_components, "band_balanced_high_freq_weight", None) is not None:
+        logs["band_balanced/high_weight"] = float(
+            loss_components.band_balanced_high_freq_weight.item()
+        )
+    if getattr(loss_components, "band_balanced_block_size", None) is not None:
+        logs["band_balanced/block_size"] = float(
+            loss_components.band_balanced_block_size.item()
+        )
+    if getattr(loss_components, "band_balanced_low_freq_extent", None) is not None:
+        logs["band_balanced/low_extent"] = float(
+            loss_components.band_balanced_low_freq_extent.item()
+        )
     if getattr(loss_components, "ufo_motion_sub_loss", None) is not None:
         logs["loss/ufo_motion_sub"] = float(loss_components.ufo_motion_sub_loss.item())
     if getattr(loss_components, "video_consistency_distance_loss", None) is not None:

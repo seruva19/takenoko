@@ -18,6 +18,10 @@ import torch.nn.functional as F
 
 from common.logger import get_logger
 from criteria.det_loss_utils import extract_det_component_tensors
+from criteria.deco_frequency_diagnostics import (
+    compute_band_balanced_dct_loss,
+    compute_frequency_decoupling_diagnostics,
+)
 from criteria.dispersive_loss import dispersive_loss_info_nce
 from criteria.loss_factory import conditional_loss_with_pseudo_huber
 from criteria.physics_guided_motion_loss import compute_physics_guided_motion_loss
@@ -446,6 +450,40 @@ class LossComponents:
         Runtime anchor weight used by spatiotemporal guidance weighting.
     spatiotemporal_guidance_temporal_weight: Optional[torch.Tensor]
         Runtime temporal weight used by spatiotemporal guidance weighting.
+    deco_pred_low_freq_energy: Optional[torch.Tensor]
+        Mean low-frequency DCT energy of model predictions.
+    deco_pred_high_freq_energy: Optional[torch.Tensor]
+        Mean high-frequency DCT energy of model predictions.
+    deco_pred_high_low_ratio: Optional[torch.Tensor]
+        High-to-low frequency energy ratio of model predictions.
+    deco_target_low_freq_energy: Optional[torch.Tensor]
+        Mean low-frequency DCT energy of targets.
+    deco_target_high_freq_energy: Optional[torch.Tensor]
+        Mean high-frequency DCT energy of targets.
+    deco_target_high_low_ratio: Optional[torch.Tensor]
+        High-to-low frequency energy ratio of targets.
+    deco_high_low_ratio_gap: Optional[torch.Tensor]
+        Prediction ratio minus target ratio for DeCo diagnostics.
+    deco_block_size: Optional[torch.Tensor]
+        Effective DCT block size used for diagnostics.
+    deco_low_freq_extent: Optional[torch.Tensor]
+        Size of the low-frequency top-left DCT band.
+    band_balanced_loss: Optional[torch.Tensor]
+        Scaled DeCo-inspired band-balanced DCT auxiliary loss.
+    band_balanced_raw_loss: Optional[torch.Tensor]
+        Unscaled weighted combination of low/high DCT reconstruction errors.
+    band_balanced_low_freq_loss: Optional[torch.Tensor]
+        Low-frequency DCT reconstruction loss before scaling.
+    band_balanced_high_freq_loss: Optional[torch.Tensor]
+        High-frequency DCT reconstruction loss before scaling.
+    band_balanced_low_freq_weight: Optional[torch.Tensor]
+        Runtime low-frequency weight used by the band-balanced loss.
+    band_balanced_high_freq_weight: Optional[torch.Tensor]
+        Runtime high-frequency weight used by the band-balanced loss.
+    band_balanced_block_size: Optional[torch.Tensor]
+        Effective DCT block size used by the band-balanced loss.
+    band_balanced_low_freq_extent: Optional[torch.Tensor]
+        Size of the low-frequency top-left DCT band used by the band-balanced loss.
     """
 
     total_loss: torch.Tensor
@@ -621,6 +659,23 @@ class LossComponents:
     spatiotemporal_guidance_scale: Optional[torch.Tensor] = None
     spatiotemporal_guidance_anchor_weight: Optional[torch.Tensor] = None
     spatiotemporal_guidance_temporal_weight: Optional[torch.Tensor] = None
+    deco_pred_low_freq_energy: Optional[torch.Tensor] = None
+    deco_pred_high_freq_energy: Optional[torch.Tensor] = None
+    deco_pred_high_low_ratio: Optional[torch.Tensor] = None
+    deco_target_low_freq_energy: Optional[torch.Tensor] = None
+    deco_target_high_freq_energy: Optional[torch.Tensor] = None
+    deco_target_high_low_ratio: Optional[torch.Tensor] = None
+    deco_high_low_ratio_gap: Optional[torch.Tensor] = None
+    deco_block_size: Optional[torch.Tensor] = None
+    deco_low_freq_extent: Optional[torch.Tensor] = None
+    band_balanced_loss: Optional[torch.Tensor] = None
+    band_balanced_raw_loss: Optional[torch.Tensor] = None
+    band_balanced_low_freq_loss: Optional[torch.Tensor] = None
+    band_balanced_high_freq_loss: Optional[torch.Tensor] = None
+    band_balanced_low_freq_weight: Optional[torch.Tensor] = None
+    band_balanced_high_freq_weight: Optional[torch.Tensor] = None
+    band_balanced_block_size: Optional[torch.Tensor] = None
+    band_balanced_low_freq_extent: Optional[torch.Tensor] = None
 
 
 class TrainingLossComputer:
@@ -1358,6 +1413,23 @@ class TrainingLossComputer:
         spatiotemporal_guidance_scale_value: Optional[torch.Tensor] = None
         spatiotemporal_guidance_anchor_weight_value: Optional[torch.Tensor] = None
         spatiotemporal_guidance_temporal_weight_value: Optional[torch.Tensor] = None
+        deco_pred_low_freq_energy_value: Optional[torch.Tensor] = None
+        deco_pred_high_freq_energy_value: Optional[torch.Tensor] = None
+        deco_pred_high_low_ratio_value: Optional[torch.Tensor] = None
+        deco_target_low_freq_energy_value: Optional[torch.Tensor] = None
+        deco_target_high_freq_energy_value: Optional[torch.Tensor] = None
+        deco_target_high_low_ratio_value: Optional[torch.Tensor] = None
+        deco_high_low_ratio_gap_value: Optional[torch.Tensor] = None
+        deco_block_size_value: Optional[torch.Tensor] = None
+        deco_low_freq_extent_value: Optional[torch.Tensor] = None
+        band_balanced_loss_value: Optional[torch.Tensor] = None
+        band_balanced_raw_loss_value: Optional[torch.Tensor] = None
+        band_balanced_low_freq_loss_value: Optional[torch.Tensor] = None
+        band_balanced_high_freq_loss_value: Optional[torch.Tensor] = None
+        band_balanced_low_freq_weight_value: Optional[torch.Tensor] = None
+        band_balanced_high_freq_weight_value: Optional[torch.Tensor] = None
+        band_balanced_block_size_value: Optional[torch.Tensor] = None
+        band_balanced_low_freq_extent_value: Optional[torch.Tensor] = None
         if (
             getattr(args, "enable_split_video_loss", False)
             and loss.dim() > 1
@@ -1453,6 +1525,51 @@ class TrainingLossComputer:
                     e,
                 )
 
+        if getattr(args, "enable_band_balanced_loss", False):
+            try:
+                band_balanced_result = compute_band_balanced_dct_loss(
+                    model_pred.to(torch.float32),
+                    base_target.to(torch.float32),
+                    loss_weight=float(
+                        getattr(args, "band_balanced_loss_weight", 0.0)
+                    ),
+                    low_freq_weight=float(
+                        getattr(args, "band_balanced_low_freq_weight", 1.0)
+                    ),
+                    high_freq_weight=float(
+                        getattr(args, "band_balanced_high_freq_weight", 1.0)
+                    ),
+                    block_size=int(getattr(args, "band_balanced_block_size", 8)),
+                    low_freq_ratio=float(
+                        getattr(args, "band_balanced_low_freq_ratio", 0.5)
+                    ),
+                )
+                if band_balanced_result.scaled_loss is not None:
+                    loss = loss + band_balanced_result.scaled_loss.to(
+                        device=loss.device,
+                        dtype=loss.dtype,
+                    )
+                    band_balanced_loss_value = band_balanced_result.scaled_loss.detach()
+                    band_balanced_raw_loss_value = band_balanced_result.raw_loss
+                    band_balanced_low_freq_loss_value = (
+                        band_balanced_result.low_freq_loss
+                    )
+                    band_balanced_high_freq_loss_value = (
+                        band_balanced_result.high_freq_loss
+                    )
+                    band_balanced_low_freq_weight_value = (
+                        band_balanced_result.low_freq_weight
+                    )
+                    band_balanced_high_freq_weight_value = (
+                        band_balanced_result.high_freq_weight
+                    )
+                    band_balanced_block_size_value = band_balanced_result.block_size
+                    band_balanced_low_freq_extent_value = (
+                        band_balanced_result.low_freq_extent
+                    )
+            except Exception as e:
+                logger.warning("DeCo band-balanced loss failed: %s", e)
+
         # ---- Optional UFO motion-sub loss (training-only) ----
         ufo_motion_sub_loss_value: Optional[torch.Tensor] = None
         if (
@@ -1479,6 +1596,34 @@ class TrainingLossComputer:
                 logger.warning("UFO motion-sub loss computation failed: %s", e)
 
         base_loss = loss
+
+        if getattr(args, "enable_frequency_decoupling_diagnostics", False):
+            try:
+                deco_result = compute_frequency_decoupling_diagnostics(
+                    model_pred.to(torch.float32),
+                    base_target.to(torch.float32),
+                    block_size=int(
+                        getattr(args, "frequency_decoupling_block_size", 8)
+                    ),
+                    low_freq_ratio=float(
+                        getattr(args, "frequency_decoupling_low_freq_ratio", 0.5)
+                    ),
+                )
+                deco_pred_low_freq_energy_value = deco_result.pred_low_freq_energy
+                deco_pred_high_freq_energy_value = deco_result.pred_high_freq_energy
+                deco_pred_high_low_ratio_value = deco_result.pred_high_low_ratio
+                deco_target_low_freq_energy_value = deco_result.target_low_freq_energy
+                deco_target_high_freq_energy_value = (
+                    deco_result.target_high_freq_energy
+                )
+                deco_target_high_low_ratio_value = (
+                    deco_result.target_high_low_ratio
+                )
+                deco_high_low_ratio_gap_value = deco_result.high_low_ratio_gap
+                deco_block_size_value = deco_result.block_size
+                deco_low_freq_extent_value = deco_result.low_freq_extent
+            except Exception as e:
+                logger.warning("DeCo frequency diagnostics failed: %s", e)
 
         # ---- Optional ReflexFlow (ADR + FC) auxiliary objective ----
         reflexflow_adr_loss_value: Optional[torch.Tensor] = None
@@ -3039,6 +3184,23 @@ class TrainingLossComputer:
             spatiotemporal_guidance_scale=spatiotemporal_guidance_scale_value,
             spatiotemporal_guidance_anchor_weight=spatiotemporal_guidance_anchor_weight_value,
             spatiotemporal_guidance_temporal_weight=spatiotemporal_guidance_temporal_weight_value,
+            deco_pred_low_freq_energy=deco_pred_low_freq_energy_value,
+            deco_pred_high_freq_energy=deco_pred_high_freq_energy_value,
+            deco_pred_high_low_ratio=deco_pred_high_low_ratio_value,
+            deco_target_low_freq_energy=deco_target_low_freq_energy_value,
+            deco_target_high_freq_energy=deco_target_high_freq_energy_value,
+            deco_target_high_low_ratio=deco_target_high_low_ratio_value,
+            deco_high_low_ratio_gap=deco_high_low_ratio_gap_value,
+            deco_block_size=deco_block_size_value,
+            deco_low_freq_extent=deco_low_freq_extent_value,
+            band_balanced_loss=band_balanced_loss_value,
+            band_balanced_raw_loss=band_balanced_raw_loss_value,
+            band_balanced_low_freq_loss=band_balanced_low_freq_loss_value,
+            band_balanced_high_freq_loss=band_balanced_high_freq_loss_value,
+            band_balanced_low_freq_weight=band_balanced_low_freq_weight_value,
+            band_balanced_high_freq_weight=band_balanced_high_freq_weight_value,
+            band_balanced_block_size=band_balanced_block_size_value,
+            band_balanced_low_freq_extent=band_balanced_low_freq_extent_value,
         )
 
     @torch.no_grad()

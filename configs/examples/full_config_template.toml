@@ -2068,6 +2068,40 @@ spatiotemporal_guidance_temporal_weight = 1.0
 # Valid: "mse", "l1", "smooth_l1", "sml1"
 spatiotemporal_guidance_loss_type = "mse"
 
+# DCT frequency decoupling diagnostics.
+# Logs low-frequency energy, high-frequency energy, and high/low energy ratios for predictions and targets using non-overlapping 2D DCT blocks.
+enable_frequency_decoupling_diagnostics = false
+
+# DCT block size used by the frequency decoupling diagnostics. Must be >= 2.
+frequency_decoupling_block_size = 8
+
+# Fraction of the top-left DCT block treated as the low-frequency band.
+# Example: 0.5 on an 8x8 block uses a 4x4 low-frequency region and treats the
+# remaining coefficients as high frequency. Must be in (0, 1].
+frequency_decoupling_low_freq_ratio = 0.5
+
+# Band-balanced DCT reconstruction loss.
+# Adds a separate auxiliary loss over DCT coefficients, with independent low-frequency and high-frequency weights.
+# Use it when you want to bias optimization toward better frequency balance without changing the core model.
+enable_band_balanced_loss = false
+
+# Global multiplier applied to the band-balanced DCT auxiliary loss.
+# Must be > 0 when enable_band_balanced_loss = true.
+band_balanced_loss_weight = 0.05
+
+# Weight applied to the low-frequency DCT reconstruction error band. Must be >= 0.
+band_balanced_low_freq_weight = 1.0
+
+# Weight applied to the high-frequency DCT reconstruction error band. Must be >= 0.
+band_balanced_high_freq_weight = 1.0
+
+# DCT block size used by the band-balanced loss. Must be >= 2.
+band_balanced_block_size = 8
+
+# Fraction of the top-left DCT block treated as the low-frequency band for the band-balanced loss.
+# Must be in (0, 1].
+band_balanced_low_freq_ratio = 0.5
+
 # Custom loss target via noise_scheduler.get_loss_target() hook
 # For schedulers with non-standard flow matching targets
 enable_custom_loss_target = false
