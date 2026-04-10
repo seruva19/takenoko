@@ -82,6 +82,9 @@ from configs.dual_head_alignment_config import apply_dual_head_alignment_config
 from configs.manifold_consensus_config import apply_manifold_consensus_config
 from configs.reference_conditioning_config import apply_reference_conditioning_config
 from configs.diagnostic_metrics_config import apply_diagnostic_metrics_config
+from configs.vae_refinement_validation_config import (
+    apply_vae_refinement_validation_profile,
+)
 
 
 def create_args_from_config(
@@ -405,6 +408,20 @@ def create_args_from_config(
 
     # VAE training knobs (defaults preserve legacy behaviour)
     args.vae_training_mode = str(config.get("vae_training_mode", "full"))
+    args.vae_refinement_profile = str(
+        config.get("vae_refinement_profile", "none")
+    ).lower()
+    if args.vae_refinement_profile not in {"none", "visual_quality"}:
+        raise ValueError(
+            "vae_refinement_profile must be one of: none, visual_quality"
+        )
+    args.vae_refinement_validation_profile = str(
+        config.get("vae_refinement_validation_profile", "none")
+    ).lower()
+    if args.vae_refinement_validation_profile not in {"none", "visual_quality"}:
+        raise ValueError(
+            "vae_refinement_validation_profile must be one of: none, visual_quality"
+        )
     args.vae_kl_weight = float(config.get("vae_kl_weight", 1e-6))
     args.vae_reconstruction_loss = str(config.get("vae_reconstruction_loss", "mse"))
     args.vae_mse_weight = float(config.get("vae_mse_weight", 1.0))
@@ -433,6 +450,25 @@ def create_args_from_config(
     args.vae_loss_balancer_window = int(config.get("vae_loss_balancer_window", 0))
     args.vae_loss_balancer_percentile = int(
         config.get("vae_loss_balancer_percentile", 95)
+    )
+    args.vae_enable_latent_degradation = bool(
+        config.get("vae_enable_latent_degradation", False)
+    )
+    args.vae_latent_degradation_ratio = float(
+        config.get("vae_latent_degradation_ratio", 0.5)
+    )
+    args.vae_latent_degradation_mode = str(
+        config.get("vae_latent_degradation_mode", "bilinear")
+    ).lower()
+    if args.vae_latent_degradation_mode not in {"bilinear", "bicubic", "area", "nearest"}:
+        raise ValueError(
+            "vae_latent_degradation_mode must be one of: bilinear, bicubic, area, nearest"
+        )
+    args.vae_latent_degradation_noise_std = float(
+        config.get("vae_latent_degradation_noise_std", 0.0)
+    )
+    args.vae_latent_degradation_apply_prob = float(
+        config.get("vae_latent_degradation_apply_prob", 1.0)
     )
 
     _decoder_mean_default = args.vae_training_mode == "decoder_only"
@@ -1065,6 +1101,7 @@ def create_args_from_config(
     # When enabled, validation datasets will include original/decoded pixels in batches
     # as `batch["pixels"]`, allowing perceptual metrics without altering model inputs.
     args.load_val_pixels = bool(config.get("load_val_pixels", False))
+    apply_vae_refinement_validation_profile(args, config, logger)
 
     # Logging settings
     args.logging_dir = config.get("logging_dir", "logs")

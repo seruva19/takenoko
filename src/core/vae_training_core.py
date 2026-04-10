@@ -30,11 +30,20 @@ from utils.sensecraft_utils import (
     create_sensecraft_loss,
     prepare_sensecraft_loss_tensors,
 )
+from utils.vae_latent_degradation import apply_vae_latent_degradation
 
 import logging
 from common.logger import get_logger
 
 logger = get_logger(__name__, level=logging.INFO)
+
+
+_VISUAL_QUALITY_SENSECRAFT_DEFAULT = [
+    {"charbonnier": 1.0},
+    {"sobel": 0.15},
+    {"high_freq": 0.1},
+    {"lpips": [0.05, {"net": "alex"}]},
+]
 
 
 class MedianLossBalancer:
@@ -153,6 +162,30 @@ class VaeTrainingCore:
         self._fixed_sample_batch: Optional[torch.Tensor] = None
         self._sample_images_dir: Optional[str] = None
         self._sample_max_frames: int = 16
+        self._last_validation_logs: Dict[str, float] = {}
+
+    def _maybe_degrade_latent(
+        self,
+        args: argparse.Namespace,
+        latent: torch.Tensor,
+    ) -> torch.Tensor:
+        """Apply the opt-in decoder refinement degradation proxy to latents."""
+        if not bool(getattr(args, "vae_enable_latent_degradation", False)):
+            return latent
+
+        apply_prob = float(getattr(args, "vae_latent_degradation_apply_prob", 1.0))
+        if apply_prob <= 0.0:
+            return latent
+        if apply_prob < 1.0:
+            if float(torch.rand((), device=latent.device).item()) >= apply_prob:
+                return latent
+
+        return apply_vae_latent_degradation(
+            latents=latent,
+            ratio=float(getattr(args, "vae_latent_degradation_ratio", 0.5)),
+            mode=str(getattr(args, "vae_latent_degradation_mode", "bilinear")).lower(),  # type: ignore[arg-type]
+            noise_std=float(getattr(args, "vae_latent_degradation_noise_std", 0.0)),
+        )
 
     def _resolve_sensecraft_mode(
         self, args: argparse.Namespace, tensor: torch.Tensor
@@ -199,6 +232,67 @@ class VaeTrainingCore:
         self._sensecraft_losses[mode] = loss_module
         logger.info("Loaded SenseCraft VAE loss in %s mode onto %s", mode, device)
         return loss_module
+
+    def _apply_refinement_profile(
+        self,
+        args: argparse.Namespace,
+        reconstruction_loss_type: str,
+        loss_weights: Dict[str, float],
+    ) -> tuple[str, Dict[str, float]]:
+        """Apply VAE refinement profile defaults without overriding explicit user config."""
+
+        profile = str(getattr(args, "vae_refinement_profile", "none")).lower()
+        if profile == "none":
+            return reconstruction_loss_type, loss_weights
+
+        if profile != "visual_quality":
+            raise ValueError(f"Unsupported VAE refinement profile: {profile}")
+
+        if not config_key_provided(args, "vae_reconstruction_loss"):
+            reconstruction_loss_type = "l1"
+
+        if not config_key_provided(args, "vae_mse_weight"):
+            loss_weights["mse"] = 0.0
+        if not config_key_provided(args, "vae_mae_weight"):
+            loss_weights["mae"] = 1.0
+        if not config_key_provided(args, "vae_lpips_weight"):
+            loss_weights["lpips"] = 0.1
+        if not config_key_provided(args, "vae_edge_weight"):
+            loss_weights["edge"] = 0.05
+
+        if not config_key_provided(args, "vae_enable_sensecraft_loss"):
+            args.vae_enable_sensecraft_loss = True
+        if (
+            bool(getattr(args, "vae_enable_sensecraft_loss", False))
+            and not config_key_provided(args, "vae_sensecraft_weight")
+        ):
+            loss_weights["sensecraft"] = 0.25
+        elif bool(getattr(args, "vae_enable_sensecraft_loss", False)):
+            loss_weights["sensecraft"] = float(
+                getattr(args, "vae_sensecraft_weight", 1.0)
+            )
+        else:
+            loss_weights["sensecraft"] = 0.0
+
+        if (
+            bool(getattr(args, "vae_enable_sensecraft_loss", False))
+            and not config_key_provided(args, "vae_sensecraft_loss_config")
+            and not getattr(args, "vae_sensecraft_loss_config", None)
+        ):
+            args.vae_sensecraft_loss_config = [
+                dict(item) for item in _VISUAL_QUALITY_SENSECRAFT_DEFAULT
+            ]
+
+        if str(getattr(args, "vae_training_mode", "full")).lower() == "decoder_only":
+            if not config_key_provided(args, "vae_kl_weight"):
+                loss_weights["kl"] = 0.0
+
+        logger.info(
+            "Applied VAE refinement profile '%s' with resolved weights=%s",
+            profile,
+            loss_weights,
+        )
+        return reconstruction_loss_type, loss_weights
 
     def compute_vae_loss(
         self,
@@ -572,7 +666,8 @@ class VaeTrainingCore:
                 latent, mu, logvar = self._extract_latent_stats(
                     encoded, use_latent_mean
                 )
-                reconstructed = self._decode_output(vae_module.decode(latent))
+                decode_latent = self._maybe_degrade_latent(args, latent)
+                reconstructed = self._decode_output(vae_module.decode(decode_latent))
             else:
                 output = vae_module(images)
                 if isinstance(output, tuple):
@@ -597,6 +692,18 @@ class VaeTrainingCore:
 
         vae.eval()
         losses = []
+        validation_profile = str(
+            getattr(args, "vae_refinement_validation_profile", "none")
+        ).lower()
+        term_tensors: Dict[str, list[torch.Tensor]] = {
+            "mse": [],
+            "mae": [],
+            "lpips": [],
+            "edge": [],
+            "sensecraft": [],
+            "kl": [],
+        }
+        sensecraft_term_tensors: Dict[str, list[torch.Tensor]] = {}
 
         with torch.no_grad():
             for step, batch in enumerate(val_dataloader):
@@ -631,7 +738,7 @@ class VaeTrainingCore:
                     sensecraft_mode,
                 )
 
-                val_loss, _ = self.compute_vae_loss(
+                val_loss, loss_dict = self.compute_vae_loss(
                     reconstructed,
                     original,
                     mu,
@@ -648,14 +755,46 @@ class VaeTrainingCore:
                     sobel_fn=self._sobel_fn,
                 )
 
-                losses.append(val_loss)
+                losses.append(val_loss.detach())
 
+                if validation_profile != "none":
+                    for term in term_tensors.keys():
+                        value = loss_dict.get(term)
+                        if isinstance(value, torch.Tensor):
+                            term_tensors[term].append(
+                                value.detach().reshape(1).to(torch.float32)
+                            )
+                    for key, value in (loss_dict.get("sensecraft_terms", {}) or {}).items():
+                        if isinstance(value, torch.Tensor):
+                            sensecraft_term_tensors.setdefault(key, []).append(
+                                value.detach().reshape(1).to(torch.float32)
+                            )
+
+        validation_logs: Dict[str, float] = {}
         if losses:
             losses_tensor = torch.stack(losses)
             gathered_losses = accelerator.gather_for_metrics(losses_tensor)
             final_avg_loss = gathered_losses.mean().item()  # type: ignore
+            validation_logs["vae/val_loss"] = float(final_avg_loss)
         else:
             final_avg_loss = 0.0
+            validation_logs["vae/val_loss"] = 0.0
+
+        if validation_profile != "none":
+            for term, values in term_tensors.items():
+                if not values:
+                    continue
+                gathered = accelerator.gather_for_metrics(torch.cat(values))
+                validation_logs[f"vae/val_{term}"] = float(gathered.mean().item())
+            for key, values in sensecraft_term_tensors.items():
+                if not values:
+                    continue
+                gathered = accelerator.gather_for_metrics(torch.cat(values))
+                validation_logs[f"vae/val_sensecraft_{key}"] = float(
+                    gathered.mean().item()
+                )
+
+        self._last_validation_logs = validation_logs
 
         vae.train()
         logger.info(f"VAE validation finished. Average loss: {final_avg_loss:.5f}")
@@ -703,6 +842,11 @@ class VaeTrainingCore:
             ),
             "kl": float(getattr(args, "vae_kl_weight", 1e-6)),
         }
+        reconstruction_loss_type, loss_weights = self._apply_refinement_profile(
+            args,
+            reconstruction_loss_type,
+            loss_weights,
+        )
 
         # Legacy compatibility: respect reconstruction_loss switch when weights untouched
         if (
@@ -769,11 +913,12 @@ class VaeTrainingCore:
             self._lpips_model = None
 
         logger.info(
-            "Starting VAE training with weights %s, reconstruction loss=%s, latent_mean=%s, sensecraft_enabled=%s",
+            "Starting VAE training with weights %s, reconstruction loss=%s, latent_mean=%s, sensecraft_enabled=%s, latent_degradation=%s",
             self._loss_weights,
             reconstruction_loss_type,
             self._use_latent_mean,
             bool(getattr(args, "vae_enable_sensecraft_loss", False)),
+            bool(getattr(args, "vae_enable_latent_degradation", False)),
         )
 
         for epoch in range(num_train_epochs):
@@ -941,9 +1086,24 @@ class VaeTrainingCore:
                                     apply_direction_hints_to_logs as _adh,
                                 )
 
-                                _logs = _adh(args, {"vae/val_loss": val_loss})
+                                _logs = _adh(
+                                    args,
+                                    dict(
+                                        getattr(
+                                            self,
+                                            "_last_validation_logs",
+                                            {"vae/val_loss": val_loss},
+                                        )
+                                    ),
+                                )
                             except Exception:
-                                _logs = {"vae/val_loss": val_loss}
+                                _logs = dict(
+                                    getattr(
+                                        self,
+                                        "_last_validation_logs",
+                                        {"vae/val_loss": val_loss},
+                                    )
+                                )
                             accelerator.log(_logs, step=global_step)
 
                         if should_saving:
@@ -1026,9 +1186,24 @@ class VaeTrainingCore:
                         apply_direction_hints_to_logs as _adh,
                     )
 
-                    _logs = _adh(args, {"vae/val_loss": val_loss})
+                    _logs = _adh(
+                        args,
+                        dict(
+                            getattr(
+                                self,
+                                "_last_validation_logs",
+                                {"vae/val_loss": val_loss},
+                            )
+                        ),
+                    )
                 except Exception:
-                    _logs = {"vae/val_loss": val_loss}
+                    _logs = dict(
+                        getattr(
+                            self,
+                            "_last_validation_logs",
+                            {"vae/val_loss": val_loss},
+                        )
+                    )
                 accelerator.log(_logs, step=global_step)
             elif val_dataloader is not None and not should_validate_on_epoch_end:
                 accelerator.print(

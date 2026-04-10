@@ -136,6 +136,10 @@ def validate_vae_loss_settings(args: argparse.Namespace) -> None:
         "vae_kl_weight": float(getattr(args, "vae_kl_weight", 1e-6)),
     }
 
+    profile = str(getattr(args, "vae_refinement_profile", "none")).lower()
+    if profile not in {"none", "visual_quality"}:
+        raise ValueError("vae_refinement_profile must be one of: none, visual_quality")
+
     for key, value in weights.items():
         if value < 0:
             raise ValueError(f"{key} must be non-negative (got {value})")
@@ -151,6 +155,24 @@ def validate_vae_loss_settings(args: argparse.Namespace) -> None:
         raise ValueError(
             "vae_loss_balancer_percentile must be within (0, 100]"
         )
+
+    if bool(getattr(args, "vae_enable_latent_degradation", False)):
+        if str(getattr(args, "vae_training_mode", "full")).lower() != "decoder_only":
+            raise ValueError(
+                "vae_enable_latent_degradation currently requires vae_training_mode = 'decoder_only'"
+            )
+
+        ratio = float(getattr(args, "vae_latent_degradation_ratio", 0.5))
+        if not 0.0 < ratio < 1.0:
+            raise ValueError("vae_latent_degradation_ratio must be in (0, 1)")
+
+        noise_std = float(getattr(args, "vae_latent_degradation_noise_std", 0.0))
+        if noise_std < 0.0:
+            raise ValueError("vae_latent_degradation_noise_std must be >= 0")
+
+        apply_prob = float(getattr(args, "vae_latent_degradation_apply_prob", 1.0))
+        if not 0.0 <= apply_prob <= 1.0:
+            raise ValueError("vae_latent_degradation_apply_prob must be in [0, 1]")
 
     if weights["vae_lpips_weight"] > 0.0:
         if importlib.util.find_spec("lpips") is None:

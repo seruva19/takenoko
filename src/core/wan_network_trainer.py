@@ -687,6 +687,7 @@ class WanNetworkTrainer:
         need_vae_for_control = (
             hasattr(args, "enable_control_lora") and args.enable_control_lora
         )
+        need_vae_for_training = args.network_module == "networks.vae_wan"
         need_vae_for_sampling = args.sample_prompts is not None
         need_vae_for_crepa = getattr(args, "crepa_enabled", False) and not getattr(
             args, "crepa_use_backbone_features", False
@@ -698,27 +699,38 @@ class WanNetworkTrainer:
             )
 
         # Decide VAE loading strategy
-        if need_vae_for_control or need_vae_for_crepa:
+        if need_vae_for_control or need_vae_for_crepa or need_vae_for_training:
             # Hard fail early if VAE path is missing
             if not getattr(args, "vae", None) or not str(args.vae).strip():
                 if need_vae_for_control:
                     raise ValueError(
                         "Control LoRA requires a VAE checkpoint. Set 'vae' in the config when enable_control_lora is True."
                     )
+                if need_vae_for_training:
+                    raise ValueError(
+                        "VAE training requires a VAE checkpoint. Set 'vae' in the config when network_module = 'networks.vae_wan'."
+                    )
                 raise ValueError(
                     "CREPA requires a VAE checkpoint unless crepa_use_backbone_features is enabled."
                 )
 
-            # Control-LoRA requires an actual VAE during training – load it now.
+            # Control-LoRA, CREPA decode paths, and VAE training require an actual VAE during training.
             vae = self.model_manager.load_vae(
                 args, vae_dtype=vae_dtype, vae_path=args.vae
             )
             if vae is None:
+                if need_vae_for_training:
+                    raise RuntimeError(
+                        "Failed to load VAE for VAE training. Please verify the 'vae' path in the config."
+                    )
                 raise RuntimeError(
                     "Failed to load VAE for Control LoRA. Please verify the 'vae' path in the config."
                 )
-            vae.requires_grad_(False)
-            vae.eval()
+            if need_vae_for_training:
+                vae.train()
+            else:
+                vae.requires_grad_(False)
+                vae.eval()
             if getattr(args, "crepa_drop_vae_encoder", False):
                 self._drop_vae_encoder_if_possible(vae)
             # Expose to control-signal processor so it can encode control latents

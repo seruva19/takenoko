@@ -8181,6 +8181,25 @@ dynamo_mode = "default"
 # VAE training mode: "full", "decoder_only", "encoder_only"
 vae_training_mode = "full"
 
+# Optional preset that biases existing VAE losses toward refinement-style visual quality.
+# Valid: "none", "visual_quality". Default: "none"
+# The profile only fills in defaults for keys you did not explicitly set.
+# It does not override manual weights, and it does not change the Wan decoder architecture.
+# `visual_quality` is primarily intended for decoder-only refinement work.
+vae_refinement_profile = "none"
+
+# Optional preset that biases validation toward perceptual / visual-quality metrics for VAE refinement work.
+# Valid: "none", "visual_quality". Default: "none"
+# The profile only fills in validation defaults you did not explicitly set.
+# Current `visual_quality` defaults:
+# - load_val_pixels = true
+# - enable_lpips = true
+# - lpips_network = "alex"
+# - enable_sensecraft_validation_metrics = true
+# - sensecraft_validation_metrics = ["lpips", "ssim"]
+# - sensecraft_validation_lpips_network = "alex"
+vae_refinement_validation_profile = "none"
+
 # Weight for KL divergence loss in VAE training
 vae_kl_weight = 1e-6
 
@@ -8244,6 +8263,31 @@ vae_loss_balancer_percentile = 95
 
 # Use latent mean instead of sampling in decoder-only mode (disables KL term by default).
 vae_decoder_latent_mean = true
+
+# Enable decoder-refinement latent degradation during VAE training. Default: false
+# Intended for `vae_training_mode = "decoder_only"` only.
+# When enabled, the encoded latent is spatially degraded before decode, while the
+# reconstruction target remains the original image/video. This acts as a lightweight
+# refinement proxy that encourages the decoder to restore lost detail without changing
+# encoder latent compatibility.
+vae_enable_latent_degradation = false
+
+# Spatial downsample ratio used by the latent degradation proxy.
+# Must be in (0, 1). Smaller values produce stronger degradation. Default: 0.5
+vae_latent_degradation_ratio = 0.5
+
+# Interpolation mode used for the downsample-upsample degradation proxy.
+# Valid: "bilinear", "bicubic", "area", "nearest". Default: "bilinear"
+vae_latent_degradation_mode = "bilinear"
+
+# Optional Gaussian noise std added after spatial degradation. Default: 0.0
+# Keep this small; the first-pass refinement proxy is primarily spatial softness, not heavy latent corruption.
+vae_latent_degradation_noise_std = 0.0
+
+# Probability of applying latent degradation on a given VAE forward pass.
+# Must be in [0, 1]. Default: 1.0
+# Lower values let the decoder see a mix of clean and degraded latents during refinement.
+vae_latent_degradation_apply_prob = 1.0
 
 # =============================================================================
 # ⚠️ ONLINE SELF-CORRECTION SETTINGS
