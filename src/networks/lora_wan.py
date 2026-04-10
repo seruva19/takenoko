@@ -8,6 +8,7 @@ import inspect
 import math
 import os
 import re
+import weakref
 from typing import Dict, List, Optional, Type, Union, cast
 from torch import Tensor
 from transformers import CLIPTextModel
@@ -15,6 +16,9 @@ import numpy as np
 import torch
 import torch.nn as nn
 from modules.ramtorch_linear_factory import is_linear_like
+from enhancements.lora_drop.helper import (
+    create_lora_drop_controller,
+)
 
 import logging
 from common.logger import get_logger
@@ -47,6 +51,8 @@ class LoRAModule(torch.nn.Module):
         ggpo_sigma: Optional[float] = None,
         ggpo_beta: Optional[float] = None,
         use_rslora: bool = False,
+        lora_drop_enabled: bool = False,
+        lora_drop_importance_ema_decay: float = 0.95,
     ):
         """
         if alpha == 0 or None, alpha is rank (no scaling).
@@ -137,6 +143,12 @@ class LoRAModule(torch.nn.Module):
         self.dropout = dropout
         self.rank_dropout = rank_dropout
         self.module_dropout = module_dropout
+        self.enabled = True
+        self.lora_drop_enabled = bool(lora_drop_enabled)
+        self.lora_drop_importance_ema_decay = float(lora_drop_importance_ema_decay)
+        self.lora_drop_importance_ema: Optional[float] = None
+        self.lora_drop_shared_source_name: Optional[str] = None
+        self._lora_drop_shared_source_ref: Optional[weakref.ReferenceType] = None
 
         # Initialize adapter parameters (default Kaiming+zero; optional PiSSA SVD).
         self.reinitialize_lora_from_org_weight(org_module.weight)  # type: ignore[arg-type]
@@ -415,6 +427,107 @@ class LoRAModule(torch.nn.Module):
             # Non-fatal: disable GGPO if estimation fails
             self._ggpo_enabled = False
 
+    def _get_lora_drop_shared_source(self) -> Optional["LoRAModule"]:
+        if self._lora_drop_shared_source_ref is None:
+            return None
+        return cast(Optional["LoRAModule"], self._lora_drop_shared_source_ref())
+
+    def set_lora_drop_shared_source(self, source: Optional["LoRAModule"]) -> None:
+        self._lora_drop_shared_source_ref = (
+            weakref.ref(source) if source is not None else None
+        )
+        self.lora_drop_shared_source_name = (
+            source.lora_name if source is not None else None
+        )
+        if source is None:
+            self.requires_grad_(True)
+            return
+        for param in self.parameters():
+            param.grad = None
+            param.requires_grad = False
+
+    def get_lora_drop_group_key(self) -> tuple:
+        if self.split_dims is None:
+            return (
+                self.lora_down.__class__.__name__,
+                tuple(self.lora_down.weight.shape),
+                tuple(self.lora_up.weight.shape),
+            )
+        return (
+            "split",
+            tuple(tuple(module.weight.shape) for module in self.lora_down),  # type: ignore[arg-type]
+            tuple(tuple(module.weight.shape) for module in self.lora_up),  # type: ignore[arg-type]
+        )
+
+    def get_lora_drop_importance(self) -> float:
+        if self.lora_drop_importance_ema is None:
+            return 0.0
+        return float(self.lora_drop_importance_ema)
+
+    def _update_lora_drop_importance(self, adapter_out: Tensor) -> None:
+        if not (self.training and self.lora_drop_enabled):
+            return
+        with torch.no_grad():
+            importance = float(
+                adapter_out.detach().to(torch.float32).pow(2).mean().item()
+            )
+            if self.lora_drop_importance_ema is None:
+                self.lora_drop_importance_ema = importance
+            else:
+                decay = self.lora_drop_importance_ema_decay
+                self.lora_drop_importance_ema = (
+                    decay * self.lora_drop_importance_ema
+                    + (1.0 - decay) * importance
+                )
+
+    def _compute_adapter_output(self, x: Tensor) -> Tensor:
+        if self.split_dims is None:
+            lx = self.lora_down(x)
+
+            if self.dropout is not None and self.training:
+                lx = torch.nn.functional.dropout(lx, p=self.dropout)
+
+            if self.rank_dropout is not None and self.training:
+                mask = (
+                    torch.rand((lx.size(0), self.lora_dim), device=lx.device)
+                    > self.rank_dropout
+                )
+                if len(lx.size()) == 3:
+                    mask = mask.unsqueeze(1)
+                elif len(lx.size()) == 4:
+                    mask = mask.unsqueeze(-1).unsqueeze(-1)
+                lx = lx * mask
+                scale = self.scale * (1.0 / (1.0 - self.rank_dropout))
+            else:
+                scale = self.scale
+
+            lx = self.lora_up(lx)
+            return lx * self.multiplier * scale
+
+        lxs = [lora_down(x) for lora_down in self.lora_down]  # type: ignore
+
+        if self.dropout is not None and self.training:
+            lxs = [torch.nn.functional.dropout(lx, p=self.dropout) for lx in lxs]
+
+        if self.rank_dropout is not None and self.training:
+            masks = [
+                torch.rand((lx.size(0), self.lora_dim), device=lx.device)
+                > self.rank_dropout
+                for lx in lxs
+            ]
+            for idx, lx in enumerate(lxs):
+                if len(lx.size()) == 3:
+                    masks[idx] = masks[idx].unsqueeze(1)
+                elif len(lx.size()) == 4:
+                    masks[idx] = masks[idx].unsqueeze(-1).unsqueeze(-1)
+                lxs[idx] = lx * masks[idx]
+            scale = self.scale * (1.0 / (1.0 - self.rank_dropout))
+        else:
+            scale = self.scale
+
+        lxs = [lora_up(lx) for lora_up, lx in zip(self.lora_up, lxs)]  # type: ignore
+        return torch.cat(lxs, dim=-1) * self.multiplier * scale
+
     def forward(self, x):
         org_forwarded = self.org_forward(x)
 
@@ -423,37 +536,17 @@ class LoRAModule(torch.nn.Module):
             if torch.rand(1) < self.module_dropout:
                 return org_forwarded
 
+        shared_source = self._get_lora_drop_shared_source()
+        adapter_source = shared_source if shared_source is not None else self
+
         if self.split_dims is None:
-            lx = self.lora_down(x)
-
-            # normal dropout
-            if self.dropout is not None and self.training:
-                lx = torch.nn.functional.dropout(lx, p=self.dropout)
-
-            # rank dropout
-            if self.rank_dropout is not None and self.training:
-                mask = (
-                    torch.rand((lx.size(0), self.lora_dim), device=lx.device)
-                    > self.rank_dropout
-                )
-                if len(lx.size()) == 3:
-                    mask = mask.unsqueeze(1)  # for Text Encoder
-                elif len(lx.size()) == 4:
-                    mask = mask.unsqueeze(-1).unsqueeze(-1)  # for Conv2d
-                lx = lx * mask
-
-                # scaling for rank dropout: treat as if the rank is changed
-                scale = self.scale * (
-                    1.0 / (1.0 - self.rank_dropout)
-                )  # redundant for readability
-            else:
-                scale = self.scale
-
-            lx = self.lora_up(lx)
+            adapter_out = adapter_source._compute_adapter_output(x)
+            self._update_lora_drop_importance(adapter_out)
 
             # GGPO perturbation (Linear only), applied in training
             if (
-                self.training
+                shared_source is None
+                and self.training
                 and self._ggpo_enabled
                 and self._org_module_shape is not None
                 and self._perturbation_norm_factor is not None
@@ -482,45 +575,16 @@ class LoRAModule(torch.nn.Module):
                         pert = pert * perturbation_scale.to(self.dtype)
                     # Apply linear with perturbation as weight
                     perturbation_out = torch.nn.functional.linear(x, pert)
-                    return (
-                        org_forwarded + lx * self.multiplier * scale + perturbation_out
-                    )
+                    return org_forwarded + adapter_out + perturbation_out
                 except Exception:
                     # On any failure, fall back to standard forward
-                    return org_forwarded + lx * self.multiplier * scale
+                    return org_forwarded + adapter_out
             else:
-                return org_forwarded + lx * self.multiplier * scale
-        else:
-            lxs = [lora_down(x) for lora_down in self.lora_down]  # type: ignore
+                return org_forwarded + adapter_out
 
-            # normal dropout
-            if self.dropout is not None and self.training:
-                lxs = [torch.nn.functional.dropout(lx, p=self.dropout) for lx in lxs]
-
-            # rank dropout
-            if self.rank_dropout is not None and self.training:
-                masks = [
-                    torch.rand((lx.size(0), self.lora_dim), device=lx.device)
-                    > self.rank_dropout
-                    for lx in lxs
-                ]
-                for i in range(len(lxs)):
-                    if len(lx.size()) == 3:  # type: ignore
-                        masks[i] = masks[i].unsqueeze(1)
-                    elif len(lx.size()) == 4:  # type: ignore
-                        masks[i] = masks[i].unsqueeze(-1).unsqueeze(-1)
-                    lxs[i] = lxs[i] * masks[i]
-
-                # scaling for rank dropout: treat as if the rank is changed
-                scale = self.scale * (
-                    1.0 / (1.0 - self.rank_dropout)
-                )  # redundant for readability
-            else:
-                scale = self.scale
-
-            lxs = [lora_up(lx) for lora_up, lx in zip(self.lora_up, lxs)]  # type: ignore
-
-            return org_forwarded + torch.cat(lxs, dim=-1) * self.multiplier * scale
+        adapter_out = adapter_source._compute_adapter_output(x)
+        self._update_lora_drop_importance(adapter_out)
+        return org_forwarded + adapter_out
 
 
 class LoRAInfModule(LoRAModule):
@@ -850,6 +914,40 @@ def create_network(
     except Exception:
         ggpo_beta = None
 
+    lora_drop_enabled = kwargs.get("lora_drop_enabled", False)
+    if isinstance(lora_drop_enabled, str):
+        lora_drop_enabled = lora_drop_enabled.strip().lower() in (
+            "true",
+            "1",
+            "yes",
+            "y",
+            "on",
+        )
+    else:
+        lora_drop_enabled = bool(lora_drop_enabled)
+    try:
+        lora_drop_importance_ema_decay = float(
+            kwargs.get("lora_drop_importance_ema_decay", 0.95)
+        )
+    except Exception:
+        lora_drop_importance_ema_decay = 0.95
+    try:
+        lora_drop_apply_after_steps = int(kwargs.get("lora_drop_apply_after_steps", 500))
+    except Exception:
+        lora_drop_apply_after_steps = 500
+    try:
+        lora_drop_apply_interval = int(kwargs.get("lora_drop_apply_interval", 500))
+    except Exception:
+        lora_drop_apply_interval = 500
+    try:
+        lora_drop_share_fraction = float(kwargs.get("lora_drop_share_fraction", 0.25))
+    except Exception:
+        lora_drop_share_fraction = 0.25
+    try:
+        lora_drop_min_group_size = int(kwargs.get("lora_drop_min_group_size", 2))
+    except Exception:
+        lora_drop_min_group_size = 2
+
     # LoRA initialization mode:
     # - "kaiming" (default): current Takenoko behavior
     # - "pissa": exact SVD PiSSA initialization
@@ -903,6 +1001,12 @@ def create_network(
         ggpo_beta=cast(Optional[float], ggpo_beta),
         initialize=initialize,
         pissa_niter=cast(Optional[int], pissa_niter),
+        lora_drop_enabled=bool(lora_drop_enabled),
+        lora_drop_importance_ema_decay=float(lora_drop_importance_ema_decay),
+        lora_drop_apply_after_steps=int(lora_drop_apply_after_steps),
+        lora_drop_apply_interval=int(lora_drop_apply_interval),
+        lora_drop_share_fraction=float(lora_drop_share_fraction),
+        lora_drop_min_group_size=int(lora_drop_min_group_size),
     )
 
     if use_rslora:
@@ -957,6 +1061,12 @@ class LoRANetwork(torch.nn.Module):
         initialize: str = "kaiming",
         pissa_niter: Optional[int] = None,
         use_rslora: bool = False,
+        lora_drop_enabled: bool = False,
+        lora_drop_importance_ema_decay: float = 0.95,
+        lora_drop_apply_after_steps: int = 500,
+        lora_drop_apply_interval: int = 500,
+        lora_drop_share_fraction: float = 0.25,
+        lora_drop_min_group_size: int = 2,
     ) -> None:
         super().__init__()
         self.multiplier = multiplier
@@ -981,6 +1091,14 @@ class LoRANetwork(torch.nn.Module):
         )
         self.initialize = str(initialize).strip().lower() if initialize else "kaiming"
         self.pissa_niter = pissa_niter
+        self.lora_drop_controller = create_lora_drop_controller(
+            enabled=bool(lora_drop_enabled),
+            importance_ema_decay=float(lora_drop_importance_ema_decay),
+            apply_after_steps=int(lora_drop_apply_after_steps),
+            apply_interval=int(lora_drop_apply_interval),
+            share_fraction=float(lora_drop_share_fraction),
+            min_group_size=int(lora_drop_min_group_size),
+        )
 
         self.loraplus_lr_ratio = None
         # self.loraplus_unet_lr_ratio = None
@@ -996,6 +1114,15 @@ class LoRANetwork(torch.nn.Module):
             logger.info(
                 f"neuron dropout: p={self.dropout}, rank dropout: p={self.rank_dropout}, module dropout: p={self.module_dropout}"
             )
+            if self.lora_drop_controller is not None:
+                logger.info(
+                    "LoRA-drop enabled: ema_decay=%s, apply_after_steps=%s, interval=%s, share_fraction=%s, min_group_size=%s",
+                    self.lora_drop_controller.importance_ema_decay,
+                    self.lora_drop_controller.apply_after_steps,
+                    self.lora_drop_controller.apply_interval,
+                    self.lora_drop_controller.share_fraction,
+                    self.lora_drop_controller.min_group_size,
+                )
             if self.initialize == "pissa":
                 logger.info(
                     "LoRA initialization: PiSSA (niter=%s)",
@@ -1149,6 +1276,10 @@ class LoRANetwork(torch.nn.Module):
                                 "ggpo_sigma": self.ggpo_sigma,
                                 "ggpo_beta": self.ggpo_beta,
                             }
+                            if self.lora_drop_controller is not None:
+                                module_kwargs.update(
+                                    self.lora_drop_controller.build_module_kwargs()
+                                )
                             try:
                                 module_signature = inspect.signature(module_class)
                                 params = module_signature.parameters
@@ -1246,6 +1377,21 @@ class LoRANetwork(torch.nn.Module):
         called after the network is created
         """
         pass
+
+    def get_lora_drop_metrics(self) -> Dict[str, float]:
+        if self.lora_drop_controller is None:
+            return {}
+        return self.lora_drop_controller.get_metrics(self)
+
+    @torch.no_grad()
+    def _sync_lora_drop_shared_weights(self) -> None:
+        if self.lora_drop_controller is None:
+            return
+        self.lora_drop_controller.sync_shared_weights_for_export(self)
+
+    def state_dict(self, *args, **kwargs):
+        self._sync_lora_drop_shared_weights()
+        return super().state_dict(*args, **kwargs)
 
     def set_multiplier(self, multiplier):
         self.multiplier = multiplier
@@ -1347,6 +1493,8 @@ class LoRANetwork(torch.nn.Module):
             param_groups = {"lora": {}, "plus": {}, "patch_embedding": {}}
             for lora in loras:
                 for name, param in lora.named_parameters():
+                    if not param.requires_grad:
+                        continue
                     if "patch_embedding" in name:
                         param_groups["patch_embedding"][
                             f"{lora.lora_name}.{name}"
@@ -1406,7 +1554,8 @@ class LoRANetwork(torch.nn.Module):
         self.train()
 
     def on_step_start(self):
-        pass
+        if self.lora_drop_controller is not None:
+            self.lora_drop_controller.on_step_start(self, logger)
 
     def get_trainable_params(self):
         return self.parameters()
@@ -1545,6 +1694,7 @@ class LoRANetwork(torch.nn.Module):
         if metadata is not None and len(metadata) == 0:
             metadata = None
 
+        self._sync_lora_drop_shared_weights()
         state_dict = self.state_dict()
 
         if dtype is not None:

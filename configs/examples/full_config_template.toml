@@ -778,6 +778,33 @@ network_alpha = 32
 # Parsed by `takenoko.create_args_from_config` into args.ggpo_sigma/ggpo_beta for the loss hooks.
 # network_args = ["ggpo_sigma=0.03", "ggpo_beta=0.01"]
 
+# LoRA-drop (output-based LoRA importance sharing for standard WAN LoRA)
+# Requires: network_module = "networks.lora_wan". Configured through network_args.
+# - lora_drop_enabled: bool (default false)
+#   Enables output-based LoRA importance tracking and low-importance adapter sharing.
+# - lora_drop_importance_ema_decay: float in [0, 1) (default 0.95)
+#   EMA decay used to smooth per-module adapter-output magnitude importance.
+# - lora_drop_apply_after_steps: int >= 0 (default 500)
+#   First training step at which LoRA-drop sharing may be applied.
+# - lora_drop_apply_interval: int >= 1 (default 500)
+#   Re-check interval for additional sharing after the warmup point.
+# - lora_drop_share_fraction: float in [0, 1) (default 0.25)
+#   Target fraction of modules per compatible shape group to collapse into shared LoRA weights.
+# - lora_drop_min_group_size: int >= 2 (default 2)
+#   Minimum number of same-shape LoRA modules required before sharing is allowed.
+# Notes:
+# - Sharing is shape-grouped and train-time only; inference graph entrypoints remain unchanged.
+# - This is automatic during training once enabled. 
+# Example:
+# network_args = [
+#   "lora_drop_enabled=true",
+#   "lora_drop_importance_ema_decay=0.95",
+#   "lora_drop_apply_after_steps=500",
+#   "lora_drop_apply_interval=500",
+#   "lora_drop_share_fraction=0.25",
+#   "lora_drop_min_group_size=2"
+# ]
+
 # PiSSA initialization (SVD-based LoRA init with residual base decomposition):
 # - "initialize=pissa" uses exact SVD (slowest, most accurate)
 # - "initialize=pissa_niter_4" uses fast randomized SVD with 4 subspace iterations

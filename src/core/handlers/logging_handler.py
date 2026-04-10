@@ -173,6 +173,15 @@ def collect_and_log_training_metrics(
     except Exception:
         pass
 
+    try:
+        unwrapped_network = accelerator.unwrap_model(network)
+        if hasattr(unwrapped_network, "get_lora_drop_metrics"):
+            lora_drop_metrics = unwrapped_network.get_lora_drop_metrics()
+            if isinstance(lora_drop_metrics, dict):
+                logs.update(lora_drop_metrics)
+    except Exception:
+        pass
+
     # Attach component losses if available
     base_loss_val = getattr(loss_components, "base_loss", None)
     if base_loss_val is not None:
