@@ -6024,6 +6024,63 @@ polylora_si_fusion_mode = "style_only"
 # Enable a lightweight Perceiver-style mixer before the mapper (default off to match current behavior).
 polylora_use_perceiver_frontend = false
 
+# Enable residual branch for PolyLoRA. Default: false
+# When true, pair building caches an additional residual embedding, training conditions the mapper on it,
+# and live prediction encodes the same residual signal before emitting LoRA weights.
+# This is intended for "coarse/fine residual token" style conditioning, but implemented as a stable
+# vector residual branch so existing PolyLoRA behavior stays unchanged unless explicitly enabled.
+# Requires:
+# - polylora_residual_encoders to be non-empty
+# - pair shards rebuilt so they contain residual embeddings
+# - live prediction inputs to use the same residual encoder setup as training
+polylora_use_residual_branch = false
+
+# Optional list of residual-branch encoder models used only when polylora_use_residual_branch = true.
+# These encoders produce the auxiliary residual embedding cached into PolyLoRA shards and reused at prediction time.
+# Use 1+ model names; leave commented out when the residual branch is disabled.
+# Example: polylora_residual_encoders = ["google/siglip-so400m-patch14-384", "facebook/dinov2-large"]
+# polylora_residual_encoders = []
+
+# Encoder type for residual encoders: "clip" or "video". Default: "clip"
+# Use "video" only if the selected residual encoder family exposes a video processor/model path.
+polylora_residual_encoder_type = "clip"
+
+# How to combine multiple residual encoders before passing them into the residual branch.
+# - "mean": average all residual embeddings elementwise
+# - "concat": concatenate residual embeddings, then let the residual projector compress them
+# Default: "concat"
+polylora_residual_fusion_mode = "concat"
+
+# Residual branch scale multiplier (>0). Default: 0.05.
+# This matches the small residual contribution and keeps the uxiliary branch
+# from overwhelming the main style embedding early in training.
+polylora_residual_scale = 0.05
+
+# Optional list of separately trained PolyLoRA checkpoints to ensemble at prediction/live-apply time.
+# Equivalent of style/coarse/fine head merge: train multiple PolyLoRA checkpoints
+# with different conditioning setups, then average their predicted LoRA weights.
+# When set, runtime prediction uses these checkpoints instead of the single polylora_ckpt path.
+# All checkpoints must target the same LoRA spec and emit the same key set.
+# Example:
+# polylora_head_ckpts = [
+#   "checkpoints/polylora_style.pt",
+#   "checkpoints/polylora_coarse.pt",
+#   "checkpoints/polylora_fine.pt",
+# ]
+# polylora_head_ckpts = []
+
+# Optional metadata paths aligned with polylora_head_ckpts.
+# Leave commented out to use the default "{checkpoint}.meta.json" sidecar for each head checkpoint.
+# polylora_head_metadata_paths = [
+#   "checkpoints/polylora_style.pt.meta.json",
+#   "checkpoints/polylora_coarse.pt.meta.json",
+#   "checkpoints/polylora_fine.pt.meta.json",
+# ]
+
+# Optional positive weights aligned with polylora_head_ckpts. When omitted, all heads are averaged equally.
+# Example: emphasize style slightly more than coarse/fine
+# polylora_head_weights = [1.2, 1.0, 1.0]
+
 # Emit an additional base LoRA branch (prefixed with "base.") alongside the main LoRA (defaults to off).
 polylora_dual_lora_heads = false
 

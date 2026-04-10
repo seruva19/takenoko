@@ -32,6 +32,7 @@ class TrainConfig:
     sample_merge_target: Optional[str] = None
     use_identity: bool = False
     use_perceiver_frontend: bool = False
+    use_residual_branch: bool = False
     use_base_branch: bool = False
     base_loss_weight: float = 1.0
     use_ema: bool = False
@@ -77,7 +78,7 @@ def train_polylora(
     num_workers: int = 0,
 ) -> Dict[str, float]:
     def _collate(batch):
-        embs, loras, ids, base_loras = zip(*batch)
+        embs, loras, ids, residuals, base_loras = zip(*batch)
         emb_tensor = torch.stack(embs, dim=0)
         lora_keys = loras[0].keys()
         lora_tensor = {k: torch.stack([l[k] for l in loras], dim=0) for k in lora_keys}
@@ -86,6 +87,16 @@ def train_polylora(
             ref_id = next(id_val for id_val in ids if id_val is not None)
             id_tensor = torch.stack(
                 [id_val if id_val is not None else torch.zeros_like(ref_id) for id_val in ids],
+                dim=0,
+            )
+        residual_tensor = None
+        if any(res_val is not None for res_val in residuals):
+            ref_res = next(res_val for res_val in residuals if res_val is not None)
+            residual_tensor = torch.stack(
+                [
+                    res_val if res_val is not None else torch.zeros_like(ref_res)
+                    for res_val in residuals
+                ],
                 dim=0,
             )
         base_lora_tensor = None
@@ -102,7 +113,7 @@ def train_polylora(
                 )
                 for k in ref_keys
             }
-        return emb_tensor, lora_tensor, id_tensor, base_lora_tensor
+        return emb_tensor, lora_tensor, id_tensor, residual_tensor, base_lora_tensor
 
     def _run_sampling_hook(epoch_idx: int) -> None:
         if config.sample_every_epochs <= 0:
@@ -113,15 +124,22 @@ def train_polylora(
             if len(dataset) == 0:
                 return
             sample_idx = epoch_idx % len(dataset)
-            emb, _, id_emb, _ = dataset[sample_idx]  # type: ignore[index]
+            emb, _, id_emb, residual_emb, _ = dataset[sample_idx]  # type: ignore[index]
             embedding = emb.unsqueeze(0).to(device)
             if id_emb is not None and config.use_identity:
                 id_emb = id_emb.unsqueeze(0).to(device)
+            if residual_emb is not None and config.use_residual_branch:
+                residual_emb = residual_emb.unsqueeze(0).to(device)
             model.eval()
             pred = predict_lora_state_dict(
                 model,
                 embedding,
                 identity=id_emb if (id_emb is not None and config.use_identity) else None,
+                residual=(
+                    residual_emb
+                    if (residual_emb is not None and config.use_residual_branch)
+                    else None
+                ),
                 include_base=False,
             )
             out_dir = Path(config.sample_dir)
@@ -197,16 +215,18 @@ def train_polylora(
     for epoch in range(config.epochs):
         model.train()
         epoch_losses = []
-        for embedding, lora, id_emb, base_lora in train_loader:
+        for embedding, lora, id_emb, residual_emb, base_lora in train_loader:
             embedding = embedding.to(device)
             lora = {k: v.to(device) for k, v in lora.items()}
             id_emb = id_emb.to(device) if id_emb is not None else None
+            residual_emb = residual_emb.to(device) if residual_emb is not None else None
             if base_lora is not None:
                 base_lora = {k: v.to(device) for k, v in base_lora.items()}
             with autocast(enabled=use_amp):
                 pred = model(
                     embedding,
                     identity=id_emb if config.use_identity else None,
+                    residual=residual_emb if config.use_residual_branch else None,
                     use_perceiver=config.use_perceiver_frontend,
                 )
                 loss = lora_loss(
@@ -231,15 +251,19 @@ def train_polylora(
             model.eval()
             val_losses = []
             with torch.no_grad():
-                for embedding, lora, id_emb, base_lora in val_loader:
+                for embedding, lora, id_emb, residual_emb, base_lora in val_loader:
                     embedding = embedding.to(device)
                     lora = {k: v.to(device) for k, v in lora.items()}
                     id_emb = id_emb.to(device) if id_emb is not None else None
+                    residual_emb = (
+                        residual_emb.to(device) if residual_emb is not None else None
+                    )
                     if base_lora is not None:
                         base_lora = {k: v.to(device) for k, v in base_lora.items()}
                     pred = model(
                         embedding,
                         identity=id_emb if config.use_identity else None,
+                        residual=residual_emb if config.use_residual_branch else None,
                         use_perceiver=config.use_perceiver_frontend,
                     )
                     val_loss = lora_loss(

@@ -18,6 +18,14 @@ class PolyLoRAConfig:
     identity_encoder: str = "antelopev2"
     si_fusion_mode: str = "style_only"
     use_perceiver_frontend: bool = False
+    use_residual_branch: bool = False
+    residual_encoders: Optional[list[str]] = None
+    residual_encoder_type: str = "clip"
+    residual_fusion_mode: str = "concat"
+    residual_scale: float = 0.05
+    head_ckpts: Optional[list[str]] = None
+    head_metadata_paths: Optional[list[str]] = None
+    head_weights: Optional[list[float]] = None
     dual_lora_heads: bool = False
     base_attenuate: float = 0.5
     use_cached_embeddings: bool = True
@@ -71,6 +79,18 @@ def parse_polylora_config(raw: Dict[str, Any]) -> PolyLoRAConfig:
     if cfg.si_fusion_mode not in ("style_only", "mean", "gated", "concat"):
         raise ValueError("polylora_si_fusion_mode must be one of style_only|mean|gated|concat")
     cfg.use_perceiver_frontend = bool(raw.get("polylora_use_perceiver_frontend", False))
+    cfg.use_residual_branch = bool(raw.get("polylora_use_residual_branch", False))
+    cfg.residual_encoders = raw.get("polylora_residual_encoders", None)
+    cfg.residual_encoder_type = str(
+        raw.get("polylora_residual_encoder_type", cfg.residual_encoder_type)
+    ).lower()
+    cfg.residual_fusion_mode = str(
+        raw.get("polylora_residual_fusion_mode", cfg.residual_fusion_mode)
+    ).lower()
+    cfg.residual_scale = float(raw.get("polylora_residual_scale", cfg.residual_scale))
+    cfg.head_ckpts = raw.get("polylora_head_ckpts", None)
+    cfg.head_metadata_paths = raw.get("polylora_head_metadata_paths", None)
+    cfg.head_weights = raw.get("polylora_head_weights", None)
     cfg.dual_lora_heads = bool(raw.get("polylora_dual_lora_heads", False))
     cfg.base_attenuate = float(raw.get("polylora_base_attenuate", cfg.base_attenuate))
     cfg.use_cached_embeddings = bool(raw.get("polylora_use_cached_embeddings", True))
@@ -111,6 +131,39 @@ def parse_polylora_config(raw: Dict[str, Any]) -> PolyLoRAConfig:
         raise ValueError("polylora_train_val_split must be in [0, 1).")
     if cfg.ema_decay <= 0 or cfg.ema_decay >= 1:
         raise ValueError("polylora_ema_decay must be in (0, 1).")
+    if cfg.residual_encoder_type not in ("clip", "video"):
+        raise ValueError("polylora_residual_encoder_type must be 'clip' or 'video'")
+    if cfg.residual_fusion_mode not in ("mean", "concat"):
+        raise ValueError("polylora_residual_fusion_mode must be 'mean' or 'concat'")
+    if cfg.residual_scale <= 0:
+        raise ValueError("polylora_residual_scale must be > 0")
+    if cfg.use_residual_branch:
+        if not cfg.residual_encoders:
+            raise ValueError(
+                "polylora_use_residual_branch=true requires polylora_residual_encoders"
+            )
+        if isinstance(cfg.residual_encoders, str):
+            cfg.residual_encoders = [cfg.residual_encoders]
+    if isinstance(cfg.head_ckpts, str):
+        cfg.head_ckpts = [cfg.head_ckpts]
+    if isinstance(cfg.head_metadata_paths, str):
+        cfg.head_metadata_paths = [cfg.head_metadata_paths]
+    if cfg.head_ckpts:
+        if cfg.head_metadata_paths and len(cfg.head_metadata_paths) != len(cfg.head_ckpts):
+            raise ValueError(
+                "polylora_head_metadata_paths must match polylora_head_ckpts length"
+            )
+        if cfg.head_weights is not None:
+            if isinstance(cfg.head_weights, (int, float, str)):
+                cfg.head_weights = [float(cfg.head_weights)]
+            else:
+                cfg.head_weights = [float(v) for v in cfg.head_weights]
+            if len(cfg.head_weights) != len(cfg.head_ckpts):
+                raise ValueError(
+                    "polylora_head_weights must match polylora_head_ckpts length"
+                )
+            if any(weight <= 0 for weight in cfg.head_weights):
+                raise ValueError("polylora_head_weights values must be > 0")
 
     if cfg.enable:
         if not isinstance(cfg.ckpt, str) or not isinstance(cfg.spec, str):
@@ -137,6 +190,14 @@ def apply_polylora_to_args(args: Any, raw: Dict[str, Any]) -> Any:
     args.polylora_identity_encoder = cfg.identity_encoder
     args.polylora_si_fusion_mode = cfg.si_fusion_mode
     args.polylora_use_perceiver_frontend = cfg.use_perceiver_frontend
+    args.polylora_use_residual_branch = cfg.use_residual_branch
+    args.polylora_residual_encoders = cfg.residual_encoders
+    args.polylora_residual_encoder_type = cfg.residual_encoder_type
+    args.polylora_residual_fusion_mode = cfg.residual_fusion_mode
+    args.polylora_residual_scale = cfg.residual_scale
+    args.polylora_head_ckpts = cfg.head_ckpts
+    args.polylora_head_metadata_paths = cfg.head_metadata_paths
+    args.polylora_head_weights = cfg.head_weights
     args.polylora_dual_lora_heads = cfg.dual_lora_heads
     args.polylora_base_attenuate = cfg.base_attenuate
     args.polylora_use_cached_embeddings = cfg.use_cached_embeddings

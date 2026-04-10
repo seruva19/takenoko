@@ -16,6 +16,7 @@ class PairSample:
     embedding: torch.Tensor
     lora: Dict[str, torch.Tensor]
     identity: Optional[torch.Tensor] = None
+    residual: Optional[torch.Tensor] = None
     base_lora: Optional[Dict[str, torch.Tensor]] = None
 
 
@@ -38,7 +39,15 @@ class PolyLoRAPairDataset(Dataset):
     def __len__(self) -> int:
         return len(self.items)
 
-    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, Dict[str, torch.Tensor], Optional[torch.Tensor], Optional[Dict[str, torch.Tensor]]]:
+    def __getitem__(
+        self, idx: int
+    ) -> Tuple[
+        torch.Tensor,
+        Dict[str, torch.Tensor],
+        Optional[torch.Tensor],
+        Optional[torch.Tensor],
+        Optional[Dict[str, torch.Tensor]],
+    ]:
         path, sample_idx = self.items[idx]
         record = torch.load(path, map_location="cpu")
         if sample_idx is not None and "samples" in record:
@@ -50,13 +59,16 @@ class PolyLoRAPairDataset(Dataset):
         identity = sample.get("identity")
         if identity is not None:
             identity = identity.float()
+        residual = sample.get("residual")
+        if residual is not None:
+            residual = residual.float()
         base_lora_raw = sample.get("base_lora")
         base_lora = None
         if base_lora_raw:
             base_lora = {k: v.float() for k, v in base_lora_raw.items()}
         if self.expected_spec:
             validate_lora_matches_spec(lora, self.expected_spec)
-        return embedding, lora, identity, base_lora
+        return embedding, lora, identity, residual, base_lora
 
 
 def save_sharded_samples(
@@ -76,6 +88,8 @@ def save_sharded_samples(
         }
         if sample.identity is not None:
             record["identity"] = sample.identity.cpu()
+        if sample.residual is not None:
+            record["residual"] = sample.residual.cpu()
         if sample.base_lora is not None:
             record["base_lora"] = {k: v.cpu() for k, v in sample.base_lora.items()}
         shard.append(record)
@@ -93,7 +107,10 @@ def save_sharded_samples(
         "num_samples": len(samples),
         "shard_size": shard_size,
         "paths": [str(p.name) for p in paths],
-        "fields": ["embedding", "lora"] + (["identity"] if any(s.identity is not None for s in samples) else []) + (["base_lora"] if any(s.base_lora is not None for s in samples) else []),
+        "fields": ["embedding", "lora"]
+        + (["identity"] if any(s.identity is not None for s in samples) else [])
+        + (["residual"] if any(s.residual is not None for s in samples) else [])
+        + (["base_lora"] if any(s.base_lora is not None for s in samples) else []),
     }
     (output_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
     return paths

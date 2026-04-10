@@ -206,6 +206,7 @@ class PolyLoRAController:
                     with Image.open(fp) as img:
                         frames.append(img.convert("RGB"))
                 identity_emb = None
+                residual_emb = None
                 cache_hit = False
                 cache_path = None
                 if cache_dir is not None:
@@ -215,6 +216,7 @@ class PolyLoRAController:
                             cached = torch.load(cache_path, map_location="cpu")
                             embedding = cached.get("embedding")
                             identity_emb = cached.get("identity")
+                            residual_emb = cached.get("residual")
                             if embedding is not None:
                                 cache_hit = True
                         except Exception as exc:
@@ -236,11 +238,37 @@ class PolyLoRAController:
                             identity_emb = encode_identity_frames(frames, model_name=identity_encoder, device=device)
                         except Exception as exc:
                             print(f"[polylora] identity encoding failed for {lora_path}: {exc}")
+                    if bool(getattr(args, "polylora_use_residual_branch", False)):
+                        residual_cfg = getattr(args, "polylora_residual_encoders", None)
+                        if not residual_cfg:
+                            raise ValueError(
+                                "polylora_use_residual_branch=true requires polylora_residual_encoders."
+                            )
+                        if isinstance(residual_cfg, str):
+                            residual_cfg = [residual_cfg]
+                        residual_type = getattr(
+                            args,
+                            "polylora_residual_encoder_type",
+                            encoder_type,
+                        )
+                        residual_fusion_mode = getattr(
+                            args,
+                            "polylora_residual_fusion_mode",
+                            "concat",
+                        )
+                        residual_emb = encode_style_frames_multi(
+                            frames,
+                            encoders=[(name, residual_type) for name in residual_cfg],
+                            device=device,
+                            fusion_mode=residual_fusion_mode,
+                        )
                     if cache_path is not None:
                         try:
                             record = {"embedding": embedding.cpu()}
                             if identity_emb is not None:
                                 record["identity"] = identity_emb.cpu()
+                            if residual_emb is not None:
+                                record["residual"] = residual_emb.cpu()
                             torch.save(record, cache_path)
                         except Exception as exc:
                             print(f"[polylora] cache write failed for {cache_path}: {exc}")
@@ -265,7 +293,15 @@ class PolyLoRAController:
                         base_lora = load_lora_state_dict(base_path)
                     if base_lora is not None:
                         validate_lora_matches_spec(base_lora, spec or collect_lora_specs(lora_sd))
-                samples.append(PairSample(embedding=embedding, lora=lora_sd, identity=identity_emb, base_lora=base_lora))
+                samples.append(
+                    PairSample(
+                        embedding=embedding,
+                        lora=lora_sd,
+                        identity=identity_emb,
+                        residual=residual_emb,
+                        base_lora=base_lora,
+                    )
+                )
 
             if not samples:
                 print("? No samples created; check inputs.")
@@ -402,17 +438,25 @@ class PolyLoRAController:
             fusion_mode = getattr(args, "polylora_si_fusion_mode", "style_only")
             use_perceiver = bool(getattr(args, "polylora_use_perceiver_frontend", False))
             use_identity = bool(getattr(args, "polylora_use_identity", False))
+            use_residual = bool(getattr(args, "polylora_use_residual_branch", False))
             use_base = bool(getattr(args, "polylora_dual_lora_heads", False))
             dataset = PolyLoRAPairDataset(shard_paths, expected_spec=spec)
             if len(dataset) == 0:
                 print("? No samples found in shard files.")
                 return False
-            first_emb, _, first_id, _ = dataset[0]
+            first_emb, _, first_id, first_residual, _ = dataset[0]
             if embed_dim is None:
                 embed_dim = first_emb.shape[-1]
             identity_dim = first_id.shape[-1] if first_id is not None else None
+            residual_dim = (
+                first_residual.shape[-1] if first_residual is not None else None
+            )
             if fusion_mode != "style_only" and use_identity and identity_dim is None:
                 raise ValueError("Identity fusion requested but shards do not contain identity embeddings.")
+            if use_residual and residual_dim is None:
+                raise ValueError(
+                    "Residual branch requested but shards do not contain residual embeddings."
+                )
             model = PolyLoRANetwork(
                 embed_dim=embed_dim,
                 target_specs=spec,
@@ -420,6 +464,9 @@ class PolyLoRAController:
                 fusion_mode=fusion_mode,
                 identity_dim=identity_dim,
                 use_perceiver_frontend=use_perceiver,
+                use_residual=use_residual,
+                residual_dim=residual_dim,
+                residual_scale=float(getattr(args, "polylora_residual_scale", 0.05)),
                 enable_base_branch=use_base,
             )
             stats = train_polylora(
@@ -440,6 +487,7 @@ class PolyLoRAController:
                     sample_merge_target=sample_merge_target,
                     use_identity=use_identity,
                     use_perceiver_frontend=use_perceiver,
+                    use_residual_branch=use_residual,
                     use_base_branch=use_base,
                     base_loss_weight=float(getattr(args, "polylora_base_loss_weight", 1.0)),
                     use_ema=bool(getattr(args, "polylora_use_ema", False)),
@@ -467,10 +515,25 @@ class PolyLoRAController:
                     "identity_dim": identity_dim,
                     "encoder": getattr(args, "polylora_encoder", None),
                     "encoder_type": getattr(args, "polylora_encoder_type", None),
+                    "encoders": getattr(args, "polylora_encoders", None),
+                    "encoder_fusion_mode": getattr(args, "polylora_fusion_mode", None),
                     "fusion_mode": getattr(args, "polylora_si_fusion_mode", None),
                     "head_mode": getattr(args, "polylora_head_mode", None),
                     "use_identity": use_identity,
+                    "identity_encoder": getattr(args, "polylora_identity_encoder", None),
                     "use_perceiver_frontend": use_perceiver,
+                    "use_residual_branch": use_residual,
+                    "residual_dim": residual_dim,
+                    "residual_scale": float(
+                        getattr(args, "polylora_residual_scale", 0.05)
+                    ),
+                    "residual_encoders": getattr(args, "polylora_residual_encoders", None),
+                    "residual_encoder_type": getattr(
+                        args, "polylora_residual_encoder_type", None
+                    ),
+                    "residual_fusion_mode": getattr(
+                        args, "polylora_residual_fusion_mode", None
+                    ),
                     "use_base_branch": use_base,
                     "train_config": {
                         "lr": lr,
@@ -553,6 +616,7 @@ class PolyLoRAController:
             )
             use_identity = bool(getattr(args, "polylora_use_identity", False))
             identity_encoder = getattr(args, "polylora_identity_encoder", "antelopev2")
+            use_residual = bool(getattr(args, "polylora_use_residual_branch", False))
             use_base = bool(getattr(args, "polylora_dual_lora_heads", False))
             device = "cuda" if non_interactive else self._prompt_value("Device [cuda]: ", default="cuda")
             device = resolve_device(device)
@@ -585,6 +649,33 @@ class PolyLoRAController:
                 identity_emb = encode_identity_frames(frames, model_name=identity_encoder, device=device)
             if getattr(args, "polylora_si_fusion_mode", "style_only") != "style_only" and use_identity and identity_emb is None:
                 raise ValueError("Identity fusion requested but identity embeddings were not produced.")
+            residual_emb = None
+            if use_residual:
+                residual_cfg = getattr(args, "polylora_residual_encoders", None)
+                if not residual_cfg:
+                    raise ValueError(
+                        "polylora_use_residual_branch=true requires polylora_residual_encoders."
+                    )
+                if isinstance(residual_cfg, str):
+                    residual_cfg = [residual_cfg]
+                residual_emb = encode_style_frames_multi(
+                    frames,
+                    encoders=[
+                        (
+                            name,
+                            getattr(
+                                args,
+                                "polylora_residual_encoder_type",
+                                encoder_type,
+                            ),
+                        )
+                        for name in residual_cfg
+                    ],
+                    device=device,
+                    fusion_mode=getattr(
+                        args, "polylora_residual_fusion_mode", "concat"
+                    ),
+                )
             model = PolyLoRANetwork(
                 embed_dim=embed_dim,
                 target_specs=spec,
@@ -592,14 +683,19 @@ class PolyLoRAController:
                 fusion_mode=getattr(args, "polylora_si_fusion_mode", "style_only"),
                 identity_dim=identity_emb.shape[-1] if identity_emb is not None else None,
                 use_perceiver_frontend=bool(getattr(args, "polylora_use_perceiver_frontend", False)),
+                use_residual=use_residual,
+                residual_dim=residual_emb.shape[-1] if residual_emb is not None else None,
+                residual_scale=float(getattr(args, "polylora_residual_scale", 0.05)),
                 enable_base_branch=use_base,
             )
             load_polylora_checkpoint(Path(ckpt_path), model)
+            model.to(device)
             model.eval()
             pred = predict_lora_state_dict(
                 model,
                 embedding,
                 identity=identity_emb,
+                residual=residual_emb,
                 use_perceiver=bool(getattr(args, "polylora_use_perceiver_frontend", False)),
                 include_base=use_base,
             )
