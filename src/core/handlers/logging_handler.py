@@ -31,6 +31,7 @@ from core.handlers.det_logging_utils import (
     attach_det_component_logs,
     log_det_locality_profile_visuals,
 )
+from core.handlers.diagnostic_metrics import collect_diagnostic_metrics_logs
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +103,19 @@ def collect_and_log_training_metrics(
     - Optimizer histograms
     - Timestep distributions
     """
+    diagnostic_metric_logs: Dict[str, float] = {}
+    try:
+        diagnostic_metric_logs = collect_diagnostic_metrics_logs(
+            args=args,
+            accelerator=accelerator,
+            global_step=global_step,
+            model_pred=model_pred,
+            target=target,
+            loss_components=loss_components,
+        )
+    except Exception:
+        diagnostic_metric_logs = {}
+
     if not (accelerator.is_main_process and len(accelerator.trackers) > 0):
         return
 
@@ -126,6 +140,7 @@ def collect_and_log_training_metrics(
         per_source_losses,  # Pass per-source losses
         gradient_norm,  # Pass gradient norm
     )
+    logs.update(diagnostic_metric_logs)
 
     # Add performance metrics
     if accelerator.sync_gradients:

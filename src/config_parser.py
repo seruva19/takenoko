@@ -81,6 +81,7 @@ from configs.video2lora_config import apply_video2lora_config
 from configs.dual_head_alignment_config import apply_dual_head_alignment_config
 from configs.manifold_consensus_config import apply_manifold_consensus_config
 from configs.reference_conditioning_config import apply_reference_conditioning_config
+from configs.diagnostic_metrics_config import apply_diagnostic_metrics_config
 
 
 def create_args_from_config(
@@ -786,6 +787,7 @@ def create_args_from_config(
     args.param_stats_every_n_steps = config.get("param_stats_every_n_steps", 100)
     args.max_param_stats_logged = config.get("max_param_stats_logged", 20)
     args.log_per_source_loss = config.get("log_per_source_loss", False)
+    apply_diagnostic_metrics_config(args, config, logger)
 
     # LoRA weight distribution tracking
     args.log_lora_weight_histograms = config.get("log_lora_weight_histograms", False)

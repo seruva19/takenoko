@@ -7840,6 +7840,40 @@ max_param_stats_logged = 20
 # Creates TensorBoard metrics: loss/video, loss/image
 log_per_source_loss = false
 
+# Opt-in diagnostic telemetry that is useful for diagnosing LoRA/video training stability.
+# Default: false
+# When enabled, the logging handler can emit:
+# - train/effective_batch_size
+# - train/loss_std_in_batch, train/loss_var_in_batch, train/loss_hard_topk_mean, train/loss_max_in_batch
+# - video/loss_first_frame, video/loss_last_frame, video/loss_delta
+# - train/optical_flow_error
+# This feature is logging-only and does not change optimization behavior.
+enable_diagnostic_metrics = false
+
+# Interval in global steps for the heavier diagnostic computations. Must be > 0. Default: 50.
+# Effective batch size remains available on synchronized optimizer steps even if the interval is larger.
+diagnostic_metrics_interval = 50
+
+# Emit train/effective_batch_size using the summed distributed batch size multiplied by gradient_accumulation_steps.
+# Default: true
+diagnostic_metrics_enable_effective_batch_size = true
+
+# Emit distributed per-sample batch-loss dispersion metrics. Default: true
+# These metrics use unreduced MSE between model_pred and target and gather values across ranks when possible.
+diagnostic_metrics_enable_per_sample_loss_stats = true
+
+# Emit first-vs-last-frame latent loss metrics for video batches only. Default: true
+# Ignored for image batches or tensors without a temporal latent dimension.
+diagnostic_metrics_enable_boundary_frame_loss = true
+
+# Emit train/optical_flow_error when optical-flow loss is active. Default: true
+# This is an explicit diagnostics alias for the same reconstruction-error scalar already used by the optical-flow loss term.
+diagnostic_metrics_enable_optical_flow_error = true
+
+# Fraction of the gathered per-sample batch used when computing train/loss_hard_topk_mean. Must be in (0, 1]. Default: 0.1
+# Example: 0.1 reports the mean loss of the hardest 10% of samples in the synchronized batch.
+diagnostic_metrics_hard_example_fraction = 0.1
+
 # Log LoRA weight value histograms to TensorBoard for training diagnostics.
 # Helps detect weight explosion, collapse, or drift during training.
 # Creates TensorBoard histograms: lora_weights/all_weights, lora_weights/down_weights, lora_weights/up_weights

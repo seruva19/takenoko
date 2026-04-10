@@ -41,6 +41,22 @@ def configure_advanced_logging(args: argparse.Namespace) -> None:
     if not hasattr(args, "log_per_source_loss"):
         args.log_per_source_loss = False  # Disabled by default
 
+    # Opt-in diagnostic metrics
+    if not hasattr(args, "enable_diagnostic_metrics"):
+        args.enable_diagnostic_metrics = False
+    if not hasattr(args, "diagnostic_metrics_interval"):
+        args.diagnostic_metrics_interval = 50
+    if not hasattr(args, "diagnostic_metrics_enable_effective_batch_size"):
+        args.diagnostic_metrics_enable_effective_batch_size = True
+    if not hasattr(args, "diagnostic_metrics_enable_per_sample_loss_stats"):
+        args.diagnostic_metrics_enable_per_sample_loss_stats = True
+    if not hasattr(args, "diagnostic_metrics_enable_boundary_frame_loss"):
+        args.diagnostic_metrics_enable_boundary_frame_loss = True
+    if not hasattr(args, "diagnostic_metrics_enable_optical_flow_error"):
+        args.diagnostic_metrics_enable_optical_flow_error = True
+    if not hasattr(args, "diagnostic_metrics_hard_example_fraction"):
+        args.diagnostic_metrics_hard_example_fraction = 0.1
+
     # Gradient norm logging
     if not hasattr(args, "log_gradient_norm"):
         args.log_gradient_norm = False  # Disabled by default
@@ -75,6 +91,28 @@ def configure_advanced_logging(args: argparse.Namespace) -> None:
         enabled_features.append("Gradient Norm")
         logger.info("Gradient norm logging enabled:")
         logger.info("  - Will create TensorBoard metric: grad_norm")
+
+    if args.enable_diagnostic_metrics:
+        enabled_features.append("Diagnostic Metrics")
+        logger.info("Diagnostic metrics logging enabled:")
+        logger.info(
+            f"  - Logging interval: every {args.diagnostic_metrics_interval} steps"
+        )
+        logger.info(
+            f"  - Effective batch size: {bool(args.diagnostic_metrics_enable_effective_batch_size)}"
+        )
+        logger.info(
+            f"  - Per-sample loss stats: {bool(args.diagnostic_metrics_enable_per_sample_loss_stats)}"
+        )
+        logger.info(
+            f"  - Boundary frame loss: {bool(args.diagnostic_metrics_enable_boundary_frame_loss)}"
+        )
+        logger.info(
+            f"  - Optical flow error alias: {bool(args.diagnostic_metrics_enable_optical_flow_error)}"
+        )
+        logger.info(
+            f"  - Hard-example fraction: {float(args.diagnostic_metrics_hard_example_fraction):.3f}"
+        )
 
     if enabled_features:
         logger.info(
