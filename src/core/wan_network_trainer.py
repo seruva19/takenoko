@@ -102,6 +102,7 @@ class WanNetworkTrainer:
         self.training_core = None  # Will be initialized with config
         self.vae_training_core = None  # Will be initialized for VAE training
         self.eqm_mode_config: Optional[EqMModeConfig] = None
+        self.timestep_distribution = None
 
     def handle_model_specific_args(self, args: argparse.Namespace) -> None:
         """Handle model-specific arguments and configuration."""
@@ -143,6 +144,7 @@ class WanNetworkTrainer:
 
         # Initialize training cores with config
         self.training_core = TrainingCore(self.config, self.fluxflow_config)
+        self.timestep_distribution = self.training_core.timestep_distribution
         self.vae_training_core = VaeTrainingCore(self.config)
         self.reward_training_core = RewardTrainingCore(self.config)
 
