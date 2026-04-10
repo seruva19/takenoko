@@ -46,6 +46,10 @@ from modules.fp8_optimization_utils import (
 from .attention import local_patching, local_merge, nablaT, sta
 from utils.advanced_rope import apply_rope_comfy
 from utils.dispersive_loss_utils import resolve_dispersive_target_block
+from wan.modules.dype import (
+    compute_dynamic_positional_extrapolation_scales,
+    interpolate_frequency_axis,
+)
 
 from utils.tread.tread_router import TREADRouter
 from wan.modules.lean_attention import forward_wan22_lean_block
@@ -169,6 +173,7 @@ def rope_apply(
     extra_tokens: int = 0,
     rope_offsets: Optional[torch.Tensor] = None,
     reference_frame_token_counts: Optional[torch.Tensor] = None,
+    dynamic_rope_scales: Optional[torch.Tensor] = None,
 ):
     device_type = x.device.type
     with torch.amp.autocast(device_type=device_type, enabled=False):  # type: ignore
@@ -208,6 +213,11 @@ def rope_apply(
                 device=freq_device,
                 reference_frame_tokens=ref_frames,
                 rope_offset=offset,
+                dynamic_rope_scale=(
+                    None
+                    if dynamic_rope_scales is None
+                    else dynamic_rope_scales[i].to(device=freq_device)
+                ),
             )
 
             if fractal:
@@ -253,33 +263,71 @@ def _build_rotary_freqs(
     device: torch.device,
     reference_frame_tokens: int = 0,
     rope_offset: Optional[torch.Tensor] = None,
+    dynamic_rope_scale: Optional[torch.Tensor] = None,
 ) -> torch.Tensor:
+    if dynamic_rope_scale is None:
+        base_t = torch.arange(f, device=device, dtype=torch.long).view(f, 1, 1)
+        base_h = torch.arange(h, device=device, dtype=torch.long).view(1, h, 1)
+        base_w = torch.arange(w, device=device, dtype=torch.long).view(1, 1, w)
+
+        t_idx = base_t.expand(f, h, w)
+        h_idx = base_h.expand(f, h, w)
+        w_idx = base_w.expand(f, h, w)
+        if rope_offset is not None and reference_frame_tokens > 0:
+            ref_mask = t_idx < int(reference_frame_tokens)
+            if ref_mask.any():
+                t_idx = t_idx + ref_mask.to(torch.long) * int(rope_offset[0].item())
+                h_idx = h_idx + ref_mask.to(torch.long) * int(rope_offset[1].item())
+                w_idx = w_idx + ref_mask.to(torch.long) * int(rope_offset[2].item())
+
+        if int(t_idx.max().item()) >= freqs[0].shape[0]:
+            raise ValueError("RoPE temporal offset exceeds precomputed frequency range.")
+        if int(h_idx.max().item()) >= freqs[1].shape[0]:
+            raise ValueError("RoPE height offset exceeds precomputed frequency range.")
+        if int(w_idx.max().item()) >= freqs[2].shape[0]:
+            raise ValueError("RoPE width offset exceeds precomputed frequency range.")
+
+        return torch.cat(
+            [
+                freqs[0][t_idx],
+                freqs[1][h_idx],
+                freqs[2][w_idx],
+            ],
+            dim=-1,
+        )
+
     base_t = torch.arange(f, device=device, dtype=torch.long).view(f, 1, 1)
     base_h = torch.arange(h, device=device, dtype=torch.long).view(1, h, 1)
     base_w = torch.arange(w, device=device, dtype=torch.long).view(1, 1, w)
 
-    t_idx = base_t.expand(f, h, w)
-    h_idx = base_h.expand(f, h, w)
-    w_idx = base_w.expand(f, h, w)
-    if rope_offset is not None and reference_frame_tokens > 0:
-        ref_mask = t_idx < int(reference_frame_tokens)
-        if ref_mask.any():
-            t_idx = t_idx + ref_mask.to(torch.long) * int(rope_offset[0].item())
-            h_idx = h_idx + ref_mask.to(torch.long) * int(rope_offset[1].item())
-            w_idx = w_idx + ref_mask.to(torch.long) * int(rope_offset[2].item())
+    t_pos = base_t.expand(f, h, w).to(torch.float32)
+    h_pos = base_h.expand(f, h, w).to(torch.float32)
+    w_pos = base_w.expand(f, h, w).to(torch.float32)
 
-    if int(t_idx.max().item()) >= freqs[0].shape[0]:
+    if rope_offset is not None and reference_frame_tokens > 0:
+        ref_mask = t_pos < float(reference_frame_tokens)
+        if ref_mask.any():
+            t_pos = t_pos + ref_mask.to(torch.float32) * float(rope_offset[0].item())
+            h_pos = h_pos + ref_mask.to(torch.float32) * float(rope_offset[1].item())
+            w_pos = w_pos + ref_mask.to(torch.float32) * float(rope_offset[2].item())
+
+    scales = dynamic_rope_scale.to(device=device, dtype=torch.float32).clamp_min(1.0)
+    t_pos = t_pos / scales[0]
+    h_pos = h_pos / scales[1]
+    w_pos = w_pos / scales[2]
+
+    if float(t_pos.max().item()) > float(freqs[0].shape[0] - 1):
         raise ValueError("RoPE temporal offset exceeds precomputed frequency range.")
-    if int(h_idx.max().item()) >= freqs[1].shape[0]:
+    if float(h_pos.max().item()) > float(freqs[1].shape[0] - 1):
         raise ValueError("RoPE height offset exceeds precomputed frequency range.")
-    if int(w_idx.max().item()) >= freqs[2].shape[0]:
+    if float(w_pos.max().item()) > float(freqs[2].shape[0] - 1):
         raise ValueError("RoPE width offset exceeds precomputed frequency range.")
 
     return torch.cat(
         [
-            freqs[0][t_idx],
-            freqs[1][h_idx],
-            freqs[2][w_idx],
+            interpolate_frequency_axis(freqs[0], t_pos.reshape(-1)).view(f, h, w, -1),
+            interpolate_frequency_axis(freqs[1], h_pos.reshape(-1)).view(f, h, w, -1),
+            interpolate_frequency_axis(freqs[2], w_pos.reshape(-1)).view(f, h, w, -1),
         ],
         dim=-1,
     )
@@ -438,6 +486,7 @@ class WanSelfAttention(nn.Module):
         rollout_history_frame_count: int = 0,
         rope_offsets: Optional[torch.Tensor] = None,
         reference_frame_token_counts: Optional[torch.Tensor] = None,
+        dynamic_rope_scales: Optional[torch.Tensor] = None,
     ):
         r"""
         Args:
@@ -477,6 +526,7 @@ class WanSelfAttention(nn.Module):
                     extra_tokens=extra_tokens,
                     rope_offsets=rope_offsets,
                     reference_frame_token_counts=reference_frame_token_counts,
+                    dynamic_rope_scales=dynamic_rope_scales,
                 )
                 .to(dtype=torch.bfloat16)
                 .transpose(1, 2)
@@ -490,6 +540,7 @@ class WanSelfAttention(nn.Module):
                     extra_tokens=extra_tokens,
                     rope_offsets=rope_offsets,
                     reference_frame_token_counts=reference_frame_token_counts,
+                    dynamic_rope_scales=dynamic_rope_scales,
                 )
                 .to(dtype=torch.bfloat16)
                 .transpose(1, 2)
@@ -535,6 +586,7 @@ class WanSelfAttention(nn.Module):
                 if (
                     rope_offsets is None
                     and reference_frame_token_counts is None
+                    and dynamic_rope_scales is None
                     and
                     (
                     bool(getattr(self, "use_comfy_rope", False))
@@ -561,6 +613,7 @@ class WanSelfAttention(nn.Module):
                         extra_tokens=extra_tokens,
                         rope_offsets=rope_offsets,
                         reference_frame_token_counts=reference_frame_token_counts,
+                        dynamic_rope_scales=dynamic_rope_scales,
                     )
                     k_rope = rope_apply(
                         k,
@@ -569,9 +622,13 @@ class WanSelfAttention(nn.Module):
                         extra_tokens=extra_tokens,
                         rope_offsets=rope_offsets,
                         reference_frame_token_counts=reference_frame_token_counts,
+                        dynamic_rope_scales=dynamic_rope_scales,
                     )
                     qkv = [q_rope, k_rope, v]
-                elif rope_offsets is not None and reference_frame_token_counts is not None:
+                elif (
+                    (rope_offsets is not None and reference_frame_token_counts is not None)
+                    or dynamic_rope_scales is not None
+                ):
                     q_rope = rope_apply(
                         q,
                         grid_sizes,
@@ -579,6 +636,7 @@ class WanSelfAttention(nn.Module):
                         extra_tokens=extra_tokens,
                         rope_offsets=rope_offsets,
                         reference_frame_token_counts=reference_frame_token_counts,
+                        dynamic_rope_scales=dynamic_rope_scales,
                     )
                     k_rope = rope_apply(
                         k,
@@ -587,6 +645,7 @@ class WanSelfAttention(nn.Module):
                         extra_tokens=extra_tokens,
                         rope_offsets=rope_offsets,
                         reference_frame_token_counts=reference_frame_token_counts,
+                        dynamic_rope_scales=dynamic_rope_scales,
                     )
                     qkv = [q_rope, k_rope, v]
                 else:
@@ -839,6 +898,7 @@ class WanAttentionBlock(nn.Module):
         rollout_history_frame_count: int = 0,
         rope_offsets: torch.Tensor | None = None,
         reference_frame_token_counts: torch.Tensor | None = None,
+        dynamic_rope_scales: torch.Tensor | None = None,
     ):
         r"""
         Args:
@@ -856,6 +916,7 @@ class WanAttentionBlock(nn.Module):
             self.model_version != "2.1"
             and rope_offsets is None
             and reference_frame_token_counts is None
+            and dynamic_rope_scales is None
             and bool(getattr(self, "_lean_attn_math", False))
         ):
             x = forward_wan22_lean_block(
@@ -904,6 +965,7 @@ class WanAttentionBlock(nn.Module):
                 extra_tokens=extra_tokens,
                 rope_offsets=rope_offsets,
                 reference_frame_token_counts=reference_frame_token_counts,
+                dynamic_rope_scales=dynamic_rope_scales,
                 history_routing_config=history_routing_config,
                 block_index=block_index,
                 enable_rollout_self_attn_kv_cache=enable_rollout_self_attn_kv_cache,
@@ -955,6 +1017,7 @@ class WanAttentionBlock(nn.Module):
         rollout_history_frame_count: int = 0,
         rope_offsets: torch.Tensor | None = None,
         reference_frame_token_counts: torch.Tensor | None = None,
+        dynamic_rope_scales: torch.Tensor | None = None,
     ):
         """
         Forward pass for WanAttentionBlock.
@@ -996,6 +1059,7 @@ class WanAttentionBlock(nn.Module):
                 rollout_history_frame_count,
                 rope_offsets,
                 reference_frame_token_counts,
+                dynamic_rope_scales,
                 use_reentrant=False,
             )
         return self._forward(
@@ -1018,6 +1082,7 @@ class WanAttentionBlock(nn.Module):
             rollout_history_frame_count,
             rope_offsets,
             reference_frame_token_counts,
+            dynamic_rope_scales,
         )
 
 
@@ -1146,6 +1211,11 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
         lean_attention_fp32_default: bool = True,
         simple_modulation: bool = False,
         optimized_torch_compile: bool = False,
+        enable_dynamic_positional_extrapolation: bool = False,
+        dynamic_positional_extrapolation_mode: str = "rope_scale",
+        dynamic_positional_base_resolution: int = 1024,
+        dynamic_positional_max_scale: float = 4.0,
+        dynamic_positional_activate_above_frames: int = 0,
         bfm_segment_blocks_enabled: bool = False,
         bfm_segment_block_mode: str = "shared",
         bfm_num_segments: int = 6,
@@ -1234,6 +1304,20 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
         self._simple_modulation = bool(simple_modulation)
         # Lean attention compute policy: fp32 by default unless overridden
         self._lean_attn_fp32_default = bool(lean_attention_fp32_default)
+        self.enable_dynamic_positional_extrapolation = bool(
+            enable_dynamic_positional_extrapolation
+        )
+        self.dynamic_positional_extrapolation_mode = str(
+            dynamic_positional_extrapolation_mode
+        )
+        self.dynamic_positional_base_resolution = int(
+            dynamic_positional_base_resolution
+        )
+        self.dynamic_positional_max_scale = float(dynamic_positional_max_scale)
+        self.dynamic_positional_activate_above_frames = int(
+            dynamic_positional_activate_above_frames
+        )
+        self._last_dynamic_positional_extrapolation_metrics: Dict[str, float] = {}
         if self._lower_precision_attention:
             logger.info(
                 "Attention pre-calcs/e tensor in torch.float16 to save VRAM (lower_precision_attention)"
@@ -1371,6 +1455,9 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
         self._sprint_global_step: Optional[int] = None
         self._sprint_stage_name: Optional[str] = None
         self._memflow_guidance_enabled: bool = False
+
+    def get_dynamic_positional_extrapolation_metrics(self) -> Dict[str, float]:
+        return dict(self._last_dynamic_positional_extrapolation_metrics)
 
     def configure_reg(self, cls_dim: int) -> None:
         """Attach REG class-token projection heads when enabled."""
@@ -1703,8 +1790,24 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
             [torch.tensor(u.shape[2:], dtype=torch.long, device=t.device) for u in x]
         )  # list of [F, H, W] placed on same device as timesteps
 
+        dynamic_rope_scales: Optional[torch.Tensor] = None
+        self._last_dynamic_positional_extrapolation_metrics = {}
+        if (
+            self.enable_dynamic_positional_extrapolation
+            and self.dynamic_positional_extrapolation_mode == "rope_scale"
+        ):
+            dynamic_rope_scales, self._last_dynamic_positional_extrapolation_metrics = (
+                compute_dynamic_positional_extrapolation_scales(
+                    grid_sizes=grid_sizes,
+                    patch_size=self.patch_size,
+                    base_resolution=self.dynamic_positional_base_resolution,
+                    max_scale=self.dynamic_positional_max_scale,
+                    activate_above_frames=self.dynamic_positional_activate_above_frames,
+                )
+            )
+
         freqs_list = []
-        if not self.rope_on_the_fly:
+        if not self.rope_on_the_fly and dynamic_rope_scales is None:
             for i, fhw in enumerate(grid_sizes):
                 fhw = tuple(fhw.tolist())
                 if fhw not in self.freqs_fhw:
@@ -1932,7 +2035,13 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
             and reference_frame_token_counts is not None
         )
         attn_freqs = (
-            self.freqs if (self.rope_on_the_fly or use_offset_rope) else freqs_list
+            self.freqs
+            if (
+                self.rope_on_the_fly
+                or use_offset_rope
+                or dynamic_rope_scales is not None
+            )
+            else freqs_list
         )
         # Propagate rope_func/comfy to attention modules when requested
         rope_mode = getattr(self, "rope_func", "default")
@@ -1965,6 +2074,7 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
             extra_tokens=reg_extra_tokens,
             rope_offsets=rope_reference_offsets,
             reference_frame_token_counts=reference_frame_token_counts,
+            dynamic_rope_scales=dynamic_rope_scales,
             history_routing_config=self._self_resampling_history_routing_cfg,
             block_index=-1,
             enable_rollout_kv_cache=enable_rollout_kv_cache,
@@ -2385,6 +2495,11 @@ def load_wan_model(
     compile_args: Optional[list] = None,
     fp8_format: str = "e4m3",
     rope_use_float32: bool = False,
+    enable_dynamic_positional_extrapolation: bool = False,
+    dynamic_positional_extrapolation_mode: str = "rope_scale",
+    dynamic_positional_base_resolution: int = 1024,
+    dynamic_positional_max_scale: float = 4.0,
+    dynamic_positional_activate_above_frames: int = 0,
     enable_memory_mapping: bool = False,
     enable_zero_copy_loading: bool = False,
     enable_non_blocking_transfers: bool = False,
@@ -2467,6 +2582,11 @@ def load_wan_model(
             simple_modulation=simple_modulation,
             optimized_torch_compile=optimized_torch_compile,
             lean_attention_fp32_default=lean_attention_fp32_default,
+            enable_dynamic_positional_extrapolation=enable_dynamic_positional_extrapolation,
+            dynamic_positional_extrapolation_mode=dynamic_positional_extrapolation_mode,
+            dynamic_positional_base_resolution=dynamic_positional_base_resolution,
+            dynamic_positional_max_scale=dynamic_positional_max_scale,
+            dynamic_positional_activate_above_frames=dynamic_positional_activate_above_frames,
             bfm_segment_blocks_enabled=bfm_segment_blocks_enabled,
             bfm_segment_block_mode=bfm_segment_block_mode,
             bfm_num_segments=bfm_num_segments,

@@ -3871,6 +3871,7 @@ class TrainingCore:
                     ema_loss_value,
                     ema_loss_debiased,
                     network,
+                    transformer,
                     global_step,
                     per_source_losses,
                     gradient_norm,

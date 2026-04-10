@@ -1595,7 +1595,7 @@ class WanNetworkTrainer:
         except Exception:
             use_enhanced_bar = True
         custom_bar_format = (
-            "{l_bar}{bar} {n_fmt}/{total_fmt} [{elapsed}<{remaining}] {postfix}"
+            "{l_bar}{bar} {n_fmt}/{total_fmt} [{elapsed}<{remaining}]{postfix}"
             if use_enhanced_bar
             else None
         )

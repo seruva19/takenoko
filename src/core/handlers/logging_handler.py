@@ -76,6 +76,7 @@ def collect_and_log_training_metrics(
     ema_loss_value: float,
     ema_loss_debiased: Optional[float],
     network: Any,
+    transformer: Any,
     global_step: int,
     per_source_losses: Dict[str, float],
     gradient_norm: Optional[float],
@@ -179,6 +180,20 @@ def collect_and_log_training_metrics(
             lora_drop_metrics = unwrapped_network.get_lora_drop_metrics()
             if isinstance(lora_drop_metrics, dict):
                 logs.update(lora_drop_metrics)
+    except Exception:
+        pass
+
+    try:
+        unwrapped_transformer = accelerator.unwrap_model(transformer)
+        if hasattr(
+            unwrapped_transformer,
+            "get_dynamic_positional_extrapolation_metrics",
+        ):
+            dype_metrics = (
+                unwrapped_transformer.get_dynamic_positional_extrapolation_metrics()
+            )
+            if isinstance(dype_metrics, dict):
+                logs.update(dype_metrics)
     except Exception:
         pass
 

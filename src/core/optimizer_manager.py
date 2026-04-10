@@ -26,6 +26,22 @@ class OptimizerManager:
         pass
 
     @staticmethod
+    def parse_optimizer_arg_value(value: str) -> Any:
+        """Parse optimizer_args values with TOML-friendly bool/null handling."""
+        normalized = value.strip()
+        lowered = normalized.lower()
+        if lowered == "true":
+            return True
+        if lowered == "false":
+            return False
+        if lowered in {"none", "null"}:
+            return None
+        try:
+            return ast.literal_eval(normalized)
+        except (ValueError, SyntaxError):
+            return normalized.strip("'\"")
+
+    @staticmethod
     def build_distributed_context(accelerator: Optional[Any] = None) -> Dict[str, Any]:
         """Extract distributed context for optimizers that need it at construction time."""
 
@@ -135,12 +151,7 @@ class OptimizerManager:
             logger.info(f"Processing optimizer args: {args.optimizer_args}")
             for arg in args.optimizer_args:
                 key, value = arg.split("=", 1)  # Split only on first '='
-                try:
-                    # Try to parse as literal first
-                    parsed_value = ast.literal_eval(value)
-                except (ValueError, SyntaxError):
-                    # If that fails, treat as string (remove quotes if present)
-                    parsed_value = value.strip("'\"")
+                parsed_value = OptimizerManager.parse_optimizer_arg_value(value)
                 optimizer_kwargs[key] = parsed_value
                 logger.info(
                     f"  Parsed: {key} = {parsed_value} (type: {type(parsed_value)})"

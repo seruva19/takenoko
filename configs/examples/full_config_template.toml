@@ -235,6 +235,27 @@ rope_func = "default"
 # Use float32 precision for RoPE calculations instead of float64 (memory optimization, minimal accuracy loss)
 rope_use_float32 = false
 
+# Enable dynamic positional extrapolation for RoPE. When active, larger token grids
+# compress temporal/spatial RoPE indices on the fly instead of relying only
+# on the base cached frequency range. Disabled by default to preserve existing behavior.
+enable_dynamic_positional_extrapolation = false
+
+# Dynamic positional extrapolation mode. Currently only "rope_scale" is supported.
+dynamic_positional_extrapolation_mode = "rope_scale"
+
+# Reference image resolution in pixels used as the unscaled spatial RoPE baseline.
+# Larger token grids above this baseline receive compressed spatial indices.
+dynamic_positional_base_resolution = 1024
+
+# Maximum per-axis RoPE compression scale applied by dynamic positional extrapolation.
+# Must be >= 1.0. Higher values allow more extrapolation but may weaken locality.
+dynamic_positional_max_scale = 4.0
+
+# Optional temporal activation threshold in frames. Set to 0 to leave temporal RoPE
+# unchanged and only adapt spatial indices. Values > 0 activate temporal scaling only
+# for samples whose frame count exceeds this threshold.
+dynamic_positional_activate_above_frames = 0
+
 # =============================================================================
 # OPTIMIZER SETTINGS
 # =============================================================================

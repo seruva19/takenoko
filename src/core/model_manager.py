@@ -158,6 +158,21 @@ class ModelManager:
             ),
             rope_func=str(getattr(args, "rope_func", "default")),
             rope_use_float32=bool(getattr(args, "rope_use_float32", False)),
+            enable_dynamic_positional_extrapolation=bool(
+                getattr(args, "enable_dynamic_positional_extrapolation", False)
+            ),
+            dynamic_positional_extrapolation_mode=str(
+                getattr(args, "dynamic_positional_extrapolation_mode", "rope_scale")
+            ),
+            dynamic_positional_base_resolution=int(
+                getattr(args, "dynamic_positional_base_resolution", 1024)
+            ),
+            dynamic_positional_max_scale=float(
+                getattr(args, "dynamic_positional_max_scale", 4.0)
+            ),
+            dynamic_positional_activate_above_frames=int(
+                getattr(args, "dynamic_positional_activate_above_frames", 0)
+            ),
             lean_attention_fp32_default=bool(
                 getattr(args, "lean_attention_fp32_default", False)
             ),
@@ -395,7 +410,35 @@ class ModelManager:
                 getattr(args, "exclude_ffn_from_scaled_mm", False)
             ),
             scale_input_tensor=getattr(args, "scale_input_tensor", None),
+            rope_on_the_fly=bool(getattr(args, "rope_on_the_fly", False)),
+            broadcast_time_embed=bool(getattr(args, "broadcast_time_embed", False)),
+            strict_e_slicing_checks=bool(
+                getattr(args, "strict_e_slicing_checks", False)
+            ),
+            lower_precision_attention=bool(
+                getattr(args, "lower_precision_attention", False)
+            ),
+            simple_modulation=bool(getattr(args, "simple_modulation", False)),
+            optimized_torch_compile=bool(
+                getattr(args, "optimized_torch_compile", False)
+            ),
+            rope_func=str(getattr(args, "rope_func", "default")),
             rope_use_float32=bool(getattr(args, "rope_use_float32", False)),
+            enable_dynamic_positional_extrapolation=bool(
+                getattr(args, "enable_dynamic_positional_extrapolation", False)
+            ),
+            dynamic_positional_extrapolation_mode=str(
+                getattr(args, "dynamic_positional_extrapolation_mode", "rope_scale")
+            ),
+            dynamic_positional_base_resolution=int(
+                getattr(args, "dynamic_positional_base_resolution", 1024)
+            ),
+            dynamic_positional_max_scale=float(
+                getattr(args, "dynamic_positional_max_scale", 4.0)
+            ),
+            dynamic_positional_activate_above_frames=int(
+                getattr(args, "dynamic_positional_activate_above_frames", 0)
+            ),
             bfm_segment_blocks_enabled=bool(
                 getattr(args, "bfm_segment_blocks_enabled", False)
             ),

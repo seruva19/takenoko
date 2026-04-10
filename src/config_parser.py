@@ -89,6 +89,7 @@ from configs.deco_band_balanced_loss_config import (
 from configs.deco_frequency_diagnostics_config import (
     apply_deco_frequency_diagnostics_config,
 )
+from configs.dype_config import apply_dype_config
 from configs.split_video_loss_config import apply_split_video_loss_config
 from configs.spatiotemporal_guidance_weighting_config import (
     apply_spatiotemporal_guidance_weighting_config,
@@ -335,6 +336,7 @@ def create_args_from_config(
     args.rope_func = str(config.get("rope_func", "default"))
     # RoPE precision optimization (float32 vs float64)
     args.rope_use_float32 = bool(config.get("rope_use_float32", False))
+    apply_dype_config(args, config, logger)
 
     # Optional: force lower precision attention compute (fp16) for additional VRAM savings
     args.lower_precision_attention = bool(
