@@ -7430,6 +7430,91 @@ glance_mode = "slow"
 glance_timesteps = ""
 
 # =============================================================================
+# ⚠️ TWINFLOW DISTILLATION PIPELINE SETTINGS
+# =============================================================================
+
+# Toggle the alternate TwinFlow-style distillation trainer.
+# When false the standard WAN trainer is used; set true to route UnifiedTrainer through the TwinFlow runner.
+# TwinFlow is a full-model distillation pipeline. Use `network_module = "networks.wan_finetune"` (or leave network_module unset in a TwinFlow-specific config) rather than a LoRA/adapter module.
+twinflow_enabled = false
+
+# Force the dispatcher to only run the TwinFlow pipeline when enabled.
+# Set false only if you intend to call `dispatch_twinflow_pipeline` manually.
+twinflow_override_wan = true
+
+# Accelerator selection for TwinFlow: "auto" mirrors WAN accelerate settings, while "cpu" keeps the entire loop on CPU for debugging.
+twinflow_accelerator_mode = "auto"
+
+# TwinFlow runner flavor. The current implementation supports "full" only and optimizes the WAN transformer directly under the TwinFlow objective.
+twinflow_trainer_variant = "full"
+
+# Optional hard ceiling on TwinFlow steps. 0 defers to Takenoko's normal dataset-derived schedule / max_train_steps.
+twinflow_max_steps = 0
+
+# Precision override forwarded to the TwinFlow accelerator; valid values mirror accelerate ("fp16", "bf16", "no").
+twinflow_mixed_precision = "bf16"
+
+# Enable this to keep the entire TwinFlow loop on CPU regardless of accelerator settings.
+twinflow_cpu_debug = false
+
+# EMA decay used for the temporary teacher pass over the trainable LoRA network.
+# Values in [0, 1); higher = smoother but slower teacher updates.
+twinflow_ema_decay = 0.999
+
+# Scales how far below the primary sigma the sampled secondary target time can fall.
+# 1.0 matches the full TwinFlow range; lower values keep tt closer to t.
+twinflow_consistency_ratio = 1.0
+
+# Require EMA-backed teacher passes for TwinFlow recursive targets and target enhancement.
+# Keep true for the stricter teacher-backed path; set false only if you intentionally want to allow a pure student fallback.
+twinflow_require_ema = true
+
+# Allow TwinFlow to fall back to the current student weights as its teacher when EMA is unavailable.
+# Keep false for the stricter teacher-backed path.
+twinflow_allow_student_teacher = false
+
+# CFG-style target enhancement ratio. 0.0 disables the extra conditional/unconditional teacher refinement pass.
+twinflow_enhanced_ratio = 0.0
+
+# Sigma window `[min_sigma, max_sigma]` where target enhancement is allowed to modify the direct flow target. `[0.0, 1.0]` keeps enhancement active across the whole training range.
+twinflow_enhanced_range = [0.0, 1.0]
+
+# Recursive target estimate order. 1 is the safest default; larger values do more teacher sub-steps and increase compute.
+twinflow_estimate_order = 1
+
+# Small target integration step used when constructing the TwinFlow recursive consistency target.
+twinflow_delta_t = 0.01
+
+# Clamp range for the recursive consistency target correction. Larger values allow more aggressive target shifts but can destabilize early training.
+twinflow_clamp_target = 1.0
+
+# Enable the negative-time fake-trajectory branch and rectification loss.
+# This is the main TwinFlow-specific self-adversarial path.
+twinflow_adversarial_enabled = true
+
+# Scalar weight applied to the fake-trajectory adversarial loss.
+twinflow_adversarial_weight = 1.0
+
+# Scalar weight applied to the real-vs-fake rectification loss.
+twinflow_rectify_weight = 1.0
+
+# Scalar weight applied to the direct real-velocity loss against the standard flow-matching target.
+twinflow_real_velocity_weight = 1.0
+
+# Beta distribution control for primary sigma sampling: `[alpha, beta, max_scale]`.
+# `[1.0, 1.0, 1.0]` is uniform over `[0, 1]`; values like `[2.0, 1.0, 1.0]` bias toward noisier states while `[1.0, 2.0, 1.0]` bias toward cleaner states.
+twinflow_time_dist_ctrl = [1.0, 1.0, 1.0]
+
+# Logging cadence in optimizer steps for TwinFlow runner metrics.
+twinflow_log_interval = 10
+
+# Write a TwinFlow checkpoint every N optimizer steps. 0 disables intermediate checkpointing.
+twinflow_checkpoint_interval = 0
+
+# Optional inline table for future TwinFlow-only knobs. Leave empty unless a later Takenoko version documents additional keys.
+twinflow_extra_args = { }
+
+# =============================================================================
 # ⚠️ RCM DISTILLATION PIPELINE SETTINGS
 # =============================================================================
 

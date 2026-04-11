@@ -2273,6 +2273,70 @@ def create_args_from_config(
     if args.rcm.enabled and getattr(args, "finetune_mode", False):
         raise ValueError("RCM pipeline cannot run with finetune_mode enabled.")
 
+    # TwinFlow distillation pipeline configuration (root-level keys, prefixed with twinflow_)
+    twinflow_extra_args = config.get("twinflow_extra_args", {}) or {}
+    if not isinstance(twinflow_extra_args, dict):
+        logger.warning(
+            "??  Invalid twinflow_extra_args type '%s'. Expected table or inline table. Ignoring.",
+            type(twinflow_extra_args),
+        )
+        twinflow_extra_args = {}
+    args.twinflow = argparse.Namespace(
+        enabled=bool(config.get("twinflow_enabled", False)),
+        config_path=None,
+        override_wan=bool(config.get("twinflow_override_wan", True)),
+        accelerator_mode=config.get("twinflow_accelerator_mode", "auto"),
+        trainer_variant=config.get("twinflow_trainer_variant", "full"),
+        max_steps=config.get("twinflow_max_steps"),
+        mixed_precision=config.get("twinflow_mixed_precision", "bf16"),
+        extra_args=twinflow_extra_args,
+        cpu_debug=bool(config.get("twinflow_cpu_debug", False)),
+        ema_decay=float(config.get("twinflow_ema_decay", 0.999)),
+        consistency_ratio=float(config.get("twinflow_consistency_ratio", 1.0)),
+        require_ema=bool(config.get("twinflow_require_ema", True)),
+        allow_student_teacher=bool(
+            config.get("twinflow_allow_student_teacher", False)
+        ),
+        enhanced_ratio=float(config.get("twinflow_enhanced_ratio", 0.0)),
+        enhanced_range=list(config.get("twinflow_enhanced_range", [0.0, 1.0])),
+        estimate_order=int(config.get("twinflow_estimate_order", 1)),
+        delta_t=float(config.get("twinflow_delta_t", 0.01)),
+        clamp_target=float(config.get("twinflow_clamp_target", 1.0)),
+        adversarial_enabled=bool(config.get("twinflow_adversarial_enabled", True)),
+        adversarial_weight=float(config.get("twinflow_adversarial_weight", 1.0)),
+        rectify_weight=float(config.get("twinflow_rectify_weight", 1.0)),
+        real_velocity_weight=float(config.get("twinflow_real_velocity_weight", 1.0)),
+        time_dist_ctrl=list(config.get("twinflow_time_dist_ctrl", [1.0, 1.0, 1.0])),
+        log_interval=int(config.get("twinflow_log_interval", 10)),
+        checkpoint_interval=int(config.get("twinflow_checkpoint_interval", 0)),
+    )
+    if args.twinflow.ema_decay < 0.0 or args.twinflow.ema_decay >= 1.0:
+        raise ValueError("twinflow_ema_decay must be in [0.0, 1.0).")
+    if args.twinflow.consistency_ratio < 0.0:
+        raise ValueError("twinflow_consistency_ratio must be >= 0.0.")
+    if len(args.twinflow.time_dist_ctrl) != 3:
+        raise ValueError("twinflow_time_dist_ctrl must contain exactly three values: [alpha, beta, max_scale].")
+    if any(float(value) <= 0.0 for value in args.twinflow.time_dist_ctrl[:2]):
+        raise ValueError("twinflow_time_dist_ctrl alpha and beta must be > 0.0.")
+    if float(args.twinflow.time_dist_ctrl[2]) <= 0.0:
+        raise ValueError("twinflow_time_dist_ctrl max_scale must be > 0.0.")
+    if len(args.twinflow.enhanced_range) != 2:
+        raise ValueError("twinflow_enhanced_range must contain exactly two values: [min_sigma, max_sigma].")
+    enhanced_low = float(args.twinflow.enhanced_range[0])
+    enhanced_high = float(args.twinflow.enhanced_range[1])
+    if enhanced_low < 0.0 or enhanced_high > 1.0 or enhanced_low > enhanced_high:
+        raise ValueError("twinflow_enhanced_range must satisfy 0.0 <= min_sigma <= max_sigma <= 1.0.")
+    args.twinflow_enabled = bool(args.twinflow.enabled)
+
+    if args.twinflow.enabled and args.rcm.enabled:
+        raise ValueError("TwinFlow and RCM pipelines cannot be enabled together.")
+    if args.twinflow.enabled and getattr(args, "finetune_mode", False):
+        raise ValueError("TwinFlow pipeline cannot run with finetune_mode enabled.")
+    if args.twinflow.enabled and args.twinflow.override_wan:
+        args.pipeline_override = "twinflow"
+    elif not args.rcm.enabled:
+        args.pipeline_override = getattr(args, "pipeline_override", None)
+
     parse_densedpo_config(config, args, logger)
 
     # SRPO (Semantic Relative Preference Optimization) training configuration

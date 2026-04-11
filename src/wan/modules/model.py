@@ -1216,6 +1216,7 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
         dynamic_positional_base_resolution: int = 1024,
         dynamic_positional_max_scale: float = 4.0,
         dynamic_positional_activate_above_frames: int = 0,
+        enable_time_sign_embed: bool = False,
         bfm_segment_blocks_enabled: bool = False,
         bfm_segment_block_mode: str = "shared",
         bfm_num_segments: int = 6,
@@ -1367,6 +1368,10 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
             nn.SiLU(),
             make_linear(dim, dim, True, tag="time_out"),
         )
+        self.time_sign_embedding: Optional[nn.Embedding] = None
+        if enable_time_sign_embed:
+            self.time_sign_embedding = nn.Embedding(2, dim)
+            nn.init.zeros_(self.time_sign_embedding.weight)
         self.time_projection = nn.Sequential(
             nn.SiLU(), make_linear(dim, dim * 6, True, tag="time_proj")
         )
@@ -1716,6 +1721,7 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
         t,
         context,
         seq_len,
+        timestep_sign: torch.Tensor | None = None,
         clip_fea=None,  # not used
         y=None,
         skip_block_indices=None,
@@ -1900,6 +1906,13 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
                         self.freq_dim, t_tokens_flat, use_float32=rope_float32
                     ).float()
                 )  # [sum(L), dim]
+                if timestep_sign is not None:
+                    e_tokens_flat = self._apply_timestep_sign_embedding(
+                        e_tokens_flat,
+                        timestep_sign,
+                        batch_size=B,
+                        seq_lens=L,
+                    )
                 e0_tokens_flat = self.time_projection(e_tokens_flat).unflatten(
                     1, (6, self.dim)
                 )  # [sum(L), 6, dim]
@@ -1926,6 +1939,8 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
                         self.freq_dim, t, use_float32=rope_float32
                     ).float()
                 ).to(self.e_dtype)
+                if timestep_sign is not None:
+                    e = self._apply_timestep_sign_embedding(e, timestep_sign)
                 e0 = (
                     self.time_projection(e).unflatten(1, (6, self.dim)).to(self.e_dtype)
                 )
@@ -1944,6 +1959,8 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
                     ).to(
                         self.e_dtype
                     )  # [B, dim]
+                    if timestep_sign is not None:
+                        e = self._apply_timestep_sign_embedding(e, timestep_sign)
                     e0 = (
                         self.time_projection(e)
                         .unflatten(1, (6, self.dim))
@@ -1966,6 +1983,8 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
                         .unflatten(0, (bt, seq_len))
                         .float()
                     ).to(self.e_dtype)
+                    if timestep_sign is not None:
+                        e = self._apply_timestep_sign_embedding(e, timestep_sign)
                     e0 = (
                         self.time_projection(e)
                         .unflatten(2, (6, self.dim))
@@ -2395,6 +2414,42 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
             return tuple(parts)
         return outputs
 
+    def _apply_timestep_sign_embedding(
+        self,
+        embeddings: torch.Tensor,
+        timestep_sign: torch.Tensor,
+        *,
+        batch_size: Optional[int] = None,
+        seq_lens: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        if self.time_sign_embedding is None:
+            raise ValueError(
+                "timestep_sign was provided but the model was loaded without TwinFlow signed-timestep support."
+            )
+
+        sign_values = timestep_sign.view(-1)
+        if batch_size is not None and sign_values.numel() != batch_size:
+            raise ValueError(
+                f"timestep_sign batch mismatch: expected {batch_size}, got {sign_values.numel()}"
+            )
+
+        sign_idx = (sign_values < 0).long().to(device=embeddings.device)
+        sign_emb = self.time_sign_embedding(sign_idx).to(
+            device=embeddings.device,
+            dtype=embeddings.dtype,
+        )
+
+        if embeddings.dim() == 2 and seq_lens is not None:
+            repeated = sign_emb.repeat_interleave(seq_lens.to(device=embeddings.device))
+            return embeddings + repeated
+        if embeddings.dim() == 2:
+            return embeddings + sign_emb
+        if embeddings.dim() == 3:
+            return embeddings + sign_emb.unsqueeze(1)
+        raise ValueError(
+            f"Unsupported embedding rank for timestep_sign: {embeddings.dim()}"
+        )
+
     def unpatchify(self, x, grid_sizes):
         r"""
         Reconstruct video tensors from patch embeddings.
@@ -2500,6 +2555,7 @@ def load_wan_model(
     dynamic_positional_base_resolution: int = 1024,
     dynamic_positional_max_scale: float = 4.0,
     dynamic_positional_activate_above_frames: int = 0,
+    enable_time_sign_embed: bool = False,
     enable_memory_mapping: bool = False,
     enable_zero_copy_loading: bool = False,
     enable_non_blocking_transfers: bool = False,
@@ -2587,6 +2643,7 @@ def load_wan_model(
             dynamic_positional_base_resolution=dynamic_positional_base_resolution,
             dynamic_positional_max_scale=dynamic_positional_max_scale,
             dynamic_positional_activate_above_frames=dynamic_positional_activate_above_frames,
+            enable_time_sign_embed=enable_time_sign_embed,
             bfm_segment_blocks_enabled=bfm_segment_blocks_enabled,
             bfm_segment_block_mode=bfm_segment_block_mode,
             bfm_num_segments=bfm_num_segments,
@@ -2681,7 +2738,11 @@ def load_wan_model(
     except Exception:
         pass
 
-    info = model.load_state_dict(sd, strict=True, assign=True)
+    info = model.load_state_dict(
+        sd,
+        strict=not enable_time_sign_embed,
+        assign=True,
+    )
     if dit_weight_dtype is not None:
         # cast model weights to the specified dtype. This makes sure that the model is in the correct dtype
         logger.info(f"Casting model weights to {dit_weight_dtype}")

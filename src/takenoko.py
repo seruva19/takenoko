@@ -62,6 +62,11 @@ except ImportError:  # pragma: no cover - optional dependency tree
     dispatch_rcm_pipeline = None
 
 try:
+    from distillation.twinflow_bridge import dispatch_twinflow_pipeline  # type: ignore
+except ImportError:  # pragma: no cover - optional dependency tree
+    dispatch_twinflow_pipeline = None
+
+try:
     from distillation.moalign_stage1_bridge import (  # type: ignore
         dispatch_moalign_stage1_pipeline,
     )
@@ -1049,6 +1054,23 @@ class UnifiedTrainer:
         initialize_windows_vram_monitor(self.args)
 
         try:
+            # Route to TwinFlow pipeline if enabled via config
+            if getattr(getattr(self.args, "twinflow", None), "enabled", False):
+                if dispatch_twinflow_pipeline is None:
+                    logger.error(
+                        "TwinFlow pipeline requested but distillation.twinflow_bridge is unavailable"
+                    )
+                    return False
+                logger.info(
+                    "TwinFlow pipeline enabled via config - dispatching distillation runner"
+                )
+                return dispatch_twinflow_pipeline(
+                    args=self.args,
+                    raw_config=self.config,
+                    raw_config_content=self.config_content,
+                    config_path=self.config_path,
+                )
+
             # Route to RCM pipeline if enabled via config
             if getattr(getattr(self.args, "rcm", None), "enabled", False):
                 if dispatch_rcm_pipeline is None:

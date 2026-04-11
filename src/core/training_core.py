@@ -639,6 +639,7 @@ class TrainingCore:
         rcm_t_scaling_factor: Optional[float] = None,
         reg_cls_token: Optional[torch.Tensor] = None,
         model_timesteps_override: Optional[torch.Tensor] = None,
+        timestep_sign_override: Optional[torch.Tensor] = None,
         context_override: Optional[List[torch.Tensor]] = None,
         apply_stable_velocity_target: bool = True,
         return_intermediate: Optional[bool] = None,
@@ -1111,8 +1112,7 @@ class TrainingCore:
                         dispersive_target,
                     )
 
-            model_pred = model(
-                model_input,
+            model_kwargs = dict(
                 t=model_timesteps,
                 context=context,
                 clip_fea=None,
@@ -1136,6 +1136,9 @@ class TrainingCore:
                 rope_reference_offsets=ic_lora_rope_reference_offsets,
                 reference_frame_token_counts=ic_lora_reference_frame_token_counts,
             )
+            if timestep_sign_override is not None:
+                model_kwargs["timestep_sign"] = timestep_sign_override
+            model_pred = model(model_input, **model_kwargs)
         # Unpack optional intermediate
         intermediate_z: Optional[torch.Tensor] = None
         internal_guidance_pred: Optional[torch.Tensor] = None

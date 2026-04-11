@@ -173,6 +173,7 @@ class ModelManager:
             dynamic_positional_activate_above_frames=int(
                 getattr(args, "dynamic_positional_activate_above_frames", 0)
             ),
+            enable_time_sign_embed=bool(getattr(args, "twinflow_enabled", False)),
             lean_attention_fp32_default=bool(
                 getattr(args, "lean_attention_fp32_default", False)
             ),
@@ -439,6 +440,7 @@ class ModelManager:
             dynamic_positional_activate_above_frames=int(
                 getattr(args, "dynamic_positional_activate_above_frames", 0)
             ),
+            enable_time_sign_embed=bool(getattr(args, "twinflow_enabled", False)),
             bfm_segment_blocks_enabled=bool(
                 getattr(args, "bfm_segment_blocks_enabled", False)
             ),
