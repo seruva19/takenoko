@@ -7,6 +7,7 @@ _MASK_RATIO_MODES = {"auto", "fixed"}
 _LOSS_TYPES = {"negative_cosine", "one_minus_cosine"}
 _TEACHER_MODES = {"ema", "base", "partial_ema"}
 _PROJECTOR_ACTIVATIONS = {"silu", "gelu"}
+_PROJECTOR_DESIGNS = {"plain_mlp", "rmsnorm_gelu_mlp"}
 _TEMPORAL_MODES = {"off", "frame", "delta", "hybrid"}
 _TEMPORAL_GRANULARITIES = {"frame", "patch"}
 _PATCH_MATCH_MODES = {"hard", "soft"}
@@ -86,6 +87,9 @@ def apply_self_flow_config(args: Any, config: Dict[str, Any], logger: Any) -> No
     )
     args.self_flow_projector_activation = str(
         config.get("self_flow_projector_activation", "silu")
+    ).lower()
+    args.self_flow_projector_design = str(
+        config.get("self_flow_projector_design", "plain_mlp")
     ).lower()
     projector_lr = config.get("self_flow_projector_lr", None)
     if projector_lr is None:
@@ -172,6 +176,11 @@ def apply_self_flow_config(args: Any, config: Dict[str, Any], logger: Any) -> No
         raise ValueError(
             "self_flow_projector_activation must be one of "
             f"{sorted(_PROJECTOR_ACTIVATIONS)}"
+        )
+    if args.self_flow_projector_design not in _PROJECTOR_DESIGNS:
+        raise ValueError(
+            "self_flow_projector_design must be one of "
+            f"{sorted(_PROJECTOR_DESIGNS)}"
         )
     if args.self_flow_temporal_mode not in _TEMPORAL_MODES:
         raise ValueError(
@@ -350,6 +359,11 @@ def apply_self_flow_config(args: Any, config: Dict[str, Any], logger: Any) -> No
                 "Self-Flow strict mode requires "
                 "self_flow_student_layer_stochastic_range=0."
             )
+        if args.self_flow_projector_design != "plain_mlp":
+            raise ValueError(
+                "Self-Flow strict mode requires "
+                "self_flow_projector_design='plain_mlp'."
+            )
         if args.self_flow_temporal_mode != "off":
             raise ValueError(
                 "Self-Flow strict mode requires self_flow_temporal_mode='off'."
@@ -396,7 +410,7 @@ def apply_self_flow_config(args: Any, config: Dict[str, Any], logger: Any) -> No
         "Self-Flow enabled: dual_timestep=%s feature_alignment=%s mask_mode=%s "
         "mask_fixed=%.3f mask_video=%.3f frame_mask=%s rep_weight=%.3f rep_type=%s "
         "teacher_mode=%s ema_teacher=%s momentum=%.4f layer_ratio=(%.2f->%.2f) "
-        "mask_focus=%s max_loss=%.3f stochastic_range=%d projector_act=%s "
+        "mask_focus=%s max_loss=%.3f stochastic_range=%d projector=%s projector_act=%s "
         "projector_lr=%s offload_features=%s offload_params=%s "
         "temporal_mode=%s lambda_temporal=%.3f lambda_delta=%.3f granularity=%s "
         "neighbors=%d schedule=%s strict_mode=%s strict_defaults=%s",
@@ -416,6 +430,7 @@ def apply_self_flow_config(args: Any, config: Dict[str, Any], logger: Any) -> No
         str(args.self_flow_mask_focus_loss).lower(),
         args.self_flow_max_loss,
         args.self_flow_student_layer_stochastic_range,
+        args.self_flow_projector_design,
         args.self_flow_projector_activation,
         args.self_flow_projector_lr,
         str(args.self_flow_offload_teacher_features).lower(),

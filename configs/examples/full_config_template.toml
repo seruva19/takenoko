@@ -2938,6 +2938,16 @@ self_flow_student_layer_stochastic_range = 0
 # >=1, where 1 keeps the projector lightweight.
 self_flow_projection_hidden_multiplier = 1
 
+# Projector design for the student feature head:
+# - "plain_mlp": Linear -> activation -> Linear
+#   using self_flow_projection_hidden_multiplier and self_flow_projector_activation
+# - "rmsnorm_gelu_mlp": RMSNorm -> Linear(4x) -> GELU -> Linear
+# Notes:
+# - "rmsnorm_gelu_mlp" ignores self_flow_projection_hidden_multiplier
+# - "rmsnorm_gelu_mlp" ignores self_flow_projector_activation
+# - strict mode requires "plain_mlp" to preserve current default behavior
+self_flow_projector_design = "plain_mlp"
+
 # Projector activation:
 # - "silu": default, matches existing Takenoko projector behavior
 # - "gelu": alternative smoother nonlinearity

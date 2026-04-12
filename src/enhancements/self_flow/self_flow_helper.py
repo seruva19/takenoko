@@ -47,12 +47,10 @@ class SelfFlowHelper(nn.Module):
 
         self.student_layer_idx, self.teacher_layer_idx = self._resolve_layer_indices()
         self.hidden_dim = self._resolve_hidden_dim()
-        mult = max(1, int(getattr(args, "self_flow_projection_hidden_multiplier", 1)))
-        self.student_projector = nn.Sequential(
-            nn.Linear(self.hidden_dim, self.hidden_dim * mult),
-            self._make_activation(),
-            nn.Linear(self.hidden_dim * mult, self.hidden_dim),
-        )
+        self.projector_design = str(
+            getattr(args, "self_flow_projector_design", "plain_mlp")
+        ).lower()
+        self.student_projector = self._build_student_projector()
 
         self.teacher_mode = str(getattr(args, "self_flow_teacher_mode", "ema")).lower()
         self.projector_lr = getattr(args, "self_flow_projector_lr", None)
@@ -143,6 +141,26 @@ class SelfFlowHelper(nn.Module):
         if activation == "gelu":
             return nn.GELU()
         return nn.SiLU()
+
+    def _build_student_projector(self) -> nn.Module:
+        if self.projector_design == "rmsnorm_gelu_mlp":
+            # Normalized MLP projector with a fixed 4x hidden expansion.
+            # RMSNorm -> Linear(4x) -> GELU -> Linear.
+            return nn.Sequential(
+                nn.RMSNorm(self.hidden_dim),
+                nn.Linear(self.hidden_dim, self.hidden_dim * 4),
+                nn.GELU(),
+                nn.Linear(self.hidden_dim * 4, self.hidden_dim),
+            )
+
+        mult = max(
+            1, int(getattr(self.args, "self_flow_projection_hidden_multiplier", 1))
+        )
+        return nn.Sequential(
+            nn.Linear(self.hidden_dim, self.hidden_dim * mult),
+            self._make_activation(),
+            nn.Linear(self.hidden_dim * mult, self.hidden_dim),
+        )
 
     def _get_blocks(self, model: nn.Module) -> Tuple[List[nn.Module], int]:
         blocks = getattr(model, "blocks", None)
@@ -295,7 +313,7 @@ class SelfFlowHelper(nn.Module):
         logger.info(
             "Self-Flow hooks ready: student_layer=%d teacher_layer=%d strategy=%s "
             "teacher_mode=%s dual_timestep=%s feature_alignment=%s ema_updates=%s "
-            "mask_focus=%s offload_features=%s offload_params=%s",
+            "mask_focus=%s projector=%s offload_features=%s offload_params=%s",
             self.student_layer_idx,
             self.teacher_layer_idx,
             self._teacher_strategy,
@@ -304,6 +322,7 @@ class SelfFlowHelper(nn.Module):
             str(self.feature_alignment_enabled).lower(),
             str(self.teacher_use_ema).lower(),
             str(self.mask_focus_loss).lower(),
+            self.projector_design,
             str(self.offload_teacher_features).lower(),
             str(self.offload_teacher_params).lower(),
         )
