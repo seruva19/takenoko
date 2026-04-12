@@ -698,25 +698,16 @@ def load_prompts(prompt_file: str) -> list[Dict]:
             logger.info(
                 f"Found sample_prompts in TOML, count: {len(data['sample_prompts'])}"
             )
+            # Merge [defaults] section into each prompt entry
+            defaults = data.get("defaults", {})
             prompts = []
+            # Key renames: TOML field -> internal field
+            _renames = {"text": "prompt", "frames": "frame_count", "step": "sample_steps"}
             for prompt_dict in data["sample_prompts"]:
-                # Convert the new structure to the expected format
+                merged = {**defaults, **prompt_dict}
                 converted_dict = {}
-                if "text" in prompt_dict:
-                    converted_dict["prompt"] = prompt_dict["text"]
-                if "width" in prompt_dict:
-                    converted_dict["width"] = prompt_dict["width"]
-                if "height" in prompt_dict:
-                    converted_dict["height"] = prompt_dict["height"]
-                if "frames" in prompt_dict:
-                    converted_dict["frame_count"] = prompt_dict["frames"]
-                if "seed" in prompt_dict:
-                    converted_dict["seed"] = prompt_dict["seed"]
-                if "step" in prompt_dict:
-                    converted_dict["sample_steps"] = prompt_dict["step"]
-                if "control_path" in prompt_dict:
-                    converted_dict["control_path"] = prompt_dict["control_path"]
-                # Add other fields as needed
+                for k, v in merged.items():
+                    converted_dict[_renames.get(k, k)] = v
                 prompts.append(converted_dict)
         else:
             logger.info(f"Using old TOML structure")
