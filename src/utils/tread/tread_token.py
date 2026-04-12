@@ -7,18 +7,23 @@ def build_batched_rotary_from_freqs(
 ) -> torch.Tensor:
     """Construct a batched rotary tensor after applying ids_shuffle.
 
-    freqs_list: list of [L, 1, D] per sample (cached per-(F,H,W) rotary multipliers)
+    freqs_list: list of [L, 1, D_complex] per sample (complex rotary multipliers)
     ids_shuffle: [B, L_full] long indices mapping full-token order to kept-token order
-    Returns: [B, S_keep, D] rotary tensor aligned to routed tokens
+    Returns: [B, L_full, D_real] real-valued rotary tensor (D_real = 2 * D_complex)
+             suitable for apply_rot in attention.py which expects real layout
     """
     B = ids_shuffle.size(0)
-    full_rope = [f.squeeze(1) for f in freqs_list]  # (L, D)
-    full_rope = torch.stack(full_rope, dim=0).to(device=ids_shuffle.device)  # (B, L, D)
+    full_rope = [f.squeeze(1) for f in freqs_list]  # (L, D_complex)
+    full_rope = torch.stack(full_rope, dim=0).to(device=ids_shuffle.device)  # (B, L, D_complex)
     shuf = torch.take_along_dim(
         full_rope,
         ids_shuffle.unsqueeze(-1).expand(B, -1, full_rope.size(-1)),
         dim=1,
     )
+    # Convert complex rotary embeddings to real layout [B, L, D_complex, 2] -> [B, L, D_real]
+    # so that apply_rot in attention.py can reshape to (B, L, 1, D_real//2, 2) and view_as_complex
+    if shuf.is_complex():
+        shuf = torch.view_as_real(shuf).flatten(-2)  # [B, L, D_complex*2]
     return shuf
 
 
