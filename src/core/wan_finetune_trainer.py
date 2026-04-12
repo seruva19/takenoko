@@ -3268,6 +3268,7 @@ class WanFinetuneTrainer:
                                 (
                                     last_validated_step,
                                     warned_no_val_pixels_for_perceptual,
+                                    _last_fast_validated_step,
                                 ) = handle_step_validation(
                                     should_validating=True,
                                     validation_core=self.training_core.validation_core,
