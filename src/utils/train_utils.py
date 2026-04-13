@@ -316,7 +316,7 @@ def should_save_state_at_epoch(args: argparse.Namespace, epoch: int) -> bool:
         return False
 
     save_state_every_n_epochs = getattr(args, "save_state_every_n_epochs", None)
-    if save_state_every_n_epochs is None:
+    if not save_state_every_n_epochs:
         return False
 
     return (epoch % save_state_every_n_epochs) == 0

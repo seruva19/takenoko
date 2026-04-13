@@ -2612,7 +2612,7 @@ class WanFinetuneTrainer:
         total_steps = (
             args.max_train_epochs * len(train_dataloader)
             if getattr(args, "max_train_epochs", None) is not None
-            else len(train_dataloader)
+            else args.max_train_steps
         )
         progress_bar = tqdm(
             total=total_steps,
@@ -2629,7 +2629,7 @@ class WanFinetuneTrainer:
         max_epochs = (
             args.max_train_epochs
             if (hasattr(args, "max_train_epochs") and args.max_train_epochs is not None)
-            else 1
+            else math.ceil(args.max_train_steps / max(len(train_dataloader), 1))
         )
 
         # Debug logging for epoch range
