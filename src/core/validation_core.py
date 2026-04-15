@@ -2174,15 +2174,16 @@ class ValidationCore:
                         f"SNR: {snr_for_timestep:.3f}"
                     )
 
-        # Calculate final average losses across all timesteps (timestep-weighted)
-        validation_final_avg_loss = total_validation_loss / num_timesteps
-        velocity_final_avg_loss = total_velocity_loss / num_timesteps
-        direct_noise_final_avg_loss = total_direct_noise_loss / num_timesteps
+        # Calculate per-timestep summary means across the sampled validation timesteps.
+        validation_avg_over_timesteps = total_validation_loss / num_timesteps
+        velocity_avg_over_timesteps = total_velocity_loss / num_timesteps
+        direct_noise_avg_over_timesteps = total_direct_noise_loss / num_timesteps
 
         # Calculate sample-weighted (per-example) averages across all batches and timesteps
         validation_weighted_avg_loss = 0.0
         velocity_weighted_avg_loss = 0.0
         direct_noise_weighted_avg_loss = 0.0
+        weighted_metrics_available = False
         try:
             gathered_total_sum = accelerator.gather_for_metrics(local_total_loss_sum)
             gathered_total_cnt = accelerator.gather_for_metrics(local_total_loss_count)
@@ -2195,36 +2196,52 @@ class ValidationCore:
                 local_direct_noise_loss_count
             )
 
-            if accelerator.is_main_process:
-                # Handle potential non-tensor returns defensively
-                if not isinstance(gathered_total_sum, torch.Tensor):
-                    gathered_total_sum = torch.tensor(gathered_total_sum)
-                if not isinstance(gathered_total_cnt, torch.Tensor):
-                    gathered_total_cnt = torch.tensor(gathered_total_cnt)
-                if not isinstance(gathered_vel_sum, torch.Tensor):
-                    gathered_vel_sum = torch.tensor(gathered_vel_sum)
-                if not isinstance(gathered_vel_cnt, torch.Tensor):
-                    gathered_vel_cnt = torch.tensor(gathered_vel_cnt)
-                if not isinstance(gathered_dir_sum, torch.Tensor):
-                    gathered_dir_sum = torch.tensor(gathered_dir_sum)
-                if not isinstance(gathered_dir_cnt, torch.Tensor):
-                    gathered_dir_cnt = torch.tensor(gathered_dir_cnt)
+            # Handle potential non-tensor returns defensively
+            if not isinstance(gathered_total_sum, torch.Tensor):
+                gathered_total_sum = torch.tensor(gathered_total_sum)
+            if not isinstance(gathered_total_cnt, torch.Tensor):
+                gathered_total_cnt = torch.tensor(gathered_total_cnt)
+            if not isinstance(gathered_vel_sum, torch.Tensor):
+                gathered_vel_sum = torch.tensor(gathered_vel_sum)
+            if not isinstance(gathered_vel_cnt, torch.Tensor):
+                gathered_vel_cnt = torch.tensor(gathered_vel_cnt)
+            if not isinstance(gathered_dir_sum, torch.Tensor):
+                gathered_dir_sum = torch.tensor(gathered_dir_sum)
+            if not isinstance(gathered_dir_cnt, torch.Tensor):
+                gathered_dir_cnt = torch.tensor(gathered_dir_cnt)
 
-                total_loss_sum = gathered_total_sum.sum().item()
-                total_loss_cnt = max(gathered_total_cnt.sum().item(), 1.0)
-                total_vel_sum = gathered_vel_sum.sum().item()
-                total_vel_cnt = max(gathered_vel_cnt.sum().item(), 1.0)
-                total_dir_sum = gathered_dir_sum.sum().item()
-                total_dir_cnt = max(gathered_dir_cnt.sum().item(), 1.0)
+            total_loss_sum = gathered_total_sum.sum().item()
+            total_loss_cnt = max(gathered_total_cnt.sum().item(), 1.0)
+            total_vel_sum = gathered_vel_sum.sum().item()
+            total_vel_cnt = max(gathered_vel_cnt.sum().item(), 1.0)
+            total_dir_sum = gathered_dir_sum.sum().item()
+            total_dir_cnt = max(gathered_dir_cnt.sum().item(), 1.0)
 
-                validation_weighted_avg_loss = total_loss_sum / total_loss_cnt
-                velocity_weighted_avg_loss = total_vel_sum / total_vel_cnt
-                direct_noise_weighted_avg_loss = total_dir_sum / total_dir_cnt
+            validation_weighted_avg_loss = total_loss_sum / total_loss_cnt
+            velocity_weighted_avg_loss = total_vel_sum / total_vel_cnt
+            direct_noise_weighted_avg_loss = total_dir_sum / total_dir_cnt
+            weighted_metrics_available = True
         except Exception as ex:
             if accelerator.is_main_process:
                 logger.warning(
                     f"Failed to compute sample-weighted validation metrics: {ex}"
                 )
+
+        headline_validation_avg_loss = (
+            validation_weighted_avg_loss
+            if weighted_metrics_available
+            else validation_avg_over_timesteps
+        )
+        headline_velocity_avg_loss = (
+            velocity_weighted_avg_loss
+            if weighted_metrics_available
+            else velocity_avg_over_timesteps
+        )
+        headline_direct_noise_avg_loss = (
+            direct_noise_weighted_avg_loss
+            if weighted_metrics_available
+            else direct_noise_avg_over_timesteps
+        )
 
         # Log average losses and correlation statistics to tensorboard under val category
         if global_step is not None and accelerator.is_main_process:
@@ -2263,8 +2280,8 @@ class ValidationCore:
 
             # Calculate relative performance ratio
             loss_ratio = (
-                velocity_final_avg_loss / direct_noise_final_avg_loss
-                if direct_noise_final_avg_loss > 0
+                headline_velocity_avg_loss / headline_direct_noise_avg_loss
+                if headline_direct_noise_avg_loss > 0
                 else 0.0
             )
 
@@ -2292,13 +2309,13 @@ class ValidationCore:
             # Additional across-timestep diagnostics
             velocity_cv_across_timesteps = 0.0
             noise_cv_across_timesteps = 0.0
-            if velocity_final_avg_loss > 0:
+            if velocity_avg_over_timesteps > 0:
                 velocity_cv_across_timesteps = velocity_loss_std / max(
-                    velocity_final_avg_loss, 1e-12
+                    velocity_avg_over_timesteps, 1e-12
                 )
-            if direct_noise_final_avg_loss > 0:
+            if direct_noise_avg_over_timesteps > 0:
                 noise_cv_across_timesteps = direct_noise_loss_std / max(
-                    direct_noise_final_avg_loss, 1e-12
+                    direct_noise_avg_over_timesteps, 1e-12
                 )
 
             # Percentiles of per-timestep average losses (p25/p50/p75)
@@ -2467,14 +2484,9 @@ class ValidationCore:
                 # Keep the top-line 6 charts users care about most
                 val_essential.update(
                     {
-                        "val/loss_avg": validation_final_avg_loss,
-                        "val/velocity_loss_avg": velocity_final_avg_loss,
-                        "val/direct_noise_loss_avg": direct_noise_final_avg_loss,
-                        "val/loss_std": validation_loss_std,
-                        "val/velocity_loss_std": velocity_loss_std,
-                        "val/direct_noise_loss_std": direct_noise_loss_std,
-                        "val/best_velocity_loss": best_velocity_loss,
-                        "val/best_direct_loss": best_direct_loss,
+                        "val/loss_avg": headline_validation_avg_loss,
+                        "val/velocity_loss_avg": headline_velocity_avg_loss,
+                        "val/direct_noise_loss_avg": headline_direct_noise_avg_loss,
                     }
                 )
 
@@ -2484,23 +2496,31 @@ class ValidationCore:
                         "val_other/loss_avg_weighted": validation_weighted_avg_loss,
                         "val_other/velocity_loss_avg_weighted": velocity_weighted_avg_loss,
                         "val_other/direct_noise_loss_avg_weighted": direct_noise_weighted_avg_loss,
-                        "val_other/velocity_loss_range": velocity_loss_range,
-                        "val_other/direct_noise_loss_range": direct_noise_loss_range,
+                        "val_other/loss_avg_over_timesteps": validation_avg_over_timesteps,
+                        "val_other/velocity_loss_avg_over_timesteps": velocity_avg_over_timesteps,
+                        "val_other/direct_noise_loss_avg_over_timesteps": direct_noise_avg_over_timesteps,
+                        "val_other/loss_std_over_timesteps": validation_loss_std,
+                        "val_other/velocity_loss_std_over_timesteps": velocity_loss_std,
+                        "val_other/direct_noise_loss_std_over_timesteps": direct_noise_loss_std,
+                        "val_other/velocity_loss_range_over_timesteps": velocity_loss_range,
+                        "val_other/direct_noise_loss_range_over_timesteps": direct_noise_loss_range,
                         "val_other/loss_ratio": loss_ratio,
-                        "val_other/velocity_loss_cv_across_timesteps": velocity_cv_across_timesteps,
-                        "val_other/direct_noise_loss_cv_across_timesteps": noise_cv_across_timesteps,
-                        "val_other/velocity_loss_avg_p25": vel_p25,
-                        "val_other/velocity_loss_avg_p50": vel_p50,
-                        "val_other/velocity_loss_avg_p75": vel_p75,
-                        "val_other/direct_noise_loss_avg_p25": noi_p25,
-                        "val_other/direct_noise_loss_avg_p50": noi_p50,
-                        "val_other/direct_noise_loss_avg_p75": noi_p75,
+                        "val_other/velocity_loss_cv_over_timesteps": velocity_cv_across_timesteps,
+                        "val_other/direct_noise_loss_cv_over_timesteps": noise_cv_across_timesteps,
+                        "val_other/velocity_loss_p25_over_timesteps": vel_p25,
+                        "val_other/velocity_loss_p50_over_timesteps": vel_p50,
+                        "val_other/velocity_loss_p75_over_timesteps": vel_p75,
+                        "val_other/direct_noise_loss_p25_over_timesteps": noi_p25,
+                        "val_other/direct_noise_loss_p50_over_timesteps": noi_p50,
+                        "val_other/direct_noise_loss_p75_over_timesteps": noi_p75,
                         "val_other/best_timestep_velocity": best_timestep_velocity,
                         "val_other/worst_timestep_velocity": worst_timestep_velocity,
-                        "val_other/worst_velocity_loss": worst_velocity_loss,
+                        "val_other/best_velocity_loss_over_timesteps": best_velocity_loss,
+                        "val_other/worst_velocity_loss_over_timesteps": worst_velocity_loss,
                         "val_other/best_timestep_direct": best_timestep_direct,
                         "val_other/worst_timestep_direct": worst_timestep_direct,
-                        "val_other/worst_direct_loss": worst_direct_loss,
+                        "val_other/best_direct_loss_over_timesteps": best_direct_loss,
+                        "val_other/worst_direct_loss_over_timesteps": worst_direct_loss,
                         "val_other/velocity_loss_timestep_correlation": velocity_loss_t_corr,
                         "val_other/noise_loss_timestep_correlation": noise_loss_t_corr,
                     }
@@ -2509,34 +2529,37 @@ class ValidationCore:
                 # Original behavior: keep everything under val/
                 val_essential.update(
                     {
-                        "val/loss_avg": validation_final_avg_loss,
+                        "val/loss_avg": headline_validation_avg_loss,
                         "val/loss_avg_weighted": validation_weighted_avg_loss,
-                        "val/velocity_loss_avg": velocity_final_avg_loss,
-                        "val/direct_noise_loss_avg": direct_noise_final_avg_loss,
-                        "val/loss_std": validation_loss_std,
+                        "val/loss_avg_over_timesteps": validation_avg_over_timesteps,
+                        "val/velocity_loss_avg": headline_velocity_avg_loss,
+                        "val/direct_noise_loss_avg": headline_direct_noise_avg_loss,
                         "val/velocity_loss_avg_weighted": velocity_weighted_avg_loss,
                         "val/direct_noise_loss_avg_weighted": direct_noise_weighted_avg_loss,
-                        "val/velocity_loss_std": velocity_loss_std,
-                        "val/direct_noise_loss_std": direct_noise_loss_std,
-                        "val/velocity_loss_range": velocity_loss_range,
-                        "val/direct_noise_loss_range": direct_noise_loss_range,
+                        "val/velocity_loss_avg_over_timesteps": velocity_avg_over_timesteps,
+                        "val/direct_noise_loss_avg_over_timesteps": direct_noise_avg_over_timesteps,
+                        "val/loss_std_over_timesteps": validation_loss_std,
+                        "val/velocity_loss_std_over_timesteps": velocity_loss_std,
+                        "val/direct_noise_loss_std_over_timesteps": direct_noise_loss_std,
+                        "val/velocity_loss_range_over_timesteps": velocity_loss_range,
+                        "val/direct_noise_loss_range_over_timesteps": direct_noise_loss_range,
                         "val/loss_ratio": loss_ratio,
-                        "val/velocity_loss_cv_across_timesteps": velocity_cv_across_timesteps,
-                        "val/direct_noise_loss_cv_across_timesteps": noise_cv_across_timesteps,
-                        "val/velocity_loss_avg_p25": vel_p25,
-                        "val/velocity_loss_avg_p50": vel_p50,
-                        "val/velocity_loss_avg_p75": vel_p75,
-                        "val/direct_noise_loss_avg_p25": noi_p25,
-                        "val/direct_noise_loss_avg_p50": noi_p50,
-                        "val/direct_noise_loss_avg_p75": noi_p75,
+                        "val/velocity_loss_cv_over_timesteps": velocity_cv_across_timesteps,
+                        "val/direct_noise_loss_cv_over_timesteps": noise_cv_across_timesteps,
+                        "val/velocity_loss_p25_over_timesteps": vel_p25,
+                        "val/velocity_loss_p50_over_timesteps": vel_p50,
+                        "val/velocity_loss_p75_over_timesteps": vel_p75,
+                        "val/direct_noise_loss_p25_over_timesteps": noi_p25,
+                        "val/direct_noise_loss_p50_over_timesteps": noi_p50,
+                        "val/direct_noise_loss_p75_over_timesteps": noi_p75,
                         "val/best_timestep_velocity": best_timestep_velocity,
                         "val/worst_timestep_velocity": worst_timestep_velocity,
-                        "val/best_velocity_loss": best_velocity_loss,
-                        "val/worst_velocity_loss": worst_velocity_loss,
+                        "val/best_velocity_loss_over_timesteps": best_velocity_loss,
+                        "val/worst_velocity_loss_over_timesteps": worst_velocity_loss,
                         "val/best_timestep_direct": best_timestep_direct,
                         "val/worst_timestep_direct": worst_timestep_direct,
-                        "val/best_direct_loss": best_direct_loss,
-                        "val/worst_direct_loss": worst_direct_loss,
+                        "val/best_direct_loss_over_timesteps": best_direct_loss,
+                        "val/worst_direct_loss_over_timesteps": worst_direct_loss,
                         "val/velocity_loss_timestep_correlation": velocity_loss_t_corr,
                         "val/noise_loss_timestep_correlation": noise_loss_t_corr,
                     }
@@ -2567,14 +2590,17 @@ class ValidationCore:
             unwrapped_network.train(network_was_training)
 
         logger.info(
-            f"Validation finished. Average loss: {validation_final_avg_loss:.5f}, "
-            f"Average velocity loss: {velocity_final_avg_loss:.5f}, "
-            f"Average direct noise loss: {direct_noise_final_avg_loss:.5f}"
+            f"Validation finished. Weighted average loss: {headline_validation_avg_loss:.5f}, "
+            f"Weighted average velocity loss: {headline_velocity_avg_loss:.5f}, "
+            f"Weighted average direct noise loss: {headline_direct_noise_avg_loss:.5f}"
         )
         return {
-            "loss": validation_final_avg_loss,
-            "velocity_loss": velocity_final_avg_loss,
-            "direct_noise_loss": direct_noise_final_avg_loss,
+            "loss": headline_validation_avg_loss,
+            "velocity_loss": headline_velocity_avg_loss,
+            "direct_noise_loss": headline_direct_noise_avg_loss,
+            "loss_over_timesteps": validation_avg_over_timesteps,
+            "velocity_loss_over_timesteps": velocity_avg_over_timesteps,
+            "direct_noise_loss_over_timesteps": direct_noise_avg_over_timesteps,
         }
 
     def sync_validation_epoch(
