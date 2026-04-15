@@ -9,6 +9,7 @@ logger = logging.getLogger(__name__)
 
 def handle_step_validation(
     should_validating: bool,
+    training_core: Any,
     validation_core: Any,
     val_dataloader: Optional[Any],
     val_epoch_step_sync: Any,
@@ -18,6 +19,7 @@ def handle_step_validation(
     args: argparse.Namespace,
     accelerator: Any,
     transformer: Any,
+    network: Any,
     noise_scheduler: Any,
     control_signal_processor: Any,
     vae: Optional[Any],
@@ -27,6 +29,7 @@ def handle_step_validation(
     timestep_distribution: Optional[Any] = None,
     should_fast_validating: bool = False,
     last_fast_validated_step: int = -1,
+    network_dtype: Any = None,
 ) -> Tuple[int, bool, int]:
     """Handle validation during training step.
 
@@ -143,6 +146,10 @@ def handle_step_validation(
         timestep_distribution=timestep_distribution,
         subset_fraction=subset_fraction,
         random_subset=random_subset,
+        training_core=training_core,
+        network=network,
+        network_dtype=network_dtype,
+        current_epoch=current_epoch.value if current_epoch else epoch + 1,
     )
     validation_core.log_validation_results(accelerator, val_loss, global_step)
 
@@ -164,6 +171,7 @@ def handle_step_validation(
 
 def handle_epoch_end_validation(
     should_validate_on_epoch_end: bool,
+    training_core: Any,
     val_dataloader: Optional[Any],
     last_validated_step: int,
     global_step: int,
@@ -174,9 +182,11 @@ def handle_epoch_end_validation(
     args: argparse.Namespace,
     accelerator: Any,
     transformer: Any,
+    network: Any,
     noise_scheduler: Any,
     control_signal_processor: Any,
     vae: Optional[Any],
+    network_dtype: Any = None,
 ) -> None:
     """Handle validation at end of epoch.
 
@@ -226,6 +236,10 @@ def handle_epoch_end_validation(
         control_signal_processor,
         vae,
         global_step,
+        training_core=training_core,
+        network=network,
+        network_dtype=network_dtype,
+        current_epoch=current_epoch.value if current_epoch else epoch + 1,
     )
     validation_core.log_validation_results(
         accelerator, val_loss, global_step, epoch + 1

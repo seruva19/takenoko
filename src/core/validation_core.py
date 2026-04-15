@@ -281,7 +281,11 @@ class ValidationCore:
         timestep_distribution: Optional[Any] = None,
         subset_fraction: Optional[float] = None,
         random_subset: bool = False,
-    ) -> tuple[float, float]:
+        training_core: Optional[Any] = None,
+        network: Optional[Any] = None,
+        network_dtype: Optional[torch.dtype] = None,
+        current_epoch: Optional[int] = None,
+    ) -> Dict[str, float]:
         # Determine validation timesteps according to mode
         try:
             mode = str(
@@ -434,7 +438,7 @@ class ValidationCore:
         else:
             # fixed
             self.validation_timesteps = base_list
-        """Run validation and return average validation loss for both velocity and direct noise prediction.
+        """Run validation and return summary metrics for the current validation pass.
 
         Args:
             global_step: Current training step for logging per-timestep metrics
@@ -447,25 +451,27 @@ class ValidationCore:
 
             Using unique noise per batch provides more reliable validation metrics.
 
-        Returns:
-            tuple[float, float]: (velocity_loss, direct_noise_loss)
-
-        Example:
-            velocity_loss, direct_noise_loss = validation_core.validate(...)
-            print(f"Velocity loss: {velocity_loss:.5f}")
-            print(f"Direct noise loss: {direct_noise_loss:.5f}")
         """
         logger.info("Running validation...")
         unwrapped_model = accelerator.unwrap_model(transformer)
+        transformer_was_training = bool(getattr(unwrapped_model, "training", False))
+        unwrapped_network = accelerator.unwrap_model(network) if network is not None else None
+        network_was_training = bool(
+            getattr(unwrapped_network, "training", False)
+        ) if unwrapped_network is not None else False
         unwrapped_model.switch_block_swap_for_inference()
         unwrapped_model.eval()
+        if unwrapped_network is not None:
+            unwrapped_network.eval()
 
         fixed_seed = 42
+        total_validation_loss = 0.0
         total_velocity_loss = 0.0
         total_direct_noise_loss = 0.0
         num_timesteps = len(self.validation_timesteps)
 
         # Collect timestep losses and SNRs for statistics (across all timesteps)
+        all_timestep_avg_total_losses = []
         all_timestep_avg_velocity_losses = []
         all_timestep_avg_direct_noise_losses = []
         all_timestep_snrs = []
@@ -489,10 +495,12 @@ class ValidationCore:
             logger.warning(
                 "Validation timesteps list is empty. Skipping validation and returning 0 loss."
             )
-            # Switch back to train mode before returning
-            unwrapped_model.train()
+            # Restore model state before returning
+            unwrapped_model.train(transformer_was_training)
             unwrapped_model.switch_block_swap_for_training()
-            return 0.0, 0.0
+            if unwrapped_network is not None:
+                unwrapped_network.train(network_was_training)
+            return {"loss": 0.0, "velocity_loss": 0.0, "direct_noise_loss": 0.0}
 
         # Calculate max_batches from subset_fraction if provided (for fast validation)
         max_batches = None
@@ -553,9 +561,16 @@ class ValidationCore:
                     dataloader_pbar = val_dataloader
 
                 # These lists collect per-batch losses for the CURRENT timestep
+                batch_total_losses = []
                 batch_velocity_losses = []
                 batch_direct_noise_losses = []
                 batch_item_counts = []  # number of items per-batch for coverage
+                local_timestep_total_loss_sum = torch.tensor(
+                    0.0, device=accelerator.device, dtype=torch.float32
+                )
+                local_timestep_total_loss_count = torch.tensor(
+                    0.0, device=accelerator.device, dtype=torch.float32
+                )
                 batch_motion_eval_vals: Dict[str, list[torch.Tensor]] = {}
                 batch_sensecraft_metric_vals: Dict[str, list[torch.Tensor]] = {}
 
@@ -596,6 +611,12 @@ class ValidationCore:
                     local_direct_noise_loss_count = torch.tensor(
                         0.0, device=accelerator.device, dtype=torch.float32
                     )
+                    local_total_loss_sum = torch.tensor(
+                        0.0, device=accelerator.device, dtype=torch.float32
+                    )
+                    local_total_loss_count = torch.tensor(
+                        0.0, device=accelerator.device, dtype=torch.float32
+                    )
 
                 for step, batch in enumerate(dataloader_pbar):
                     # Handle fast validation batch selection
@@ -609,30 +630,18 @@ class ValidationCore:
                             if step >= max_batches:
                                 break
 
-                    latents = batch["latents"]
+                    if (
+                        step > 0
+                        and hasattr(unwrapped_model, "prepare_block_swap_before_forward")
+                    ):
+                        try:
+                            unwrapped_model.prepare_block_swap_before_forward()
+                        except Exception:
+                            pass
 
-                    # Text embedding preparation
-                    if "t5" in batch:
-                        llm_embeds = [
-                            t.to(device=accelerator.device, dtype=unwrapped_model.dtype)
-                            for t in batch["t5"]
-                        ]
-                    else:
-                        t5_keys = [
-                            k for k in batch.keys() if k.startswith("varlen_t5_")
-                        ]
-                        if t5_keys:
-                            llm_embeds = batch[t5_keys[0]]
-                        else:
-                            raise ValueError(
-                                "No text encoder outputs found in validation batch."
-                            )
-
-                    latents = latents.to(accelerator.device, dtype=torch.float32)
-                    if not isinstance(llm_embeds, list):
-                        llm_embeds = llm_embeds.to(
-                            accelerator.device, dtype=unwrapped_model.dtype
-                        )
+                    latents = batch["latents"].to(
+                        accelerator.device, dtype=torch.float32
+                    )
 
                     # Deterministic noise generation with unique seed per batch for proper validation
                     with torch.random.fork_rng(devices=[accelerator.device]):
@@ -686,81 +695,139 @@ class ValidationCore:
                                     perturbed_latents_for_target, self.fluxflow_config
                                 )
                             )
+                    total_loss = None
+                    validation_seed = fixed_seed + step if use_unique_noise else fixed_seed
+                    with torch.random.fork_rng(devices=[accelerator.device]):
+                        import random
 
-                    # Control LoRA processing (same as training)
-                    control_latents = None
-                    if (
-                        hasattr(args, "enable_control_lora")
-                        and args.enable_control_lora
-                    ):
-                        if control_signal_processor is not None:
-                            # Match training network dtype for consistency
-                            network_dtype = noisy_model_input.dtype
-                            control_latents = (
-                                control_signal_processor.process_control_signal(
-                                    args,
-                                    accelerator,
-                                    batch,
-                                    latents,
-                                    network_dtype,
-                                    vae,
+                        python_random_state = random.getstate()
+                        torch.manual_seed(validation_seed)
+                        if accelerator.device.type == "cuda":
+                            torch.cuda.manual_seed(validation_seed)
+                        random.seed(validation_seed)
+
+                        try:
+                            if training_core is not None and network is not None:
+                                validation_result = (
+                                    training_core.compute_validation_forward_and_loss(
+                                        args=args,
+                                        accelerator=accelerator,
+                                        transformer=transformer,
+                                        network=network,
+                                        latents=latents,
+                                        batch=batch,
+                                        noise=noise,
+                                        noisy_model_input=noisy_model_input,
+                                        timesteps=timesteps,
+                                        control_signal_processor=control_signal_processor,
+                                        vae=vae,
+                                        global_step=global_step,
+                                        current_epoch=current_epoch,
+                                        batch_step=step,
+                                        network_dtype=network_dtype or torch.float32,
+                                    )
                                 )
-                            )
+                                if validation_result.get("skip_batch", False):
+                                    continue
+                                pred = validation_result["model_pred"].to(torch.float32)
+                                total_loss = (
+                                    validation_result["total_loss"]
+                                    .detach()
+                                    .to(device=accelerator.device, dtype=torch.float32)
+                                    .reshape(1)
+                                )
+                            else:
+                                # Text embedding preparation
+                                if "t5" in batch:
+                                    llm_embeds = [
+                                        t.to(
+                                            device=accelerator.device,
+                                            dtype=unwrapped_model.dtype,
+                                        )
+                                        for t in batch["t5"]
+                                    ]
+                                else:
+                                    t5_keys = [
+                                        k for k in batch.keys() if k.startswith("varlen_t5_")
+                                    ]
+                                    if t5_keys:
+                                        llm_embeds = batch[t5_keys[0]]
+                                    else:
+                                        raise ValueError(
+                                            "No text encoder outputs found in validation batch."
+                                        )
 
-                        # Fallback to using image latents as control signal
-                        if control_latents is None:
-                            control_latents = latents.detach().clone()
+                                if not isinstance(llm_embeds, list):
+                                    llm_embeds = llm_embeds.to(
+                                        accelerator.device, dtype=unwrapped_model.dtype
+                                    )
 
-                    # Calculate sequence length
-                    lat_f, lat_h, lat_w = latents.shape[2:5]
-                    seq_len = (
-                        lat_f
-                        * lat_h
-                        * lat_w
-                        // (
-                            self.config.patch_size[0]
-                            * self.config.patch_size[1]
-                            * self.config.patch_size[2]
-                        )
-                    )
+                                # Control LoRA processing (legacy validation fallback)
+                                control_latents = None
+                                if (
+                                    hasattr(args, "enable_control_lora")
+                                    and args.enable_control_lora
+                                ):
+                                    if control_signal_processor is not None:
+                                        control_latents = (
+                                            control_signal_processor.process_control_signal(
+                                                args,
+                                                accelerator,
+                                                batch,
+                                                latents,
+                                                noisy_model_input.dtype,
+                                                vae,
+                                            )
+                                        )
 
-                    # Prepare model input with control signal if control LoRA is enabled
-                    if (
-                        hasattr(args, "enable_control_lora")
-                        and args.enable_control_lora
-                    ):
-                        if control_latents is not None:
-                            control_latents = control_latents.to(
-                                device=noisy_model_input.device,
-                                dtype=noisy_model_input.dtype,
-                            )
-                            # Concatenate along the channel dimension (dim=1 for BCFHW)
-                            model_input = torch.cat(
-                                [noisy_model_input, control_latents], dim=1
-                            )
-                        else:
-                            # Fallback: create zero tensor for control part
-                            zero_control = torch.zeros_like(noisy_model_input)
-                            model_input = torch.cat(
-                                [noisy_model_input, zero_control], dim=1
-                            )
-                    else:
-                        model_input = noisy_model_input
+                                    # Fallback to using image latents as control signal
+                                    if control_latents is None:
+                                        control_latents = latents.detach().clone()
 
-                    # Forward pass with consistent model calling
-                    pred = unwrapped_model(
-                        model_input,
-                        t=timesteps,
-                        context=llm_embeds,
-                        seq_len=seq_len,
-                        clip_fea=None,
-                    )
+                                # Calculate sequence length
+                                lat_f, lat_h, lat_w = latents.shape[2:5]
+                                seq_len = (
+                                    lat_f
+                                    * lat_h
+                                    * lat_w
+                                    // (
+                                        self.config.patch_size[0]
+                                        * self.config.patch_size[1]
+                                        * self.config.patch_size[2]
+                                    )
+                                )
 
-                    # Model returns a list of output tensors; stack them for consistent processing
-                    pred = torch.stack(pred, dim=0)
+                                # Prepare model input with control signal if control LoRA is enabled
+                                if (
+                                    hasattr(args, "enable_control_lora")
+                                    and args.enable_control_lora
+                                ):
+                                    if control_latents is not None:
+                                        control_latents = control_latents.to(
+                                            device=noisy_model_input.device,
+                                            dtype=noisy_model_input.dtype,
+                                        )
+                                        model_input = torch.cat(
+                                            [noisy_model_input, control_latents], dim=1
+                                        )
+                                    else:
+                                        zero_control = torch.zeros_like(noisy_model_input)
+                                        model_input = torch.cat(
+                                            [noisy_model_input, zero_control], dim=1
+                                        )
+                                else:
+                                    model_input = noisy_model_input
 
-                    # Convert predictions to float32 to avoid dtype mismatches in loss calculations and metrics
-                    pred = pred.to(torch.float32)
+                                pred = unwrapped_model(
+                                    model_input,
+                                    t=timesteps,
+                                    context=llm_embeds,
+                                    seq_len=seq_len,
+                                    clip_fea=None,
+                                )
+                                pred = torch.stack(pred, dim=0).to(torch.float32)
+                        finally:
+                            random.setstate(python_random_state)
 
                     # Calculate both velocity and direct noise prediction losses
 
@@ -810,6 +877,32 @@ class ValidationCore:
                             device=accelerator.device,
                             dtype=torch.float32,
                         )
+                    )
+                    if total_loss is None:
+                        total_loss = velocity_loss.mean().detach().reshape(1)
+                    total_loss = total_loss.detach().reshape(-1)
+                    if total_loss.numel() != 1:
+                        total_loss = total_loss.mean().reshape(1)
+                    batch_total_losses.append(total_loss)
+                    weighted_total_loss = total_loss.squeeze(0) * float(
+                        velocity_loss.numel()
+                    )
+                    local_timestep_total_loss_sum = (
+                        local_timestep_total_loss_sum + weighted_total_loss
+                    )
+                    local_timestep_total_loss_count = (
+                        local_timestep_total_loss_count
+                        + torch.tensor(
+                            float(velocity_loss.numel()),
+                            device=accelerator.device,
+                            dtype=torch.float32,
+                        )
+                    )
+                    local_total_loss_sum = local_total_loss_sum + weighted_total_loss
+                    local_total_loss_count = local_total_loss_count + torch.tensor(
+                        float(velocity_loss.numel()),
+                        device=accelerator.device,
+                        dtype=torch.float32,
                     )
 
                     # Perceptual SNR (SSIM): compute for a tiny subsample only when enabled
@@ -1808,6 +1901,33 @@ class ValidationCore:
                                 )
 
                 # Gather and compute metrics efficiently (refactored approach)
+                total_metrics = self._compute_and_gather_metrics(
+                    accelerator, batch_total_losses, "loss"
+                )
+                timestep_total_avg = total_metrics.get("loss_mean", 0.0)
+                try:
+                    gathered_timestep_total_sum = accelerator.gather_for_metrics(
+                        local_timestep_total_loss_sum
+                    )
+                    gathered_timestep_total_cnt = accelerator.gather_for_metrics(
+                        local_timestep_total_loss_count
+                    )
+                    if accelerator.is_main_process:
+                        if not isinstance(gathered_timestep_total_sum, torch.Tensor):
+                            gathered_timestep_total_sum = torch.tensor(
+                                gathered_timestep_total_sum
+                            )
+                        if not isinstance(gathered_timestep_total_cnt, torch.Tensor):
+                            gathered_timestep_total_cnt = torch.tensor(
+                                gathered_timestep_total_cnt
+                            )
+                        timestep_total_avg = (
+                            gathered_timestep_total_sum.sum().item()
+                            / max(gathered_timestep_total_cnt.sum().item(), 1.0)
+                        )
+                        total_metrics["loss_mean"] = timestep_total_avg
+                except Exception:
+                    pass
                 velocity_metrics = self._compute_and_gather_metrics(
                     accelerator, batch_velocity_losses, "velocity_loss"
                 )
@@ -1954,10 +2074,12 @@ class ValidationCore:
                         "direct_noise_loss_mean", 0.0
                     )
 
+                    total_validation_loss += timestep_total_avg
                     total_velocity_loss += timestep_velocity_avg
                     total_direct_noise_loss += timestep_direct_noise_avg
 
                     # Store timestep average losses and SNR for statistics (across all timesteps)
+                    all_timestep_avg_total_losses.append(timestep_total_avg)
                     all_timestep_avg_velocity_losses.append(timestep_velocity_avg)
                     all_timestep_avg_direct_noise_losses.append(
                         timestep_direct_noise_avg
@@ -1987,6 +2109,8 @@ class ValidationCore:
                         )
 
                         # Dynamically add all computed metrics to the log under timesteps category
+                        for key, value in total_metrics.items():
+                            log_dict[f"val_timesteps/{key}_t{current_timestep}"] = value
                         for key, value in velocity_metrics.items():
                             log_dict[f"val_timesteps/{key}_t{current_timestep}"] = value
                         for key, value in noise_metrics.items():
@@ -2044,19 +2168,24 @@ class ValidationCore:
                         accelerator.log(merged, step=global_step)
 
                     logger.info(
-                        f"Timestep {current_timestep} - Velocity loss: {timestep_velocity_avg:.5f}, "
+                        f"Timestep {current_timestep} - Loss: {timestep_total_avg:.5f}, "
+                        f"Velocity loss: {timestep_velocity_avg:.5f}, "
                         f"Direct noise loss: {timestep_direct_noise_avg:.5f}, "
                         f"SNR: {snr_for_timestep:.3f}"
                     )
 
         # Calculate final average losses across all timesteps (timestep-weighted)
+        validation_final_avg_loss = total_validation_loss / num_timesteps
         velocity_final_avg_loss = total_velocity_loss / num_timesteps
         direct_noise_final_avg_loss = total_direct_noise_loss / num_timesteps
 
         # Calculate sample-weighted (per-example) averages across all batches and timesteps
+        validation_weighted_avg_loss = 0.0
         velocity_weighted_avg_loss = 0.0
         direct_noise_weighted_avg_loss = 0.0
         try:
+            gathered_total_sum = accelerator.gather_for_metrics(local_total_loss_sum)
+            gathered_total_cnt = accelerator.gather_for_metrics(local_total_loss_count)
             gathered_vel_sum = accelerator.gather_for_metrics(local_velocity_loss_sum)
             gathered_vel_cnt = accelerator.gather_for_metrics(local_velocity_loss_count)
             gathered_dir_sum = accelerator.gather_for_metrics(
@@ -2068,6 +2197,10 @@ class ValidationCore:
 
             if accelerator.is_main_process:
                 # Handle potential non-tensor returns defensively
+                if not isinstance(gathered_total_sum, torch.Tensor):
+                    gathered_total_sum = torch.tensor(gathered_total_sum)
+                if not isinstance(gathered_total_cnt, torch.Tensor):
+                    gathered_total_cnt = torch.tensor(gathered_total_cnt)
                 if not isinstance(gathered_vel_sum, torch.Tensor):
                     gathered_vel_sum = torch.tensor(gathered_vel_sum)
                 if not isinstance(gathered_vel_cnt, torch.Tensor):
@@ -2077,11 +2210,14 @@ class ValidationCore:
                 if not isinstance(gathered_dir_cnt, torch.Tensor):
                     gathered_dir_cnt = torch.tensor(gathered_dir_cnt)
 
+                total_loss_sum = gathered_total_sum.sum().item()
+                total_loss_cnt = max(gathered_total_cnt.sum().item(), 1.0)
                 total_vel_sum = gathered_vel_sum.sum().item()
                 total_vel_cnt = max(gathered_vel_cnt.sum().item(), 1.0)
                 total_dir_sum = gathered_dir_sum.sum().item()
                 total_dir_cnt = max(gathered_dir_cnt.sum().item(), 1.0)
 
+                validation_weighted_avg_loss = total_loss_sum / total_loss_cnt
                 velocity_weighted_avg_loss = total_vel_sum / total_vel_cnt
                 direct_noise_weighted_avg_loss = total_dir_sum / total_dir_cnt
         except Exception as ex:
@@ -2093,10 +2229,15 @@ class ValidationCore:
         # Log average losses and correlation statistics to tensorboard under val category
         if global_step is not None and accelerator.is_main_process:
             # Calculate statistics from collected timestep losses
+            validation_loss_std = 0.0
             velocity_loss_std = 0.0
             direct_noise_loss_std = 0.0
 
             # Only calculate std if we have at least 2 values
+            if len(all_timestep_avg_total_losses) > 1:
+                validation_loss_std = torch.std(
+                    torch.tensor(all_timestep_avg_total_losses)
+                ).item()
             if len(all_timestep_avg_velocity_losses) > 1:
                 velocity_loss_std = torch.std(
                     torch.tensor(all_timestep_avg_velocity_losses)
@@ -2326,8 +2467,10 @@ class ValidationCore:
                 # Keep the top-line 6 charts users care about most
                 val_essential.update(
                     {
+                        "val/loss_avg": validation_final_avg_loss,
                         "val/velocity_loss_avg": velocity_final_avg_loss,
                         "val/direct_noise_loss_avg": direct_noise_final_avg_loss,
+                        "val/loss_std": validation_loss_std,
                         "val/velocity_loss_std": velocity_loss_std,
                         "val/direct_noise_loss_std": direct_noise_loss_std,
                         "val/best_velocity_loss": best_velocity_loss,
@@ -2338,6 +2481,7 @@ class ValidationCore:
                 # Route remaining diagnostics to val_other/
                 val_other.update(
                     {
+                        "val_other/loss_avg_weighted": validation_weighted_avg_loss,
                         "val_other/velocity_loss_avg_weighted": velocity_weighted_avg_loss,
                         "val_other/direct_noise_loss_avg_weighted": direct_noise_weighted_avg_loss,
                         "val_other/velocity_loss_range": velocity_loss_range,
@@ -2365,8 +2509,11 @@ class ValidationCore:
                 # Original behavior: keep everything under val/
                 val_essential.update(
                     {
+                        "val/loss_avg": validation_final_avg_loss,
+                        "val/loss_avg_weighted": validation_weighted_avg_loss,
                         "val/velocity_loss_avg": velocity_final_avg_loss,
                         "val/direct_noise_loss_avg": direct_noise_final_avg_loss,
+                        "val/loss_std": validation_loss_std,
                         "val/velocity_loss_avg_weighted": velocity_weighted_avg_loss,
                         "val/direct_noise_loss_avg_weighted": direct_noise_weighted_avg_loss,
                         "val/velocity_loss_std": velocity_loss_std,
@@ -2413,14 +2560,22 @@ class ValidationCore:
                 pass
             accelerator.log(merged_logs, step=global_step)
 
-        # Switch back to train mode
-        unwrapped_model.train()
+        # Restore model modes for continued training
+        unwrapped_model.train(transformer_was_training)
         unwrapped_model.switch_block_swap_for_training()
+        if unwrapped_network is not None:
+            unwrapped_network.train(network_was_training)
 
         logger.info(
-            f"Validation finished. Average velocity loss: {velocity_final_avg_loss:.5f}, Average direct noise loss: {direct_noise_final_avg_loss:.5f}"
+            f"Validation finished. Average loss: {validation_final_avg_loss:.5f}, "
+            f"Average velocity loss: {velocity_final_avg_loss:.5f}, "
+            f"Average direct noise loss: {direct_noise_final_avg_loss:.5f}"
         )
-        return velocity_final_avg_loss, direct_noise_final_avg_loss
+        return {
+            "loss": validation_final_avg_loss,
+            "velocity_loss": velocity_final_avg_loss,
+            "direct_noise_loss": direct_noise_final_avg_loss,
+        }
 
     def sync_validation_epoch(
         self,
@@ -2514,7 +2669,7 @@ class ValidationCore:
     def log_validation_results(
         self,
         accelerator: Accelerator,
-        val_loss: tuple[float, float],
+        val_loss: Dict[str, float],
         global_step: int,
         epoch: Optional[int] = None,
     ) -> None:
@@ -2523,15 +2678,17 @@ class ValidationCore:
         Note: Tensorboard logging is now handled within the validate() method
         to avoid redundancy and provide more detailed per-timestep metrics.
         """
-        velocity_loss, direct_noise_loss = val_loss
+        total_loss = float(val_loss.get("loss", 0.0))
+        velocity_loss = float(val_loss.get("velocity_loss", 0.0))
+        direct_noise_loss = float(val_loss.get("direct_noise_loss", 0.0))
 
         if epoch is not None:
             accelerator.print(
-                f"[Epoch {epoch}] velocity_loss={velocity_loss:0.5f}, direct_noise_loss={direct_noise_loss:0.5f}"
+                f"[Epoch {epoch}] loss={total_loss:0.5f}, velocity_loss={velocity_loss:0.5f}, direct_noise_loss={direct_noise_loss:0.5f}"
             )
         else:
             accelerator.print(
-                f"[Step {global_step}] velocity_loss={velocity_loss:0.5f}, direct_noise_loss={direct_noise_loss:0.5f}"
+                f"[Step {global_step}] loss={total_loss:0.5f}, velocity_loss={velocity_loss:0.5f}, direct_noise_loss={direct_noise_loss:0.5f}"
             )
 
     def validate_with_progress(
@@ -2545,7 +2702,7 @@ class ValidationCore:
         vae: Optional[Any] = None,
         global_step: Optional[int] = None,
         show_progress: bool = True,
-    ) -> tuple[float, float]:
+    ) -> Dict[str, float]:
         """Run validation with optional progress bar.
 
         Args:

@@ -132,6 +132,12 @@ from scheduling.timestep_utils import (
     initialize_timestep_distribution,
 )
 from core.validation_core import ValidationCore
+from core.validation_loss_runtime import (
+    compute_validation_forward_and_loss as compute_validation_forward_and_loss_impl,
+    finalize_validation_loss as finalize_validation_loss_impl,
+    prepare_validation_runtime_context as prepare_validation_runtime_context_impl,
+    run_validation_model_forward as run_validation_model_forward_impl,
+)
 from criteria.training_loss import TrainingLossComputer
 from criteria.hfato_loss import (
     build_hfato_noisy_input,
@@ -313,8 +319,24 @@ class TrainingCore:
         self.self_flow_helper: Optional[Any] = None
         # Motion-preservation helper (set in run_training_loop when enabled)
         self.motion_preservation_helper: Optional[Any] = None
+        self.full_finetune_motion_preservation_helper: Optional[Any] = None
+        self.full_finetune_ewc_helper: Optional[Any] = None
         # Manifold-consensus helper (set in run_training_loop when enabled)
         self.manifold_consensus_helper: Optional[Any] = None
+        self.dual_head_alignment_helper: Optional[Any] = None
+        self.dual_model_manager: Optional[Any] = None
+        self.repa_helper: Optional[Any] = None
+        self.sft_alignment_helper: Optional[Any] = None
+        self.det_motion_helper: Optional[Any] = None
+        self.moalign_helper: Optional[Any] = None
+        self.semfeat_helper: Optional[Any] = None
+        self.reg_helper: Optional[Any] = None
+        self.sara_helper: Optional[Any] = None
+        self.layer_sync_helper: Optional[Any] = None
+        self.crepa_helper: Optional[Any] = None
+        self.haste_helper: Optional[Any] = None
+        self.contrastive_attention_helper: Optional[Any] = None
+        self.controlnet: Optional[Any] = None
 
         # Initialize temporal consistency enhancement
         self.temporal_consistency_integration = None
@@ -642,6 +664,7 @@ class TrainingCore:
         timestep_sign_override: Optional[torch.Tensor] = None,
         context_override: Optional[List[torch.Tensor]] = None,
         apply_stable_velocity_target: bool = True,
+        update_stable_velocity_target_bank: bool = True,
         return_intermediate: Optional[bool] = None,
         override_target: Optional[bool] = None,
     ) -> Union[
@@ -1178,7 +1201,7 @@ class TrainingCore:
                     ig_slice[ig_temporal_axis] = slice(ic_lora_ref_frames, None)
                     internal_guidance_pred = internal_guidance_pred[tuple(ig_slice)]
 
-        if model_pred.grad_fn is None:
+        if torch.is_grad_enabled() and model_pred.grad_fn is None:
             print(
                 "model_pred is detached from the graph before returning from call_dit"
             )
@@ -1306,7 +1329,7 @@ class TrainingCore:
                     timesteps=timesteps,
                     batch=batch,
                     global_step=global_step,
-                    update_bank=True,
+                    update_bank=update_stable_velocity_target_bank,
                 )
                 self._last_stablevm_target_metrics = dict(
                     self.stablevm_target_helper.last_metrics
@@ -1382,6 +1405,144 @@ class TrainingCore:
             internal_guidance_shift,
         )
 
+    def _prepare_validation_runtime_context(
+        self,
+        *,
+        args: argparse.Namespace,
+        accelerator: Accelerator,
+        transformer: Any,
+        network: Any,
+        latents: torch.Tensor,
+        batch: Dict[str, Any],
+        noise: torch.Tensor,
+        noisy_model_input: torch.Tensor,
+        timesteps: torch.Tensor,
+        control_signal_processor: Optional[Any],
+        vae: Optional[Any],
+        global_step: Optional[int],
+        network_dtype: torch.dtype,
+    ) -> Dict[str, Any]:
+        return prepare_validation_runtime_context_impl(
+            self,
+            args=args,
+            accelerator=accelerator,
+            transformer=transformer,
+            network=network,
+            latents=latents,
+            batch=batch,
+            noise=noise,
+            noisy_model_input=noisy_model_input,
+            timesteps=timesteps,
+            control_signal_processor=control_signal_processor,
+            vae=vae,
+            global_step=global_step,
+            network_dtype=network_dtype,
+        )
+
+    def _run_validation_model_forward(
+        self,
+        *,
+        args: argparse.Namespace,
+        accelerator: Accelerator,
+        network: Any,
+        latents: torch.Tensor,
+        batch: Dict[str, Any],
+        noise: torch.Tensor,
+        control_signal_processor: Optional[Any],
+        global_step: Optional[int],
+        network_dtype: torch.dtype,
+        runtime: Dict[str, Any],
+    ) -> Optional[Any]:
+        return run_validation_model_forward_impl(
+            self,
+            args=args,
+            accelerator=accelerator,
+            network=network,
+            latents=latents,
+            batch=batch,
+            noise=noise,
+            control_signal_processor=control_signal_processor,
+            global_step=global_step,
+            network_dtype=network_dtype,
+            runtime=runtime,
+        )
+
+    def _finalize_validation_loss(
+        self,
+        *,
+        args: argparse.Namespace,
+        accelerator: Accelerator,
+        transformer: Any,
+        network: Any,
+        latents: torch.Tensor,
+        batch: Dict[str, Any],
+        noise: torch.Tensor,
+        control_signal_processor: Optional[Any],
+        vae: Optional[Any],
+        global_step: Optional[int],
+        current_epoch: Optional[int],
+        batch_step: Optional[int],
+        network_dtype: torch.dtype,
+        runtime: Dict[str, Any],
+        model_result: Any,
+    ) -> Dict[str, Any]:
+        return finalize_validation_loss_impl(
+            self,
+            args=args,
+            accelerator=accelerator,
+            transformer=transformer,
+            network=network,
+            latents=latents,
+            batch=batch,
+            noise=noise,
+            control_signal_processor=control_signal_processor,
+            vae=vae,
+            global_step=global_step,
+            current_epoch=current_epoch,
+            batch_step=batch_step,
+            network_dtype=network_dtype,
+            runtime=runtime,
+            model_result=model_result,
+        )
+
+    def compute_validation_forward_and_loss(
+        self,
+        *,
+        args: argparse.Namespace,
+        accelerator: Accelerator,
+        transformer: Any,
+        network: Any,
+        latents: torch.Tensor,
+        batch: Dict[str, Any],
+        noise: torch.Tensor,
+        noisy_model_input: torch.Tensor,
+        timesteps: torch.Tensor,
+        control_signal_processor: Optional[Any] = None,
+        vae: Optional[Any] = None,
+        global_step: Optional[int] = None,
+        current_epoch: Optional[int] = None,
+        batch_step: Optional[int] = None,
+        network_dtype: torch.dtype = torch.float32,
+    ) -> Dict[str, Any]:
+        return compute_validation_forward_and_loss_impl(
+            self,
+            args=args,
+            accelerator=accelerator,
+            transformer=transformer,
+            network=network,
+            latents=latents,
+            batch=batch,
+            noise=noise,
+            noisy_model_input=noisy_model_input,
+            timesteps=timesteps,
+            control_signal_processor=control_signal_processor,
+            vae=vae,
+            global_step=global_step,
+            current_epoch=current_epoch,
+            batch_step=batch_step,
+            network_dtype=network_dtype,
+        )
+
     def run_training_loop(
         self,
         args: argparse.Namespace,
@@ -1444,6 +1605,20 @@ class TrainingCore:
         self.self_flow_helper = self_flow_helper
         self.motion_preservation_helper = motion_preservation_helper
         self.manifold_consensus_helper = manifold_consensus_helper
+        self.dual_head_alignment_helper = dual_head_alignment_helper
+        self.dual_model_manager = dual_model_manager
+        self.repa_helper = repa_helper
+        self.sft_alignment_helper = sft_alignment_helper
+        self.det_motion_helper = det_motion_helper
+        self.moalign_helper = moalign_helper
+        self.semfeat_helper = semfeat_helper
+        self.reg_helper = reg_helper
+        self.sara_helper = sara_helper
+        self.layer_sync_helper = layer_sync_helper
+        self.crepa_helper = crepa_helper
+        self.haste_helper = haste_helper
+        self.contrastive_attention_helper = contrastive_attention_helper
+        self.controlnet = controlnet
         self.initialize_stable_velocity_target(args)
         ortholora_helper = (
             OrthoLoRAHelper(args)
@@ -3779,6 +3954,7 @@ class TrainingCore:
                             last_fast_validated_step,
                         ) = handle_step_validation(
                             should_validating,
+                            self,
                             self.validation_core,
                             val_dataloader,
                             val_epoch_step_sync,
@@ -3788,6 +3964,7 @@ class TrainingCore:
                             args,
                             accelerator,
                             transformer,
+                            network,
                             noise_scheduler,
                             control_signal_processor,
                             vae,
@@ -3797,6 +3974,7 @@ class TrainingCore:
                             self.timestep_distribution,
                             should_fast_validating,
                             last_fast_validated_step,
+                            network_dtype,
                         )
 
                         if not save_before:
@@ -3980,13 +4158,11 @@ class TrainingCore:
                 sample_parameters,
                 dit_dtype,
             )
-            if optimizer_train_fn:
-                optimizer_train_fn()
-
             # Handle epoch-end validation
             should_validate_on_epoch_end = getattr(args, "validate_on_epoch_end", False)
             handle_epoch_end_validation(
                 should_validate_on_epoch_end,
+                self,
                 val_dataloader,
                 last_validated_step,
                 global_step,
@@ -3997,10 +4173,15 @@ class TrainingCore:
                 args,
                 accelerator,
                 transformer,
+                network,
                 noise_scheduler,
                 control_signal_processor,
                 vae,
+                network_dtype,
             )
+
+            if optimizer_train_fn:
+                optimizer_train_fn()
 
             # end of epoch
 

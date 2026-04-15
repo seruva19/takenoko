@@ -848,6 +848,22 @@ class WanFinetuneTrainer:
             reverse=True,
             solver="euler",
         )
+        self.training_core.repa_helper = repa_helper
+        self.training_core.moalign_helper = moalign_helper
+        self.training_core.semfeat_helper = semfeat_helper
+        self.training_core.reg_helper = reg_helper
+        self.training_core.sara_helper = sara_helper
+        self.training_core.layer_sync_helper = layer_sync_helper
+        self.training_core.crepa_helper = crepa_helper
+        self.training_core.self_transcendence_helper = self_transcendence_helper
+        self.training_core.self_flow_helper = self_flow_helper
+        self.training_core.haste_helper = haste_helper
+        self.training_core.contrastive_attention_helper = contrastive_attention_helper
+        self.training_core.internal_guidance_helper = internal_guidance_helper
+        self.training_core.controlnet = None
+        self.training_core.dual_model_manager = None
+        self.training_core.dual_head_alignment_helper = None
+        self.training_core.manifold_consensus_helper = None
 
         if self.glance_distiller is not None and self.glance_distiller.enabled:
             noisy_model_input, timesteps, _, _ = (
@@ -1966,6 +1982,9 @@ class WanFinetuneTrainer:
                 else len(motion_preservation_helper.anchor_cache),
             )
             return
+        self.training_core.full_finetune_motion_preservation_helper = (
+            motion_preservation_helper
+        )
 
         # Initialize loss recorder for proper loss tracking
         loss_recorder = LossRecorder()
@@ -2172,6 +2191,7 @@ class WanFinetuneTrainer:
             ),
             timestep_distribution=self.timestep_distribution,
         )
+        self.training_core.full_finetune_ewc_helper = ewc_helper
 
         # Register checkpoint hooks for proper fine-tuning save/load (matching LoRA approach)
         CheckpointUtils.register_hooks_for_finetuning(accelerator, args)
@@ -3271,6 +3291,7 @@ class WanFinetuneTrainer:
                                     _last_fast_validated_step,
                                 ) = handle_step_validation(
                                     should_validating=True,
+                                    training_core=self.training_core,
                                     validation_core=self.training_core.validation_core,
                                     val_dataloader=val_dataloader,
                                     val_epoch_step_sync=val_epoch_step_sync,
@@ -3280,6 +3301,7 @@ class WanFinetuneTrainer:
                                     args=args,
                                     accelerator=accelerator,
                                     transformer=transformer,
+                                    network=network,
                                     noise_scheduler=validation_noise_scheduler,
                                     control_signal_processor=None,  # Not used in finetune trainer
                                     vae=vae,  # Pass the VAE if available
@@ -3287,6 +3309,7 @@ class WanFinetuneTrainer:
                                     warned_no_val_pixels_for_perceptual=warned_no_val_pixels_for_perceptual,
                                     last_validated_step=last_validated_step,
                                     timestep_distribution=None,  # Optional parameter
+                                    network_dtype=transformer.dtype,
                                 )
 
                         if not save_before:

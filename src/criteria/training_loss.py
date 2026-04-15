@@ -1016,6 +1016,7 @@ class TrainingLossComputer:
         transition_loss_context: Optional[Dict[str, Any]] = None,
         noise_scheduler: Optional[Any] = None,
         reflexflow_context: Optional[Dict[str, Any]] = None,
+        validation_mode: bool = False,
     ) -> LossComponents:
         """Compute the full training loss and its components.
 
@@ -2187,7 +2188,9 @@ class TrainingLossComputer:
                     sara_val, _ = sara_helper.compute_sara_loss(
                         first_frame_pixels,
                         vae,
-                        update_discriminator=accelerator.sync_gradients,
+                        update_discriminator=(
+                            accelerator.sync_gradients and not validation_mode
+                        ),
                     )
                     loss = loss + sara_val
                     sara_loss_value = sara_val.detach()

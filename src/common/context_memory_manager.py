@@ -424,7 +424,8 @@ class ContextMemoryManager:
                             args: Any,
                             accelerator: Any,
                             temporal_consistency_loss_fn: Any,
-                            batch: Optional[Dict[str, Any]] = None) -> Tuple[torch.Tensor, Dict[str, Any]]:
+                            batch: Optional[Dict[str, Any]] = None,
+                            update_memory: bool = True) -> Tuple[torch.Tensor, Dict[str, Any]]:
         """Process a training step for context memory.
         
         Args:
@@ -484,8 +485,15 @@ class ContextMemoryManager:
             # Relevance = exp(-loss) ∈ [0,1] where higher values = more relevant context
             context_relevance_score = torch.exp(-context_memory_loss.detach()).item()
         
-        # Update memory with current frames and camera poses
-        self._update_memory_with_frames(current_frames, global_step, step, camera_poses, current_fov)
+        # Validation can reuse the loss without mutating the training memory bank.
+        if update_memory:
+            self._update_memory_with_frames(
+                current_frames,
+                global_step,
+                step,
+                camera_poses,
+                current_fov,
+            )
         
         # Prepare comprehensive stats for logging
         stats_dict = {}

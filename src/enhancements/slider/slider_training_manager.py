@@ -185,6 +185,7 @@ class SliderTrainingManager:
                 reflexflow_context=kwargs.get("reflexflow_context"),
                 global_step=kwargs.get("global_step"),
                 current_epoch=kwargs.get("current_epoch"),
+                validation_mode=kwargs.get("validation_mode", False),
             )
 
         # Slider training - compute guided loss
