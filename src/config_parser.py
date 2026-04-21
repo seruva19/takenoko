@@ -35,6 +35,7 @@ from configs.glance_config import apply_glance_config
 from configs.physics_guided_motion_loss import apply_physics_guided_motion_config
 from configs.self_transcendence_config import apply_self_transcendence_config
 from configs.self_flow_config import apply_self_flow_config
+from configs.flowc2s_config import apply_flowc2s_config
 from configs.mixflow_config import apply_mixflow_config
 from configs.drifting_config import apply_drifting_config
 from configs.reward_vcd_config import apply_reward_vcd_config
@@ -669,6 +670,7 @@ def create_args_from_config(
     apply_internal_guidance_config(args, config, logger)
     apply_self_transcendence_config(args, config, logger)
     apply_self_flow_config(args, config, logger)
+    apply_flowc2s_config(args, config, logger)
     apply_mixflow_config(args, config, logger)
     apply_drifting_config(args, config, logger)
     apply_s2d_config(args, config, logger)

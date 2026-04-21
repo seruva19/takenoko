@@ -784,6 +784,7 @@ class WanFinetuneTrainer:
         sara_helper: Optional[Any] = None,
         layer_sync_helper: Optional[Any] = None,
         crepa_helper: Optional[Any] = None,
+        flowc2s_transport_helper: Optional[Any] = None,
         self_transcendence_helper: Optional[Any] = None,
         self_flow_helper: Optional[Any] = None,
         haste_helper: Optional[Any] = None,
@@ -855,6 +856,7 @@ class WanFinetuneTrainer:
         self.training_core.sara_helper = sara_helper
         self.training_core.layer_sync_helper = layer_sync_helper
         self.training_core.crepa_helper = crepa_helper
+        self.training_core.flowc2s_transport_helper = flowc2s_transport_helper
         self.training_core.self_transcendence_helper = self_transcendence_helper
         self.training_core.self_flow_helper = self_flow_helper
         self.training_core.haste_helper = haste_helper
@@ -1661,6 +1663,21 @@ class WanFinetuneTrainer:
                 logger.warning(f"CREPA setup failed: {exc}")
                 crepa_helper = None
 
+        flowc2s_transport_helper = None
+        if getattr(args, "enable_flowc2s_transport", False):
+            try:
+                from enhancements.flowc2s.transport_helper import (
+                    FlowC2STransportHelper,
+                )
+
+                logger.info(
+                    "FlowC2S transport is enabled. Initializing helper module."
+                )
+                flowc2s_transport_helper = FlowC2STransportHelper(transformer, args)
+            except Exception as exc:
+                logger.warning(f"FlowC2S transport setup failed: {exc}")
+                flowc2s_transport_helper = None
+
         semfeat_helper = None
         if getattr(args, "bfm_semfeat_enabled", False):
             try:
@@ -2254,6 +2271,18 @@ class WanFinetuneTrainer:
             except Exception as exc:
                 logger.warning(f"CREPA setup failed: {exc}")
                 crepa_helper = None
+        if flowc2s_transport_helper is not None:
+            try:
+                logger.info(
+                    "FlowC2S transport is enabled. Setting up the helper module."
+                )
+                flowc2s_transport_helper.setup_hooks()
+                flowc2s_transport_helper = accelerator.prepare(
+                    flowc2s_transport_helper
+                )
+            except Exception as exc:
+                logger.warning(f"FlowC2S transport setup failed: {exc}")
+                flowc2s_transport_helper = None
 
         if semfeat_helper is not None:
             try:
@@ -2714,6 +2743,7 @@ class WanFinetuneTrainer:
                         sara_helper=None,
                         layer_sync_helper=layer_sync_helper,
                         crepa_helper=crepa_helper,
+                        flowc2s_transport_helper=flowc2s_transport_helper,
                         self_transcendence_helper=self_transcendence_helper,
                         self_flow_helper=self_flow_helper,
                         haste_helper=haste_helper,
@@ -3043,6 +3073,27 @@ class WanFinetuneTrainer:
                         ):
                             logs["crepa_similarity"] = float(
                                 loss_components.crepa_similarity.item()
+                            )
+                        if (
+                            getattr(loss_components, "flowc2s_transport_loss", None)
+                            is not None
+                        ):
+                            logs["loss/flowc2s_transport"] = float(
+                                loss_components.flowc2s_transport_loss.item()
+                            )
+                            logs["flowc2s_transport_loss"] = float(
+                                loss_components.flowc2s_transport_loss.item()
+                            )
+                        if (
+                            getattr(
+                                loss_components,
+                                "flowc2s_transport_similarity",
+                                None,
+                            )
+                            is not None
+                        ):
+                            logs["flowc2s_transport_similarity"] = float(
+                                loss_components.flowc2s_transport_similarity.item()
                             )
                         if (
                             getattr(loss_components, "physics_motion_loss", None)
@@ -3428,6 +3479,11 @@ class WanFinetuneTrainer:
             semfeat_helper.remove_hooks()
         if "crepa_helper" in locals() and crepa_helper is not None:
             crepa_helper.remove_hooks()
+        if (
+            "flowc2s_transport_helper" in locals()
+            and flowc2s_transport_helper is not None
+        ):
+            flowc2s_transport_helper.remove_hooks()
 
         profiler.stop()
         progress_bar.close()

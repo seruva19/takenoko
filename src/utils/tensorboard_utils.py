@@ -73,6 +73,9 @@ def get_default_metric_descriptions() -> Dict[str, str]:
         "crepa_loss": "CREPA cross-frame alignment loss for video consistency (lower is better).",
         "crepa_similarity": "Mean CREPA similarity across frames (higher is better).",
         "loss/crepa": "CREPA cross-frame alignment loss for video consistency (lower is better).",
+        "flowc2s_transport_loss": "FlowC2S-inspired current-to-succeeding transport alignment loss (lower is better).",
+        "flowc2s_transport_similarity": "Mean cosine similarity between student and latent transport vectors (higher is better).",
+        "loss/flowc2s_transport": "FlowC2S-inspired current-to-succeeding transport alignment loss (lower is better).",
         # Validation metrics - velocity prediction
         "val/velocity_loss_avg": "Average velocity loss across validation timesteps (lower is better).",
         "val/velocity_loss_avg_weighted": "Sample-weighted average velocity loss across all validation data (lower is better).",

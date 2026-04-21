@@ -334,6 +334,7 @@ class TrainingCore:
         self.sara_helper: Optional[Any] = None
         self.layer_sync_helper: Optional[Any] = None
         self.crepa_helper: Optional[Any] = None
+        self.flowc2s_transport_helper: Optional[Any] = None
         self.haste_helper: Optional[Any] = None
         self.contrastive_attention_helper: Optional[Any] = None
         self.controlnet: Optional[Any] = None
@@ -1585,6 +1586,7 @@ class TrainingCore:
         sara_helper: Optional[Any] = None,
         layer_sync_helper: Optional[Any] = None,
         crepa_helper: Optional[Any] = None,
+        flowc2s_transport_helper: Optional[Any] = None,
         internal_guidance_helper: Optional[Any] = None,
         self_transcendence_helper: Optional[Any] = None,
         self_flow_helper: Optional[Any] = None,
@@ -1618,6 +1620,7 @@ class TrainingCore:
         self.sara_helper = sara_helper
         self.layer_sync_helper = layer_sync_helper
         self.crepa_helper = crepa_helper
+        self.flowc2s_transport_helper = flowc2s_transport_helper
         self.haste_helper = haste_helper
         self.contrastive_attention_helper = contrastive_attention_helper
         self.controlnet = controlnet
@@ -3043,6 +3046,7 @@ class TrainingCore:
                                 sara_helper=sara_helper,
                                 layer_sync_helper=layer_sync_helper,
                                 crepa_helper=crepa_helper,
+                                flowc2s_transport_helper=self.flowc2s_transport_helper,
                                 internal_guidance_helper=internal_guidance_helper,
                                 self_transcendence_helper=self.self_transcendence_helper,
                                 self_flow_helper=self.self_flow_helper,
@@ -3685,6 +3689,7 @@ class TrainingCore:
                                         sara_helper=sara_helper,
                                         layer_sync_helper=layer_sync_helper,
                                         crepa_helper=crepa_helper,
+                                        flowc2s_transport_helper=self.flowc2s_transport_helper,
                                         haste_helper=haste_helper,
                                         self_flow_helper=self.self_flow_helper,
                                         motion_preservation_helper=self.motion_preservation_helper,
@@ -3743,6 +3748,7 @@ class TrainingCore:
                             sara_helper=sara_helper,
                             layer_sync_helper=layer_sync_helper,
                             crepa_helper=crepa_helper,
+                            flowc2s_transport_helper=self.flowc2s_transport_helper,
                             haste_helper=haste_helper,
                             self_flow_helper=self.self_flow_helper,
                             motion_preservation_helper=self.motion_preservation_helper,

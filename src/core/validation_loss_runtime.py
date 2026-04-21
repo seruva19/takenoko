@@ -876,6 +876,7 @@ def finalize_validation_loss(
         sara_helper=training_core.sara_helper,
         layer_sync_helper=training_core.layer_sync_helper,
         crepa_helper=training_core.crepa_helper,
+        flowc2s_transport_helper=training_core.flowc2s_transport_helper,
         internal_guidance_helper=training_core.internal_guidance_helper,
         self_transcendence_helper=training_core.self_transcendence_helper,
         self_flow_helper=training_core.self_flow_helper,

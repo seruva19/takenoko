@@ -945,6 +945,21 @@ class WanNetworkTrainer:
                 logger.warning(f"CREPA setup failed: {exc}")
                 crepa_helper = None
 
+        flowc2s_transport_helper = None
+        if getattr(args, "enable_flowc2s_transport", False):
+            try:
+                from enhancements.flowc2s.transport_helper import (
+                    FlowC2STransportHelper,
+                )
+
+                logger.info(
+                    "FlowC2S transport is enabled. Initializing helper module."
+                )
+                flowc2s_transport_helper = FlowC2STransportHelper(transformer, args)
+            except Exception as exc:
+                logger.warning(f"FlowC2S transport setup failed: {exc}")
+                flowc2s_transport_helper = None
+
         semfeat_helper = None
         if getattr(args, "bfm_semfeat_enabled", False):
             try:
@@ -1874,6 +1889,18 @@ class WanNetworkTrainer:
                 except Exception as exc:
                     logger.warning(f"CREPA setup failed: {exc}")
                     crepa_helper = None
+            if flowc2s_transport_helper is not None:
+                try:
+                    logger.info(
+                        "FlowC2S transport is enabled. Setting up the helper module."
+                    )
+                    flowc2s_transport_helper.setup_hooks()
+                    flowc2s_transport_helper = accelerator.prepare(
+                        flowc2s_transport_helper
+                    )
+                except Exception as exc:
+                    logger.warning(f"FlowC2S transport setup failed: {exc}")
+                    flowc2s_transport_helper = None
             if getattr(args, "enable_reg", False):
                 try:
                     from enhancements.reg.reg_helper import RegHelper
@@ -2150,6 +2177,7 @@ class WanNetworkTrainer:
                 sara_helper=sara_helper,
                 layer_sync_helper=layer_sync_helper,
                 crepa_helper=crepa_helper,
+                flowc2s_transport_helper=flowc2s_transport_helper,
                 internal_guidance_helper=internal_guidance_helper,
                 self_transcendence_helper=self_transcendence_helper,
                 self_flow_helper=self_flow_helper,
@@ -2219,6 +2247,11 @@ class WanNetworkTrainer:
             manifold_consensus_helper.remove_hooks()
         if "crepa_helper" in locals() and crepa_helper is not None:
             crepa_helper.remove_hooks()
+        if (
+            "flowc2s_transport_helper" in locals()
+            and flowc2s_transport_helper is not None
+        ):
+            flowc2s_transport_helper.remove_hooks()
         if "semantic_alignment_helper" in locals():
             teardown_semantic_training_integration(semantic_alignment_helper)
 

@@ -3474,6 +3474,52 @@ crepa_drop_vae_encoder = false
 crepa_normalize_by_frames = true
 
 # =============================================================================
+# ⚠️ FLOWC2S TRANSPORT SETTINGS
+# =============================================================================
+
+# Enable FlowC2S regularizer.
+# Aligns a chosen transformer block's current-half -> succeeding-half transport with the same video's latent
+# current-half -> succeeding-half transport. Default: false.
+enable_flowc2s_transport = false
+
+# Transformer block index to supervise (0-based).
+# Recommended: an early/mid block with stable temporal structure.
+# Required when enable_flowc2s_transport = true.
+flowc2s_transport_block_index = 8
+
+# Weight for the auxiliary transport loss.
+# - 0.05-0.20 is a reasonable starting range
+# - Must be > 0 when enabled
+# - Higher values force stronger chunk-to-chunk transport alignment but can
+#   over-regularize the base denoising objective
+flowc2s_transport_lambda = 0.1
+
+# Loss type used to compare student transport with latent transport.
+# Valid options:
+# - "cosine": direction matching, usually safest/default
+# - "mse": magnitude + direction matching, often stronger but less stable
+flowc2s_transport_loss_type = "cosine"
+
+# Temporal split ratio for building the "current" and "succeeding" chunks from
+# each training sample. The split index is rounded from total_frames * ratio and
+# then clamped so each side keeps at least flowc2s_transport_min_chunk_frames.
+# Valid range: (0, 1)
+# Recommended: 0.5 for an equal first-half / second-half split.
+flowc2s_transport_chunk_ratio = 0.5
+
+# Minimum number of frames that must remain in both halves after splitting.
+# Samples with fewer than 2 * this many frames skip the auxiliary FlowC2S loss
+# for that step instead of failing.
+# Recommended: 2 for short training clips, higher for longer clips.
+flowc2s_transport_min_chunk_frames = 2
+
+# Normalize latent transport vectors before comparison.
+# - true: focuses the loss on transport direction instead of raw latent scale
+# - false: preserves magnitude differences as part of the target signal
+# Recommended: true for mixed datasets or varying latent statistics.
+flowc2s_transport_normalize_latents = true
+
+# =============================================================================
 # ⚠️ VIDEOREPA (TOKEN RELATION DISTILLATION) SETTINGS
 # =============================================================================
 

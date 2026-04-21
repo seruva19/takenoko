@@ -372,6 +372,10 @@ class LossComponents:
         The CREPA cross-frame alignment loss, if enabled.
     crepa_similarity: Optional[torch.Tensor]
         The CREPA mean similarity across frames.
+    flowc2s_transport_loss: Optional[torch.Tensor]
+        FlowC2S-inspired current-to-succeeding transport alignment loss.
+    flowc2s_transport_similarity: Optional[torch.Tensor]
+        Mean cosine similarity between student and latent transport vectors.
     haste_attn_loss: Optional[torch.Tensor]
         The HASTE attention alignment loss, if enabled.
     haste_proj_loss: Optional[torch.Tensor]
@@ -636,6 +640,8 @@ class LossComponents:
     reg_similarity: Optional[torch.Tensor] = None
     crepa_loss: Optional[torch.Tensor] = None
     crepa_similarity: Optional[torch.Tensor] = None
+    flowc2s_transport_loss: Optional[torch.Tensor] = None
+    flowc2s_transport_similarity: Optional[torch.Tensor] = None
     haste_attn_loss: Optional[torch.Tensor] = None
     haste_proj_loss: Optional[torch.Tensor] = None
     contrastive_attn_loss: Optional[torch.Tensor] = None
@@ -1024,6 +1030,7 @@ class TrainingLossComputer:
         sara_helper: Optional[Any] = None,
         layer_sync_helper: Optional[Any] = None,
         crepa_helper: Optional[Any] = None,
+        flowc2s_transport_helper: Optional[Any] = None,
         internal_guidance_helper: Optional[Any] = None,
         self_transcendence_helper: Optional[Any] = None,
         self_flow_helper: Optional[Any] = None,
@@ -2665,6 +2672,30 @@ class TrainingLossComputer:
             except Exception as e:
                 logger.warning(f"CREPA loss computation failed: {e}")
 
+        # ---- Optional FlowC2S-inspired transport loss ----
+        flowc2s_transport_loss_value: Optional[torch.Tensor] = None
+        flowc2s_transport_similarity_value: Optional[torch.Tensor] = None
+        if flowc2s_transport_helper is not None and getattr(
+            args, "enable_flowc2s_transport", False
+        ):
+            try:
+                flowc2s_transport_loss, flowc2s_transport_logs = (
+                    flowc2s_transport_helper.compute_loss(latents=latents)
+                )
+                if flowc2s_transport_loss is not None:
+                    loss = loss + flowc2s_transport_loss
+                    flowc2s_transport_loss_value = flowc2s_transport_loss.detach()
+                if (
+                    flowc2s_transport_logs
+                    and "flowc2s_transport_similarity" in flowc2s_transport_logs
+                ):
+                    flowc2s_transport_similarity_value = torch.tensor(
+                        flowc2s_transport_logs["flowc2s_transport_similarity"],
+                        device=loss.device,
+                    )
+            except Exception as e:
+                logger.warning("FlowC2S transport loss computation failed: %s", e)
+
         # ---- Optional LayerSync Loss ----
         layer_sync_loss_value: Optional[torch.Tensor] = None
         layer_sync_similarity_value: Optional[torch.Tensor] = None
@@ -3220,6 +3251,8 @@ class TrainingLossComputer:
             reg_similarity=reg_similarity_value,
             crepa_loss=crepa_loss_value,
             crepa_similarity=crepa_similarity_value,
+            flowc2s_transport_loss=flowc2s_transport_loss_value,
+            flowc2s_transport_similarity=flowc2s_transport_similarity_value,
             haste_attn_loss=haste_attn_loss_value,
             haste_proj_loss=haste_proj_loss_value,
             contrastive_attn_loss=contrastive_attn_loss_value,
