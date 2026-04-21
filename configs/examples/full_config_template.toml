@@ -3285,6 +3285,64 @@ isofm_speed_epsilon = 1e-6
 isofm_log_interval = 100
 
 # =============================================================================
+# ⚠️ HY-SOAR (SELF-CORRECTION AUXILIARY TRAJECTORY SUPERVISION) SETTINGS
+# =============================================================================
+
+# Enable HY-SOAR auxiliary supervision for the standard LoRA SFT path.
+# Default: false to preserve existing behaviour unless explicitly requested.
+# Train-time only: inference remains unchanged.
+enable_soar = false
+
+# Weight for the auxiliary SOAR supervision term.
+# Must be >= 0. Set to 0.0 to keep the helper wired but disable the auxiliary contribution.
+soar_lambda_aux = 1.0
+
+# Number of rollout paths used to build off-trajectory supervision. Default: 1, which means ODE-only rollout.
+# Values > 1 require soar_enable_sde_branch = true.
+soar_num_rollout_paths = 1
+
+# Number of auxiliary supervision points sampled per rollout path.
+# Must be >= 0. Higher values increase training cost roughly linearly.
+soar_aux_points_per_path = 6
+
+# Discretization step count used to define the detached one-step rollout horizon. Must be >= 1.
+soar_rollout_step_count = 40
+
+# CFG scale used only for the detached rollout velocity.
+# This does not affect inference CFG and does not alter normal training forward passes. Must be >= 0.
+soar_rollout_cfg_scale = 4.5
+
+# When true, auxiliary points are re-noised toward the same sampled endpoint noise z1
+# used by the base flow-matching objective.
+soar_use_same_noise = true
+
+# Enable stochastic rollout branches in addition to the default deterministic ODE path.
+# Default: false for behaviour safety and to match the paper/source practical default.
+soar_enable_sde_branch = false
+
+# Stochastic rollout sampler used when soar_enable_sde_branch = true.
+# Valid options:
+# - "simple": additive Euler-Maruyama style noise
+# - "sde": diffusers-style stochastic step
+# - "flow_sde": reverse-SDE flow step
+# - "cps": coefficients-preserving sampling
+soar_sde_rollout_type = "flow_sde"
+
+# Noise scale for stochastic rollout branches.
+# Only used when soar_enable_sde_branch = true. Must be >= 0.
+soar_sde_noise_scale = 0.5
+
+# Unconditional context construction mode for rollout CFG.
+# First-pass Takenoko implementation supports only "zero":
+# each cached T5 context tensor is zeroed to form the unconditional branch.
+# This matches the current LoRA path, which relies on cached embeddings instead of
+# a live text-encoder pass during loss computation.
+soar_uncond_context_mode = "zero"
+
+# Log HY-SOAR metrics every N optimizer steps. This affects only scalar telemetry.
+soar_log_interval = 100
+
+# =============================================================================
 # ⚠️ REG (REPRESENTATION ENTANGLEMENT FOR GENERATION) SETTINGS
 # =============================================================================
 

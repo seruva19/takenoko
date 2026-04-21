@@ -1855,6 +1855,7 @@ class WanNetworkTrainer:
             sft_alignment_helper = None
             reg_helper = None
             layer_sync_helper = None
+            soar_helper = None
             haste_helper = None
             contrastive_attention_helper = None
             if moalign_helper is not None:
@@ -2005,6 +2006,17 @@ class WanNetworkTrainer:
                 except Exception as exc:
                     logger.warning(f"Internal Guidance setup failed: {exc}")
                     internal_guidance_helper = None
+            if getattr(args, "enable_soar", False):
+                try:
+                    from enhancements.soar.trainer_integration import create_soar_helper
+
+                    logger.info("HY-SOAR is enabled. Setting up the helper module.")
+                    soar_helper = create_soar_helper(args, transformer)
+                    if soar_helper is not None:
+                        soar_helper.setup_hooks()
+                except Exception as exc:
+                    logger.warning(f"HY-SOAR setup failed: {exc}")
+                    soar_helper = None
             if self_transcendence_helper is not None:
                 try:
                     self_transcendence_helper.setup_hooks()
@@ -2142,6 +2154,7 @@ class WanNetworkTrainer:
                 self_transcendence_helper=self_transcendence_helper,
                 self_flow_helper=self_flow_helper,
                 motion_preservation_helper=motion_preservation_helper,
+                soar_helper=soar_helper,
                 haste_helper=haste_helper,
                 contrastive_attention_helper=contrastive_attention_helper,
                 dual_model_manager=dual_model_manager,
@@ -2177,6 +2190,8 @@ class WanNetworkTrainer:
             self_transcendence_helper.remove_hooks()
         if "self_flow_helper" in locals() and self_flow_helper is not None:
             self_flow_helper.remove_hooks()
+        if "soar_helper" in locals() and soar_helper is not None:
+            soar_helper.remove_hooks()
         if "haste_helper" in locals() and haste_helper is not None:
             from enhancements.haste.integration import remove_haste_helper
 

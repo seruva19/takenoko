@@ -328,6 +328,22 @@ class LossComponents:
         Fraction of samples active for Iso-FM on the current step.
     isofm_timestep_mean: Optional[torch.Tensor]
         Mean normalized timestep of active Iso-FM samples.
+    soar_aux_loss: Optional[torch.Tensor]
+        Mean HY-SOAR auxiliary loss after applying soar_lambda_aux.
+    soar_aux_points: Optional[torch.Tensor]
+        Number of HY-SOAR auxiliary supervision points evaluated on this step.
+    soar_aux_points_per_sample: Optional[torch.Tensor]
+        Auxiliary-point count divided by the local base batch size.
+    soar_paths_used: Optional[torch.Tensor]
+        Number of rollout paths that produced auxiliary points on this step.
+    soar_boundary_hit_ratio: Optional[torch.Tensor]
+        Fraction of samples whose detached rollout hit the clean boundary and skipped SDE branches.
+    soar_sigma_t0_mean: Optional[torch.Tensor]
+        Mean scheduler sigma of the base noisy state used for rollout.
+    soar_sigma_t1_mean: Optional[torch.Tensor]
+        Mean scheduler sigma after the detached one-step rollout.
+    soar_sigma_tprime_mean: Optional[torch.Tensor]
+        Mean scheduler sigma of sampled auxiliary supervision points.
     moalign_loss: Optional[torch.Tensor]
         The MOALIGN motion-centric relational alignment loss, if enabled.
     repa_loss: Optional[torch.Tensor]
@@ -598,6 +614,14 @@ class LossComponents:
     isofm_speed_mean: Optional[torch.Tensor] = None
     isofm_active_ratio: Optional[torch.Tensor] = None
     isofm_timestep_mean: Optional[torch.Tensor] = None
+    soar_aux_loss: Optional[torch.Tensor] = None
+    soar_aux_points: Optional[torch.Tensor] = None
+    soar_aux_points_per_sample: Optional[torch.Tensor] = None
+    soar_paths_used: Optional[torch.Tensor] = None
+    soar_boundary_hit_ratio: Optional[torch.Tensor] = None
+    soar_sigma_t0_mean: Optional[torch.Tensor] = None
+    soar_sigma_t1_mean: Optional[torch.Tensor] = None
+    soar_sigma_tprime_mean: Optional[torch.Tensor] = None
     moalign_loss: Optional[torch.Tensor] = None
     repa_loss: Optional[torch.Tensor] = None
     stable_velocity_weight_mean: Optional[torch.Tensor] = None
@@ -1004,6 +1028,7 @@ class TrainingLossComputer:
         self_transcendence_helper: Optional[Any] = None,
         self_flow_helper: Optional[Any] = None,
         motion_preservation_helper: Optional[Any] = None,
+        soar_helper: Optional[Any] = None,
         self_flow_context: Optional[Any] = None,
         drifting_helper: Optional[Any] = None,
         global_step: Optional[int] = None,
@@ -1597,6 +1622,49 @@ class TrainingLossComputer:
                 logger.warning("UFO motion-sub loss computation failed: %s", e)
 
         base_loss = loss
+
+        # ---- Optional HY-SOAR auxiliary objective ----
+        soar_aux_loss_value: Optional[torch.Tensor] = None
+        soar_aux_points_value: Optional[torch.Tensor] = None
+        soar_aux_points_per_sample_value: Optional[torch.Tensor] = None
+        soar_paths_used_value: Optional[torch.Tensor] = None
+        soar_boundary_hit_ratio_value: Optional[torch.Tensor] = None
+        soar_sigma_t0_mean_value: Optional[torch.Tensor] = None
+        soar_sigma_t1_mean_value: Optional[torch.Tensor] = None
+        soar_sigma_tprime_mean_value: Optional[torch.Tensor] = None
+        if soar_helper is not None and getattr(args, "enable_soar", False):
+            try:
+                soar_delta, soar_metrics = soar_helper.compute_loss(
+                    args=args,
+                    accelerator=accelerator,
+                    noise_scheduler=noise_scheduler,
+                    latents=latents,
+                    noise=noise,
+                    noisy_model_input=noisy_model_input,
+                    timesteps=timesteps,
+                    network_dtype=network_dtype,
+                    batch=batch,
+                    base_loss=base_loss,
+                    validation_mode=validation_mode,
+                )
+                loss = loss + soar_delta
+                if isinstance(soar_metrics, dict):
+                    soar_aux_loss_value = soar_metrics.get("soar_aux_loss")
+                    soar_aux_points_value = soar_metrics.get("soar_aux_points")
+                    soar_aux_points_per_sample_value = soar_metrics.get(
+                        "soar_aux_points_per_sample"
+                    )
+                    soar_paths_used_value = soar_metrics.get("soar_paths_used")
+                    soar_boundary_hit_ratio_value = soar_metrics.get(
+                        "soar_boundary_hit_ratio"
+                    )
+                    soar_sigma_t0_mean_value = soar_metrics.get("soar_sigma_t0_mean")
+                    soar_sigma_t1_mean_value = soar_metrics.get("soar_sigma_t1_mean")
+                    soar_sigma_tprime_mean_value = soar_metrics.get(
+                        "soar_sigma_tprime_mean"
+                    )
+            except Exception as e:
+                logger.warning("HY-SOAR loss computation failed: %s", e)
 
         if getattr(args, "enable_frequency_decoupling_diagnostics", False):
             try:
@@ -3135,6 +3203,14 @@ class TrainingLossComputer:
             drifting_queue_neg_size=drifting_queue_neg_size_value,
             drifting_encoder_active=drifting_encoder_active_value,
             drifting_encoder_feature_dim=drifting_encoder_feature_dim_value,
+            soar_aux_loss=soar_aux_loss_value,
+            soar_aux_points=soar_aux_points_value,
+            soar_aux_points_per_sample=soar_aux_points_per_sample_value,
+            soar_paths_used=soar_paths_used_value,
+            soar_boundary_hit_ratio=soar_boundary_hit_ratio_value,
+            soar_sigma_t0_mean=soar_sigma_t0_mean_value,
+            soar_sigma_t1_mean=soar_sigma_t1_mean_value,
+            soar_sigma_tprime_mean=soar_sigma_tprime_mean_value,
             moalign_loss=moalign_loss_value,
             repa_loss=repa_loss_value,
             stable_velocity_weight_mean=stable_velocity_weight_mean_value,

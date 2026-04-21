@@ -144,9 +144,12 @@ class SliderIntegration:
                 sara_helper=kwargs.get("sara_helper"),
                 layer_sync_helper=kwargs.get("layer_sync_helper"),
                 crepa_helper=kwargs.get("crepa_helper"),
+                internal_guidance_helper=kwargs.get("internal_guidance_helper"),
                 drifting_helper=kwargs.get("drifting_helper"),
                 self_transcendence_helper=kwargs.get("self_transcendence_helper"),
                 self_flow_helper=kwargs.get("self_flow_helper"),
+                motion_preservation_helper=kwargs.get("motion_preservation_helper"),
+                soar_helper=kwargs.get("soar_helper"),
                 self_flow_context=kwargs.get("self_flow_context"),
                 haste_helper=kwargs.get("haste_helper"),
                 contrastive_attention_helper=kwargs.get(

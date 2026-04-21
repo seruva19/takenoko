@@ -571,6 +571,28 @@ def collect_and_log_training_metrics(
         logs["isofm/timestep_mean"] = float(
             loss_components.isofm_timestep_mean.item()
         )
+    if getattr(loss_components, "soar_aux_loss", None) is not None:
+        logs["loss/soar_aux"] = float(loss_components.soar_aux_loss.item())
+    if getattr(loss_components, "soar_aux_points", None) is not None:
+        logs["soar/aux_points"] = float(loss_components.soar_aux_points.item())
+    if getattr(loss_components, "soar_aux_points_per_sample", None) is not None:
+        logs["soar/aux_points_per_sample"] = float(
+            loss_components.soar_aux_points_per_sample.item()
+        )
+    if getattr(loss_components, "soar_paths_used", None) is not None:
+        logs["soar/paths_used"] = float(loss_components.soar_paths_used.item())
+    if getattr(loss_components, "soar_boundary_hit_ratio", None) is not None:
+        logs["soar/boundary_hit_ratio"] = float(
+            loss_components.soar_boundary_hit_ratio.item()
+        )
+    if getattr(loss_components, "soar_sigma_t0_mean", None) is not None:
+        logs["soar/sigma_t0_mean"] = float(loss_components.soar_sigma_t0_mean.item())
+    if getattr(loss_components, "soar_sigma_t1_mean", None) is not None:
+        logs["soar/sigma_t1_mean"] = float(loss_components.soar_sigma_t1_mean.item())
+    if getattr(loss_components, "soar_sigma_tprime_mean", None) is not None:
+        logs["soar/sigma_tprime_mean"] = float(
+            loss_components.soar_sigma_tprime_mean.item()
+        )
     if getattr(loss_components, "moalign_loss", None) is not None:
         logs["loss/moalign"] = float(loss_components.moalign_loss.item())
     if loss_components.repa_loss is not None:

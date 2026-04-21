@@ -49,6 +49,7 @@ from configs.frame_aware_history_corruption_config import (
 from configs.self_resampling_config import apply_self_resampling_config
 from configs.reflexflow_config import apply_reflexflow_config
 from configs.isofm_config import apply_isofm_config
+from configs.soar_config import apply_soar_config
 from configs.videorepa_config import apply_videorepa_config
 from configs.vae_repa_config import apply_vae_repa_config
 from configs.stable_velocity_config import apply_stable_velocity_config
@@ -920,6 +921,7 @@ def create_args_from_config(
     apply_frame_aware_history_corruption_config(args, config, logger)
     apply_reflexflow_config(args, config, logger)
     apply_isofm_config(args, config, logger)
+    apply_soar_config(args, config, logger)
 
     # Error recycling (train-only, LoRA gated)
     apply_error_recycling_config(args, config, logger)

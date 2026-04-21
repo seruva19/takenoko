@@ -1589,6 +1589,7 @@ class TrainingCore:
         self_transcendence_helper: Optional[Any] = None,
         self_flow_helper: Optional[Any] = None,
         motion_preservation_helper: Optional[Any] = None,
+        soar_helper: Optional[Any] = None,
         haste_helper: Optional[Any] = None,
         contrastive_attention_helper: Optional[Any] = None,
         controlnet: Optional[Any] = None,
@@ -1604,6 +1605,7 @@ class TrainingCore:
         self.self_transcendence_helper = self_transcendence_helper
         self.self_flow_helper = self_flow_helper
         self.motion_preservation_helper = motion_preservation_helper
+        self.soar_helper = soar_helper
         self.manifold_consensus_helper = manifold_consensus_helper
         self.dual_head_alignment_helper = dual_head_alignment_helper
         self.dual_model_manager = dual_model_manager
@@ -3045,6 +3047,7 @@ class TrainingCore:
                                 self_transcendence_helper=self.self_transcendence_helper,
                                 self_flow_helper=self.self_flow_helper,
                                 motion_preservation_helper=self.motion_preservation_helper,
+                                soar_helper=self.soar_helper,
                                 self_flow_context=self_flow_context,
                                 drifting_helper=self.drifting_helper,
                                 haste_helper=haste_helper,
