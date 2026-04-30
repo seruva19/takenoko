@@ -99,6 +99,7 @@ from configs.spatiotemporal_guidance_weighting_config import (
 from configs.vae_refinement_validation_config import (
     apply_vae_refinement_validation_profile,
 )
+from configs.neon_config import apply_neon_config
 
 
 def create_args_from_config(
@@ -837,6 +838,7 @@ def create_args_from_config(
     apply_spatiotemporal_guidance_weighting_config(args, config, logger)
     apply_deco_frequency_diagnostics_config(args, config, logger)
     apply_deco_band_balanced_loss_config(args, config, logger)
+    apply_neon_config(args, config, logger)
 
     # Gradient norm and parameter statistics logging
     args.log_gradient_norm = config.get("log_gradient_norm", False)

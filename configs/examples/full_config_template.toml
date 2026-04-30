@@ -8043,6 +8043,43 @@ save_every_n_steps = 500
 # Default: false to maintain existing behavior
 save_checkpoint_before_sampling = true
 
+# Negative extrapolation export for LoRA checkpoints. 
+# Intended workflow:
+# 1. Save or choose a reference/base LoRA adapter.
+# 2. Fine-tune a new adapter on synthetic/self-generated samples.
+# 3. Enable this export so the saved checkpoint becomes:
+#    theta_neon = (1 + w) * theta_reference - w * theta_self_trained
+# This is a save-time adapter merge only. It does not change live training, model forward passes, or inference code.
+# Default: false.
+enable_neon_negative_extrapolation = false
+
+# Source for theta_reference:
+# - "checkpoint": load neon_reference_lora_path and merge matching LoRA tensors.
+# - "zeros": use an all-zero reference adapter. Use only when that is intentional.
+# Default: "checkpoint".
+neon_reference_mode = "checkpoint"
+
+# Reference/base LoRA checkpoint path. Required when Neon is enabled with
+# neon_reference_mode = "checkpoint". Must match the current adapter structure.
+neon_reference_lora_path = ""
+
+# Extrapolation strength w. Must be finite and > 0.
+# Larger values move farther away from the self-trained adapter; tune with samples/validation.
+# Default: 1.0.
+neon_extrapolation_weight = 1.0
+
+# Minimum fraction of mergeable floating tensors that must match the reference.
+# Range: 0.0 to 1.0. Keep high to catch wrong rank/module/checkpoint choices.
+# Default: 0.8.
+neon_min_match_ratio = 0.8
+
+# Merge LoRA alpha tensors too. Default false preserves adapter scaling metadata.
+neon_merge_alpha = false
+
+# Shape mismatch handling. Default false aborts saving on mismatch.
+# true copies mismatched tensors from the current adapter, which is less strict.
+neon_allow_shape_mismatch = false
+
 # save training state (including optimizer states etc.) on train end even if --save_state is not specified
 # save_state_on_train_end = false 
 

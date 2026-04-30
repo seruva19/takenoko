@@ -21,6 +21,7 @@ import logging
 from common.logger import get_logger
 from common import sai_model_spec
 from utils import train_utils
+from enhancements.neon.neon_merge import save_neon_merged_weights
 
 logger = get_logger(__name__, level=logging.INFO)
 
@@ -963,7 +964,16 @@ class CheckpointManager:
 
             metadata_to_save.update(sai_metadata)
 
-            unwrapped_nw.save_weights(ckpt_file, save_dtype, metadata_to_save)
+            if bool(getattr(args, "enable_neon_negative_extrapolation", False)):
+                save_neon_merged_weights(
+                    unwrapped_nw,
+                    ckpt_file,
+                    save_dtype,
+                    metadata_to_save,
+                    args,
+                )
+            else:
+                unwrapped_nw.save_weights(ckpt_file, save_dtype, metadata_to_save)
 
         return save_model
 
