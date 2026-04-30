@@ -3352,7 +3352,7 @@ class WanFinetuneTrainer:
                                     args=args,
                                     accelerator=accelerator,
                                     transformer=transformer,
-                                    network=network,
+                                    network=None,
                                     noise_scheduler=validation_noise_scheduler,
                                     control_signal_processor=None,  # Not used in finetune trainer
                                     vae=vae,  # Pass the VAE if available
