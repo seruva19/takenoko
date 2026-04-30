@@ -76,21 +76,21 @@ def create_came8bit_optimizer(
     logger: Any,
 ) -> Tuple[Any, torch.optim.Optimizer]:
     try:
-        from optimizers.sana_optimizer import CAME8BitWrapper
+        from optimizers.came_8bit import CAME8bit
 
-        optimizer_class = CAME8BitWrapper
+        optimizer_class = CAME8bit
         logger.info(
-            "using CamE8Bit optimizer (SANA implementation) | %s",
+            "using CAME8bit optimizer (stochastic_rounding, cautious, step_parameter) | %s",
             optimizer_kwargs,
         )
         optimizer = optimizer_class(trainable_params, lr=lr, **optimizer_kwargs)
         return optimizer_class, optimizer
     except Exception as err:
         logger.warning(
-            "⚠️ Failed to import CamE8Bit implementation (%s).",
+            "⚠️ Failed to import CAME8bit implementation (%s).",
             err,
         )
-        raise ImportError("CamE8Bit implementation could not be used") from err
+        raise ImportError("CAME8bit implementation could not be used") from err
 
 
 def create_adamw8bitkahan_optimizer(
