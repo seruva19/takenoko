@@ -143,7 +143,25 @@ class OptimizerManager:
             Tuple of (optimizer_name, optimizer_args_str, optimizer, train_fn, eval_fn)
         """
         # adamw, adamw8bit, adafactor
-        optimizer_type = args.optimizer_type.lower()
+        raw_optimizer_type = str(args.optimizer_type)
+        from optimizers.badam import (
+            is_badam_optimizer_type,
+            is_badam_ratio_optimizer_type,
+        )
+
+        badam_requested = bool(getattr(args, "badam_enabled", False)) or is_badam_optimizer_type(
+            raw_optimizer_type
+        )
+        badam_ratio_requested = bool(
+            getattr(args, "badam_ratio_mode", False)
+        ) or is_badam_ratio_optimizer_type(raw_optimizer_type)
+        if badam_requested and is_badam_optimizer_type(raw_optimizer_type):
+            effective_optimizer_type = str(getattr(args, "badam_base_optimizer", "AdamW"))
+        else:
+            effective_optimizer_type = raw_optimizer_type
+        if badam_requested and is_badam_optimizer_type(effective_optimizer_type):
+            raise ValueError("BAdam must wrap a base optimizer; badam_base_optimizer cannot be BAdam.")
+        optimizer_type = effective_optimizer_type.lower()
 
         # split optimizer_type and optimizer_args
         optimizer_kwargs = {}
@@ -228,6 +246,28 @@ class OptimizerManager:
         )
 
         distributed_context = OptimizerManager.build_distributed_context(accelerator)
+
+        if badam_ratio_requested:
+            from optimizers.badam import create_badam_ratio_optimizer
+
+            optimizer = create_badam_ratio_optimizer(
+                args,
+                transformer,
+                trainable_params,
+                distributed_context=distributed_context,
+                logger=logger,
+            )
+            optimizer_name = optimizer.__class__.__module__ + "." + optimizer.__class__.__name__
+            optimizer_args = ",".join(
+                [
+                    f"update_ratio={optimizer.update_ratio}",
+                    f"switch_every={optimizer.switch_every}",
+                    f"mask_mode={optimizer.mask_mode}",
+                ]
+            )
+            train_fn = lambda: None
+            eval_fn = lambda: None
+            return optimizer_name, optimizer_args, optimizer, train_fn, eval_fn
 
         trainable_params, optimizer_kwargs = prepare_galore_trainable_params(
             args,
@@ -726,7 +766,7 @@ class OptimizerManager:
             )
 
         if optimizer is None:
-            case_sensitive_optimizer_type = args.optimizer_type  # not lower
+            case_sensitive_optimizer_type = effective_optimizer_type  # not lower
             logger.info(f"using {case_sensitive_optimizer_type} | {optimizer_kwargs}")
 
             if "." not in case_sensitive_optimizer_type:  # from torch.optim
@@ -738,6 +778,19 @@ class OptimizerManager:
 
             optimizer_class = getattr(optimizer_module, case_sensitive_optimizer_type)
             optimizer = optimizer_class(trainable_params, lr=lr, **optimizer_kwargs)
+
+        if badam_requested:
+            from optimizers.badam import create_badam_optimizer
+
+            optimizer = create_badam_optimizer(
+                args,
+                transformer,
+                trainable_params,
+                optimizer,
+                distributed_context=distributed_context,
+                logger=logger,
+            )
+            optimizer_class = optimizer.__class__
 
         # for logging - fix potential None issue
         if optimizer_class is not None:

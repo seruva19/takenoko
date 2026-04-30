@@ -181,9 +181,11 @@ class WanFinetuneTrainer:
             # Validate optimizer compatibility with fused backward pass
             if self.fused_backward_pass and hasattr(args, "optimizer_type"):
                 optimizer_type = getattr(args, "optimizer_type", "adafactor").lower()
-                if optimizer_type != "adafactor":
+                badam_gr = bool(getattr(args, "badam_use_gradient_release", False))
+                if optimizer_type != "adafactor" and not badam_gr:
                     logger.warning(
-                        "⚠️ fused_backward_pass=true only supports Adafactor optimizer. "
+                        "⚠️ fused_backward_pass=true only supports Adafactor optimizer "
+                        "or BAdam with badam_use_gradient_release=true. "
                         "Current optimizer_type='%s' will run without fused backward pass.",
                         optimizer_type,
                     )
@@ -1827,9 +1829,11 @@ class WanFinetuneTrainer:
 
         optimizer_type_raw = getattr(args, "optimizer_type", "") or "adafactor"
         optimizer_type = optimizer_type_raw.lower()
-        if self.fused_backward_pass and optimizer_type != "adafactor":
+        badam_gr = bool(getattr(args, "badam_use_gradient_release", False))
+        if self.fused_backward_pass and optimizer_type != "adafactor" and not badam_gr:
             logger.warning(
-                "⚠️ fused_backward_pass=true only supports Adafactor optimizer. "
+                "⚠️ fused_backward_pass=true only supports Adafactor optimizer "
+                "or BAdam with badam_use_gradient_release=true. "
                 "optimizer_type='%s' will run without fused backward pass.",
                 optimizer_type_raw,
             )
@@ -1864,7 +1868,7 @@ class WanFinetuneTrainer:
                 optimizer_type_raw,
             )
 
-        if optimizer_type == "adafactor":
+        if optimizer_type == "adafactor" and not getattr(args, "badam_enabled", False):
             logger.info("Creating Adafactor optimizer directly")
             trainable_params = []
             seen_param_ids = set()
@@ -2135,64 +2139,84 @@ class WanFinetuneTrainer:
 
         # Apply fused backward pass AFTER accelerator.prepare() when optimizer is wrapped
         if self.fused_backward_pass:
-            logger.info("⚡ Enabling fused backward pass optimization (post-prepare)")
-            try:
-                import modules.adafactor_fused as adafactor_fused
+            badam_gr = bool(getattr(args, "badam_use_gradient_release", False))
+            if badam_gr:
+                logger.info("⚡ Enabling BAdam gradient-release (post-prepare)")
+                from optimizers.badam import TakenokoBlockOptimizer
 
-                adafactor_fused.patch_adafactor_fused(
-                    underlying_optimizer,
-                    self.use_stochastic_rounding,
-                    getattr(self, "use_stochastic_rounding_cuda", False),
-                )
+                if not isinstance(underlying_optimizer, TakenokoBlockOptimizer):
+                    logger.warning(
+                        "⚠️ badam_use_gradient_release=true but underlying optimizer is %s, "
+                        "expected TakenokoBlockOptimizer. Skipping gradient-release.",
+                        type(underlying_optimizer).__name__,
+                    )
+                    self.fused_backward_pass = False
+                else:
+                    underlying_optimizer.enable_gradient_release(
+                        accelerator=accelerator,
+                        max_grad_norm=float(getattr(args, "max_grad_norm", 0.0) or 0.0),
+                        fused_step_state=fused_step_state,
+                    )
+                    logger.info("✅ BAdam gradient-release enabled (post-prepare)")
+            else:
+                logger.info("⚡ Enabling fused backward pass optimization (post-prepare)")
+                try:
+                    import modules.adafactor_fused as adafactor_fused
 
-                # Create gradient hooks for fused optimization
-                for param_group, param_name_group in zip(
-                    underlying_optimizer.param_groups, param_names
-                ):
-                    for parameter, param_name in zip(
-                        param_group["params"], param_name_group
+                    adafactor_fused.patch_adafactor_fused(
+                        underlying_optimizer,
+                        self.use_stochastic_rounding,
+                        getattr(self, "use_stochastic_rounding_cuda", False),
+                    )
+
+                    # Create gradient hooks for fused optimization
+                    for param_group, param_name_group in zip(
+                        underlying_optimizer.param_groups, param_names
                     ):
-                        if parameter.requires_grad:
+                        for parameter, param_name in zip(
+                            param_group["params"], param_name_group
+                        ):
+                            if parameter.requires_grad:
 
-                            def create_grad_hook(p_name, p_group):
-                                def grad_hook(tensor: torch.Tensor):
-                                    # Process gradient immediately
-                                    if (
-                                        accelerator.sync_gradients
-                                        and getattr(args, "max_grad_norm", 0.0) != 0.0
-                                    ):
-                                        accelerator.clip_grad_norm_(
-                                            tensor, args.max_grad_norm
-                                        )
+                                def create_grad_hook(p_name, p_group):
+                                    def grad_hook(tensor: torch.Tensor):
+                                        # Process gradient immediately
+                                        if (
+                                            accelerator.sync_gradients
+                                            and getattr(args, "max_grad_norm", 0.0) != 0.0
+                                        ):
+                                            accelerator.clip_grad_norm_(
+                                                tensor, args.max_grad_norm
+                                            )
 
-                                    # Apply optimizer step to this parameter immediately
-                                    if (
-                                        accelerator.sync_gradients
-                                        and not fused_step_state["suspend_step"]
-                                        and not fused_step_state["defer_step"]
-                                    ):
-                                        underlying_optimizer.step_param(tensor, p_group)
+                                        # Apply optimizer step to this parameter immediately
+                                        if (
+                                            accelerator.sync_gradients
+                                            and not fused_step_state["suspend_step"]
+                                            and not fused_step_state["defer_step"]
+                                        ):
+                                            underlying_optimizer.step_param(tensor, p_group)
 
-                                    # Clear gradient only when step is not being deferred.
-                                    if (
-                                        accelerator.sync_gradients
-                                        and not fused_step_state["suspend_step"]
-                                        and not fused_step_state["defer_step"]
-                                    ):
-                                        tensor.grad = None
+                                        # Clear gradient only when step is not being deferred.
+                                        if (
+                                            accelerator.sync_gradients
+                                            and not fused_step_state["suspend_step"]
+                                            and not fused_step_state["defer_step"]
+                                        ):
+                                            tensor.grad = None
 
-                                return grad_hook
+                                    return grad_hook
 
-                            parameter.register_post_accumulate_grad_hook(
-                                create_grad_hook(param_name, param_group)
-                            )
+                                parameter.register_post_accumulate_grad_hook(
+                                    create_grad_hook(param_name, param_group)
+                                )
 
-                logger.info("✅ Fused backward pass enabled (post-prepare)")
-            except ImportError:
-                logger.warning(
-                    "⚠️  Fused backward pass module not found, falling back to standard optimization"
-                )
-                self.fused_backward_pass = False
+                    logger.info("✅ Fused backward pass enabled (post-prepare)")
+                except ImportError:
+                    logger.warning(
+                        "⚠️  Fused backward pass module not found, falling back to standard optimization"
+                    )
+                    self.fused_backward_pass = False
 
         ewc_helper = create_ewc_helper(
             args=args,

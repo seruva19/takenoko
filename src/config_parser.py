@@ -100,6 +100,7 @@ from configs.vae_refinement_validation_config import (
     apply_vae_refinement_validation_profile,
 )
 from configs.neon_config import apply_neon_config
+from configs.badam_config import apply_badam_config
 
 
 def create_args_from_config(
@@ -502,6 +503,7 @@ def create_args_from_config(
     args.optimizer_type = config.get("optimizer_type", "")
     args.optimizer_args = config.get("optimizer_args", [])
     args = apply_q_galore_config(args, config, logger)
+    args = apply_badam_config(args, config, logger)
     args.ivon_ess = config.get("ivon_ess")
     args.learning_rate = config.get("learning_rate", 5e-5)
     from enhancements.motion_preservation.config_parser import (
