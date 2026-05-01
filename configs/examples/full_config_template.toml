@@ -297,120 +297,66 @@ optimizer_type = "adamw8bit"
 #
 # BAdam block-coordinate optimizer wrapper:
 # - Intended for full or partial DiT transformer fine-tuning, not normal LoRA.
-# - Disabled by default. Enable with badam_enabled=true while optimizer_type names the
-#   base optimizer, or set optimizer_type="BAdam" and badam_base_optimizer="AdamW".
-# - BAdam updates one inferred Wan block (`blocks.N.`) for badam_switch_block_every
-#   optimizer steps, then switches blocks according to badam_switch_mode.
-# - By default, active model parameters are cloned to FP32, optimized there, then
-#   copied back to the original fp16/bf16 model parameters, matching upstream BAdam's
-#   single-GPU memory/stability pattern.
-# - Non-block trainable tensors such as patch/time/text embeddings and final heads are
-#   always active by default when badam_include_non_block=true.
-# - Optimizer state is reset on block switches by default to keep memory bounded; this
-#   means Adam moments do not persist across inactive blocks, matching upstream BAdam.
-# - Current Takenoko implementation is single-process by default because DDP/ZeRO
-#   need additional validation when requires_grad changes between blocks.
+# - Activate with optimizer_type = "BAdam" (or "BAdamRatio" for the sparse variant).
+# - When BAdam is active, optimizer_args carries the wrapper's own kwargs and the
+#   wrapped base optimizer's kwargs go into base_optimizer_args.
+# - BAdam updates one inferred Wan block (`blocks.N.`) for switch_block_every optimizer
+#   steps, then switches blocks according to switch_mode.
+# - Active model parameters are cloned to FP32, optimized there, then copied back to
+#   the original fp16/bf16 model parameters (matches upstream BAdam single-GPU path).
+# - Non-block trainable tensors (patch/time/text embeddings, final heads) stay active
+#   every step when include_non_block=true.
+# - Base-optimizer state is reset on block switches by default; Adam moments do not
+#   persist across inactive blocks, matching upstream BAdam.
+# - Single-process by default because DDP/ZeRO need additional validation when
+#   requires_grad changes between blocks.
+#
 # Recommended starting point for Wan full fine-tuning:
 # optimizer_type = "BAdam"
-# badam_base_optimizer = "AdamW"
-# badam_switch_block_every = 100
-# badam_switch_mode = "random"
-# badam_block_prefix_mode = "wan_blocks"
 # learning_rate = 1e-6
+# optimizer_args = [
+#   "base_optimizer_type=AdamW",
+#   "switch_block_every=100",
+#   "switch_mode=random",
+#   "block_prefix_mode=wan_blocks",
+# ]
+# base_optimizer_args = ["weight_decay=0.01", "betas=(0.9,0.999)"]
 #
-# Sparse ratio variant from upstream BAdam:
-# - Use optimizer_type="BAdamRatio" or badam_ratio_mode=true.
-# - Updates only a ratio of entries per parameter via sparse Adam-style updates.
-# - Set max_grad_norm=0 if your PyTorch/Accelerate build cannot clip sparse gradients.
+# Sparse ratio variant (BAdamRatio): no wrapped base optimizer, the wrapper itself
+# emits sparse Adam updates. Pass ratio kwargs in optimizer_args, leave
+# base_optimizer_args empty. Set max_grad_norm=0 if your build cannot clip sparse
+# gradients.
 # optimizer_type = "BAdamRatio"
-# badam_update_ratio = 0.1
-# badam_ratio_mask_mode = "adjacent"
-badam_enabled = false
-badam_ratio_mode = false
-
-# Base optimizer wrapped by BAdam when optimizer_type="BAdam".
-# Ignored when badam_enabled=true and optimizer_type already names the base optimizer.
-badam_base_optimizer = "AdamW"
-
-# Number of synchronized optimizer steps to train each active block before switching.
-# Must be >= 1. The BAdam paper suggests min(max(dataset_size / (batch_size * blocks), 50), 100)
-# as a practical range; 100 is a conservative default for long video runs.
-badam_switch_block_every = 100
-
-# Block order: "random", "ascending", "descending", or "fixed".
-badam_switch_mode = "random"
-
-# Optional initial block index. Null/omitted selects the first block according to switch mode.
-# badam_start_block = 0
-
-# Block prefix discovery mode:
-# - "wan_blocks": infer block groups from trainable parameter names matching `blocks.N.`
-# - "custom": use badam_block_prefixes below
-# - "auto": currently equivalent to "wan_blocks"
-badam_block_prefix_mode = "wan_blocks"
-
-# Optional custom block prefixes. Each string is one block; each nested list is one
-# block containing multiple prefixes. Prefixes match by substring; use a trailing dot
-# to avoid accidental matches such as blocks.1 matching blocks.10.
-# badam_block_prefixes = ["blocks.0.", "blocks.1.", "blocks.2."]
-# badam_block_prefixes = [["blocks.0.self_attn.", "blocks.0.cross_attn."], ["blocks.0.ffn."]]
-
-# Keep trainable tensors outside inferred block prefixes active every step.
-# This avoids permanently freezing embeddings, final heads, helper tensors, and norms.
-badam_include_non_block = true
-
-# Upstream-style explicit inclusion switches for embedding/lm-head style params.
-# Useful when badam_include_non_block=false and you want these params as BAdam blocks.
-badam_include_embedding = false
-badam_include_lm_head = false
-
-# Additional name prefixes or regexes that should always remain active.
-# Prefixes match by substring. Regex entries use "re:<pattern>".
-badam_always_active_prefixes = []
-
-# Upstream alias for always-active prefixes.
-badam_active_modules = []
-
-# Clone the active block to FP32, optimize the clone, then copy back to model params.
-# true matches upstream BAdam's single-GPU path. false keeps the earlier stable-group
-# fallback that directly optimizes model parameters.
-badam_use_fp32_active_copy = true
-
-# Delete inactive optimizer state at each switch in low-precision fallback mode.
-badam_purge_inactive_state = true
-
-# Reset base optimizer state on every block switch.
-# true matches upstream BAdam and gives the main optimizer-state memory saving.
-badam_reset_state_on_switch = true
-
-# Per-parameter "fused-like" backward: register post-accumulate-grad hooks on each
-# active LP parameter, run a single-param base optimizer step on the HP fp32 copy
-# inside the hook, then write the updated weight back and free the LP/HP grads.
-# Net effect: gradient peak shrinks from a full active-block worth to per-tensor.
-# Combine with fused_backward_pass=true so the trainer wires the hooks after accelerator.prepare().
-# Requires badam_use_fp32_active_copy=true. Adds ~5-10% step overhead from per-param step
-# calls. Defer-aware: motion preservation defer/suspend flags hold HP grads until the classical batch step runs.
-badam_use_gradient_release = false
-
-# BAdamRatio only: fraction of each parameter updated per ratio step, in (0, 1].
-badam_update_ratio = 0.1
-
-# BAdamRatio only: "adjacent" follows contiguous parameter entries; "scatter" uses
-# a deterministic random permutation per parameter.
-badam_ratio_mask_mode = "adjacent"
-
-# BAdamRatio only: parameters smaller than this are fully sparsified instead of masked.
-badam_ratio_preserve_threshold = 100
-
-# BAdamRatio only: cache one sparse mask per tensor shape for speed.
-badam_ratio_keep_mask = true
-
-# Safety gates. Keep false unless you have validated these combinations locally.
-badam_allow_distributed = false
-badam_allow_unmatched_params = false
-
-# Logging verbosity: 0 quiet, 1 block summaries, 2 active parameter names.
-badam_verbose = 1
+# optimizer_args = [
+#   "switch_block_every=100",
+#   "update_ratio=0.1",
+#   "ratio_mask_mode=adjacent",
+# ]
+#
+# Recognized optimizer_args keys (BAdam wrapper):
+# - base_optimizer_type   (str, default "AdamW") - the wrapped optimizer; ignored for BAdamRatio
+# - switch_block_every    (int >= 1, default 100)
+# - switch_mode           ("random" | "ascending" | "descending" | "fixed", default "random")
+# - start_block           (int >= 0 or omitted) - initial active block index
+# - block_prefix_mode     ("wan_blocks" | "auto" | "custom", default "wan_blocks")
+# - block_prefixes        (list of str or list of list of str) - required when block_prefix_mode="custom"
+# - include_non_block     (bool, default true) - keep embeddings/heads active every step
+# - include_embedding     (bool, default false) - upstream-style explicit toggle
+# - include_lm_head       (bool, default false) - upstream-style explicit toggle
+# - always_active_prefixes (list of str) - extra name prefixes/regex that stay active
+# - active_modules        (list of str) - upstream alias for always_active_prefixes
+# - use_fp32_active_copy  (bool, default true) - clone active block to fp32 for the step
+# - purge_inactive_state  (bool, default true) - drop inactive state in low-precision fallback
+# - reset_state_on_switch (bool, default true) - reset base-optimizer state on every switch
+# - use_gradient_release  (bool, default false) - per-param post-accumulate-grad hook step;
+#                          requires use_fp32_active_copy=true and pairs with fused_backward_pass=true
+# - update_ratio          (float in (0, 1], default 0.1) - BAdamRatio only
+# - ratio_mask_mode       ("adjacent" | "scatter", default "adjacent") - BAdamRatio only
+# - ratio_preserve_threshold (int >= 0, default 100) - BAdamRatio only
+# - ratio_keep_mask       (bool, default true) - BAdamRatio only
+# - allow_distributed     (bool, default false) - safety gate; validate DDP/ZeRO before enabling
+# - allow_unmatched_params (bool, default false) - safety gate; allow non-transformer trainables
+# - verbose               (int 0..2, default 1)
 #
 # TorchAO low-precision AdamW arguments:
 # - Requires `torchao==0.15.0` or a compatible build exposing AdamW8bit / AdamW4bit / AdamWFp8.

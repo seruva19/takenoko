@@ -502,6 +502,7 @@ def create_args_from_config(
     # Optimizer settings
     args.optimizer_type = config.get("optimizer_type", "")
     args.optimizer_args = config.get("optimizer_args", [])
+    args.base_optimizer_args = config.get("base_optimizer_args", [])
     args = apply_q_galore_config(args, config, logger)
     args = apply_badam_config(args, config, logger)
     args.ivon_ess = config.get("ivon_ess")
