@@ -378,6 +378,7 @@ def _apply_q_galore_param_groups(
 
     all_linear = _is_all_linear(q_galore_target_modules)
     q_galore_params: List[torch.nn.Parameter] = []
+    q_galore_param_seen: set[int] = set()
 
     for module_name, module in transformer.named_modules():
         matched, used_regex = _matches_target_module(q_galore_target_modules, module_name, logger)
@@ -397,6 +398,10 @@ def _apply_q_galore_param_groups(
         if id(weight) not in trainable_param_ids and not allow_non_trainable:
             continue
 
+        weight_id = id(weight)
+        if weight_id in q_galore_param_seen:
+            continue
+        q_galore_param_seen.add(weight_id)
         q_galore_params.append(weight)
 
     if not q_galore_params:
@@ -470,14 +475,56 @@ def _apply_q_galore_param_groups(
         "queue_size": queue_size,
     }
 
+    if (
+        isinstance(trainable_params, list)
+        and trainable_params
+        and isinstance(trainable_params[0], dict)
+    ):
+        base_groups = trainable_params
+    else:
+        base_groups = [{"params": trainable_param_list}]
+
     q_galore_param_ids = {id(p) for p in q_galore_params}
-    non_q_galore_params = [
-        p for p in trainable_param_list if id(p) not in q_galore_param_ids
-    ]
     param_groups: List[Dict[str, Any]] = []
-    if non_q_galore_params:
-        param_groups.append({"params": non_q_galore_params})
-    param_groups.append({"params": q_galore_params, **q_galore_optim_kwargs})
+
+    def clone_group(
+        group: Dict[str, Any],
+        params: List[torch.nn.Parameter],
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        new_group = {key: value for key, value in group.items() if key != "params"}
+        new_group["params"] = params
+        if extra:
+            new_group.update(extra)
+        return new_group
+
+    assigned_q_galore_ids: set[int] = set()
+    for group in base_groups:
+        if not isinstance(group, dict):
+            raise TypeError("Optimizer parameter groups must be dictionaries.")
+        group_params = list(group.get("params", []))
+        if not group_params:
+            continue
+
+        regular_params = [p for p in group_params if id(p) not in q_galore_param_ids]
+        grouped_q_galore_params = [
+            p for p in group_params if id(p) in q_galore_param_ids
+        ]
+
+        if regular_params:
+            param_groups.append(clone_group(group, regular_params))
+        if grouped_q_galore_params:
+            assigned_q_galore_ids.update(id(p) for p in grouped_q_galore_params)
+            param_groups.append(
+                clone_group(group, grouped_q_galore_params, q_galore_optim_kwargs)
+            )
+
+    orphan_q_galore_params = [
+        p for p in q_galore_params if id(p) not in assigned_q_galore_ids
+    ]
+    if orphan_q_galore_params:
+        param_groups.append({"params": orphan_q_galore_params, **q_galore_optim_kwargs})
+
     trainable_params = param_groups
 
     logger.info(

@@ -10,6 +10,7 @@ import argparse
 import math
 import os
 import random
+import re
 from multiprocessing import Value
 from typing import Any, Dict, List, Optional
 import torch
@@ -1626,6 +1627,37 @@ class WanFinetuneTrainer:
         # Load transformer for direct fine-tuning
         transformer = self.prepare_transformer_for_finetuning(args, accelerator)
 
+        optimizer_type_raw = getattr(args, "optimizer_type", "") or "adafactor"
+        optimizer_type = optimizer_type_raw.lower()
+        q_galore_replaced_count = None
+        q_galore_types = {
+            "qgaloreadamw8bit",
+            "qgalore_adamw8bit",
+            "q_galore_adamw8bit",
+            "qgaloreadamw8bitlayerwise",
+            "qgalore_adamw8bit_layerwise",
+            "q_galore_adamw8bit_layerwise",
+        }
+        if optimizer_type in q_galore_types and getattr(
+            args, "q_galore_weight_quant", False
+        ):
+            replaced = self._apply_q_galore_weight_quantization(transformer, args)
+            q_galore_replaced_count = replaced
+            logger.info(
+                "Q-GaLore weight quantization applied to %d Linear modules.",
+                replaced,
+            )
+            if replaced == 0:
+                logger.warning(
+                    "Q-GaLore weight quantization enabled, but no Linear modules matched."
+                )
+        elif getattr(args, "q_galore_weight_quant", False):
+            logger.warning(
+                "q_galore_weight_quant is enabled, but optimizer_type='%s' "
+                "does not use Q-GaLore. Skipping weight quantization.",
+                optimizer_type_raw,
+            )
+
         # Conditionally load T5 text encoder for fine-tuning
         text_encoder = None
         if getattr(args, "finetune_text_encoder", False):
@@ -1827,8 +1859,6 @@ class WanFinetuneTrainer:
         if getattr(args, "verbose_network", False):
             NetworkLoggingUtils.log_detailed_network_info(transformer, args)
 
-        optimizer_type_raw = getattr(args, "optimizer_type", "") or "adafactor"
-        optimizer_type = optimizer_type_raw.lower()
         badam_gr = bool(getattr(args, "badam_use_gradient_release", False))
         if self.fused_backward_pass and optimizer_type != "adafactor" and not badam_gr:
             logger.warning(
@@ -1838,35 +1868,6 @@ class WanFinetuneTrainer:
                 optimizer_type_raw,
             )
             self.fused_backward_pass = False
-
-        q_galore_replaced_count = None
-        q_galore_types = {
-            "qgaloreadamw8bit",
-            "qgalore_adamw8bit",
-            "q_galore_adamw8bit",
-            "qgaloreadamw8bitlayerwise",
-            "qgalore_adamw8bit_layerwise",
-            "q_galore_adamw8bit_layerwise",
-        }
-        if optimizer_type in q_galore_types and getattr(
-            args, "q_galore_weight_quant", False
-        ):
-            replaced = self._apply_q_galore_weight_quantization(transformer, args)
-            q_galore_replaced_count = replaced
-            logger.info(
-                "Q-GaLore weight quantization applied to %d Linear modules.",
-                replaced,
-            )
-            if replaced == 0:
-                logger.warning(
-                    "Q-GaLore weight quantization enabled, but no Linear modules matched."
-                )
-        elif getattr(args, "q_galore_weight_quant", False):
-            logger.warning(
-                "q_galore_weight_quant is enabled, but optimizer_type='%s' "
-                "does not use Q-GaLore. Skipping weight quantization.",
-                optimizer_type_raw,
-            )
 
         if optimizer_type == "adafactor" and not getattr(args, "badam_enabled", False):
             logger.info("Creating Adafactor optimizer directly")
