@@ -2737,6 +2737,41 @@ class WanFinetuneTrainer:
         profiler = TrainingProfiler(args, accelerator.logging_dir)
         profiler.start()
 
+        if accelerator.is_main_process:
+            should_do_initial_sampling = ModelSavingUtils.should_sample_images(
+                args, global_step, epoch=0
+            )
+            if (
+                restored_step is not None
+                and should_do_initial_sampling
+                and getattr(args, "save_every_n_steps", None) is not None
+                and getattr(args, "sample_every_n_steps", None) is not None
+                and global_step % args.save_every_n_steps == 0
+                and global_step % args.sample_every_n_steps == 0
+            ):
+                should_do_initial_sampling = False
+            if (
+                should_do_initial_sampling
+                and self.sampling_manager is not None
+                and self.sample_parameters is not None
+            ):
+                try:
+                    logger.info(f"🎨 Generating initial samples at step {global_step}")
+                    with self.training_core._weight_ema_eval_context():
+                        self.sampling_manager.sample_images(
+                            accelerator=accelerator,
+                            args=args,
+                            epoch=0,
+                            steps=global_step,
+                            vae=vae,
+                            transformer=transformer,
+                            sample_parameters=self.sample_parameters,
+                            dit_dtype=self.mixed_precision_dtype,
+                        )
+                    last_sampled_step = global_step
+                except Exception as e:
+                    logger.warning(f"⚠️  Initial sampling failed at step {global_step}: {e}")
+
         for epoch in range(starting_epoch, max_epochs):
             logger.info(f"🔄 Starting epoch {epoch + 1}/{max_epochs}")
             training_model.train()
