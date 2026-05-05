@@ -628,6 +628,13 @@ def collect_and_log_training_metrics(
         logs["stable_velocity/target_bank_fill_ratio"] = float(
             loss_components.stable_velocity_target_bank_fill_ratio.item()
         )
+    pafm_metrics = getattr(loss_components, "pafm_metrics", None)
+    if isinstance(pafm_metrics, dict):
+        for key, value in pafm_metrics.items():
+            try:
+                logs[str(key)] = float(value.item() if hasattr(value, "item") else value)
+            except Exception:
+                pass
     if getattr(loss_components, "bfm_semfeat_loss", None) is not None:
         logs["loss/bfm_semfeat"] = float(loss_components.bfm_semfeat_loss.item())
     if getattr(loss_components, "bfm_semfeat_similarity", None) is not None:

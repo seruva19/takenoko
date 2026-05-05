@@ -362,6 +362,8 @@ class LossComponents:
         Fraction of StableVM-applied samples that used the per-shape global fallback bank.
     stable_velocity_target_bank_fill_ratio: Optional[torch.Tensor]
         Fill ratio of the active per-shape global memory bank relative to configured capacity.
+    pafm_metrics: Optional[Dict[str, torch.Tensor]]
+        Posterior-Augmented Flow Matching target-mixture diagnostics.
     reg_align_loss: Optional[torch.Tensor]
         The REG alignment loss, if enabled.
     reg_cls_loss: Optional[torch.Tensor]
@@ -635,6 +637,7 @@ class LossComponents:
     stable_velocity_target_fallback_ratio: Optional[torch.Tensor] = None
     stable_velocity_target_global_fallback_ratio: Optional[torch.Tensor] = None
     stable_velocity_target_bank_fill_ratio: Optional[torch.Tensor] = None
+    pafm_metrics: Optional[Dict[str, torch.Tensor]] = None
     reg_align_loss: Optional[torch.Tensor] = None
     reg_cls_loss: Optional[torch.Tensor] = None
     reg_similarity: Optional[torch.Tensor] = None

@@ -642,6 +642,7 @@ def run_validation_model_forward(
                 reg_cls_token=reg_cls_input,
                 model_timesteps_override=self_flow_model_timesteps,
                 context_override=context_override,
+                apply_pafm_target=False,
                 update_stable_velocity_target_bank=False,
             )
     finally:

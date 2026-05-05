@@ -18,6 +18,7 @@ from enhancements.catlvdm.config import parse_catlvdm_config
 from enhancements.moalign.config import parse_moalign_config
 from enhancements.temporal_pyramid.config import parse_temporal_pyramid_config
 from enhancements.ic_lora.config import parse_ic_lora_config
+from enhancements.pafm.config import parse_pafm_config
 from densedpo.config import parse_densedpo_config
 from memory.config import parse_memory_optimization_config
 from optimizers.q_galore_config import apply_q_galore_config
@@ -1627,6 +1628,7 @@ def create_args_from_config(
         "use_explicit_video_loss_reduction", False
     )
     args.enable_custom_loss_target = config.get("enable_custom_loss_target", False)
+    parse_pafm_config(config, args, logger)
 
     # Optical Flow Loss (RAFT-based) settings
     args.enable_optical_flow_loss = config.get("enable_optical_flow_loss", False)

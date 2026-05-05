@@ -2219,6 +2219,73 @@ band_balanced_low_freq_ratio = 0.5
 enable_custom_loss_target = false
 
 # =============================================================================
+# POSTERIOR-AUGMENTED FLOW MATCHING (PAFM) SETTINGS
+# =============================================================================
+
+# Enable Posterior-Augmented Flow Matching target mixtures.
+# When enabled, the standard flow target noise - latent) is replaced by a posterior-weighted mixture
+# of candidate target velocities from the current batch: v_j = (x_t - z_j) / t
+# Candidates always include the original sample, so K=1 exactly reduces to
+# the ordinary flow-matching target. PAFM is skipped on non-standard target
+# paths such as temporal pyramid stagewise targets, custom scheduler targets,
+# FluxFlow target perturbations, or CDC-FM's geometry-aware noise path.
+enable_pafm = false
+
+# Candidate proposal source for PAFM.
+# "in_batch_nearest": choose nearest latent targets within the current batch.
+# "in_batch_random": choose random current-batch latent targets.
+pafm_candidate_source = "in_batch_nearest"
+
+# Number of candidate targets K per sample, including the original sample.
+# Must be >= 1. Commonly used K values are in {4, 8, 16}; larger values
+# need larger effective batch groups to provide useful alternatives.
+pafm_num_candidates = 4
+
+# Minimum valid candidates required before applying a PAFM mixture to a sample.
+# Samples with fewer candidates fall back to their original target for that step.
+# Must be >= 1 and <= pafm_num_candidates.
+pafm_min_candidates = 2
+
+# Condition grouping used before selecting in-batch candidates.
+# "auto": use concept_id when available, otherwise dataset_index.
+# "concept_id": only candidates with the same dataset concept_id.
+# "dataset_index": only candidates from the same dataset entry.
+# "none": no grouping; all batch samples can be candidates.
+# For text-conditioned LoRA datasets, "auto" is the safest default because it
+# avoids mixing candidates across separately configured concepts.
+pafm_condition_source = "auto"
+
+# If true, fill missing same-condition candidate slots with nearest samples from
+# other conditions. Default false preserves condition compatibility over K.
+pafm_allow_cross_condition_fallback = false
+
+# Reduction for the Gaussian path likelihood distance.
+# "sum" matches the equation exp(-||x_t - (1-t)z_j||^2 / 2t^2).
+# "mean" divides by latent element count and can be useful if weights saturate
+# too strongly in high-dimensional video latents.
+pafm_likelihood_reduction = "sum"
+
+# Temperature applied to PAFM log weights before softmax.
+# 1.0 preserves the configured likelihood scale. Values > 1.0 soften weights;
+# values < 1.0 sharpen them. Must be > 0.
+pafm_weight_temperature = 1.0
+
+# Minimum interpolation t used for PAFM. Very small t makes v_j=(x_t-z_j)/t
+# singular, so samples below this value fall back to the original target.
+# Must be in [0, 1). Recommended default: 1e-4.
+pafm_t_min = 1e-4
+
+# Blend between the original target and the PAFM mixed target.
+# 1.0 uses full PAFM; 0.0 is a no-op despite enable_pafm=true.
+# Must be in [0, 1].
+pafm_blend = 1.0
+
+# Optional info logging cadence for PAFM diagnostics.
+# 0 disables periodic PAFM info logs. Positive value N logs approx every N
+# global steps on the main process.
+pafm_log_interval = 100
+
+# =============================================================================
 # ⚠️ MIXFLOW SETTINGS
 # =============================================================================
 

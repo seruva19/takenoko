@@ -51,6 +51,7 @@ from enhancements.isofm.helper import IsokineticFlowMatchingHelper
 from enhancements.reflexflow.reflexflow_helper import ReflexFlowHelper
 from enhancements.self_resampling.self_resampling_helper import SelfResamplingHelper
 from enhancements.stable_velocity.stablevm_target_helper import StableVMTargetHelper
+from enhancements.pafm.pafm_helper import PosteriorAugmentedFlowMatchingHelper
 
 
 from enhancements.differential_guidance.training_integration import (
@@ -390,6 +391,11 @@ class TrainingCore:
         self._last_mixflow_stats: Optional[Dict[str, float]] = None
         self.stablevm_target_helper: Optional[StableVMTargetHelper] = None
         self._last_stablevm_target_metrics: Dict[str, torch.Tensor] = {}
+        self.pafm_helper: Optional[PosteriorAugmentedFlowMatchingHelper] = None
+        self._last_pafm_metrics: Dict[str, torch.Tensor] = {}
+        self._warned_pafm_nonstandard_target = False
+        self._warned_pafm_fluxflow_target = False
+        self._warned_pafm_cdc_target = False
         self._last_flexam_metrics: Dict[str, float] = {}
         self._warned_dual_head_no_multiplier: bool = False
         self._warned_dual_head_teacher_failed: bool = False
@@ -618,6 +624,16 @@ class TrainingCore:
             except Exception:
                 setattr(loss_components, key, value)
 
+    def _attach_pafm_metrics(self, loss_components: Any) -> None:
+        metrics = self._last_pafm_metrics
+        if not metrics:
+            return
+        try:
+            setattr(loss_components, "pafm_metrics", dict(metrics))
+        except Exception:
+            if isinstance(loss_components, dict):
+                loss_components["pafm_metrics"] = dict(metrics)
+
     def _attach_flexam_metrics(self, loss_components: Any) -> None:
         metrics = self._last_flexam_metrics
         if not metrics:
@@ -627,6 +643,20 @@ class TrainingCore:
         except Exception:
             if isinstance(loss_components, dict):
                 loss_components["flexam_metrics"] = dict(metrics)
+
+    def initialize_pafm_target(self, args: argparse.Namespace) -> None:
+        """Initialize Posterior-Augmented Flow Matching target helper."""
+        self._last_pafm_metrics = {}
+        self.pafm_helper = PosteriorAugmentedFlowMatchingHelper(args)
+        if self.pafm_helper.enabled:
+            self.pafm_helper.setup_hooks()
+            logger.info(
+                "PAFM target helper enabled for training (source=%s, K=%d, condition=%s, blend=%.3f).",
+                self.pafm_helper.candidate_source,
+                self.pafm_helper.num_candidates,
+                self.pafm_helper.condition_source,
+                self.pafm_helper.blend,
+            )
 
     def initialize_stable_velocity_target(self, args: argparse.Namespace) -> None:
         """Initialize StableVM train-time target helper from parsed args."""
@@ -664,6 +694,7 @@ class TrainingCore:
         model_timesteps_override: Optional[torch.Tensor] = None,
         timestep_sign_override: Optional[torch.Tensor] = None,
         context_override: Optional[List[torch.Tensor]] = None,
+        apply_pafm_target: bool = True,
         apply_stable_velocity_target: bool = True,
         update_stable_velocity_target_bank: bool = True,
         return_intermediate: Optional[bool] = None,
@@ -692,6 +723,8 @@ class TrainingCore:
         """
         model = transformer
         _ = return_intermediate, override_target
+        if apply_pafm_target:
+            self._last_pafm_metrics = {}
         if apply_stable_velocity_target:
             self._last_stablevm_target_metrics = {}
         self._last_flexam_metrics = {}
@@ -1243,6 +1276,7 @@ class TrainingCore:
         # flow matching loss - compute target using perturbed latents if fluxflow is enabled
         # Support custom loss target computation
         enable_custom_target = getattr(args, "enable_custom_loss_target", False)
+        target_is_standard_flow = False
         if self.temporal_pyramid_target_helper is not None:
             if enable_custom_target:
                 if not self._warned_temporal_pyramid_custom_target:
@@ -1278,10 +1312,57 @@ class TrainingCore:
                 target = noise - perturbed_latents_for_target.to(
                     device=accelerator.device, dtype=network_dtype
                 )
+                target_is_standard_flow = True
         else:
             target = noise - perturbed_latents_for_target.to(
                 device=accelerator.device, dtype=network_dtype
             )
+            target_is_standard_flow = True
+
+        if (
+            apply_pafm_target
+            and apply_stable_velocity_target
+            and self.pafm_helper is not None
+            and self.pafm_helper.enabled
+        ):
+            fluxflow_enabled = bool(self.fluxflow_config.get("enable_fluxflow", False))
+            cdc_fm_enabled = bool(getattr(self.pafm_helper, "skip_for_cdc_fm", False))
+            if not target_is_standard_flow:
+                if not self._warned_pafm_nonstandard_target:
+                    logger.warning(
+                        "PAFM target helper skipped because the current step uses a non-standard loss target."
+                    )
+                    self._warned_pafm_nonstandard_target = True
+            elif fluxflow_enabled:
+                if not self._warned_pafm_fluxflow_target:
+                    logger.warning(
+                        "PAFM target helper skipped because FluxFlow perturbs the clean target independently."
+                    )
+                    self._warned_pafm_fluxflow_target = True
+            elif cdc_fm_enabled:
+                if not self._warned_pafm_cdc_target:
+                    logger.warning(
+                        "PAFM target helper skipped because CDC-FM changes the Gaussian noise path."
+                    )
+                    self._warned_pafm_cdc_target = True
+            else:
+                try:
+                    target = self.pafm_helper.apply_to_target(
+                        base_target=target,
+                        clean_latents=perturbed_latents_for_target.to(
+                            device=accelerator.device, dtype=network_dtype
+                        ),
+                        noisy_latents=noisy_model_input.to(
+                            device=accelerator.device, dtype=network_dtype
+                        ),
+                        batch=batch,
+                        global_step=global_step,
+                    )
+                    self._last_pafm_metrics = dict(self.pafm_helper.last_metrics)
+                except Exception as exc:
+                    if accelerator.is_main_process:
+                        logger.warning("PAFM target fallback to base target: %s", exc)
+                    self._last_pafm_metrics = {}
 
         if (
             ic_lora_conditioned_first_frame_mask is not None
@@ -1624,6 +1705,7 @@ class TrainingCore:
         self.haste_helper = haste_helper
         self.contrastive_attention_helper = contrastive_attention_helper
         self.controlnet = controlnet
+        self.initialize_pafm_target(args)
         self.initialize_stable_velocity_target(args)
         ortholora_helper = (
             OrthoLoRAHelper(args)
@@ -3073,6 +3155,7 @@ class TrainingCore:
                             self._attach_stable_velocity_target_metrics(
                                 loss_components
                             )
+                            self._attach_pafm_metrics(loss_components)
                             self._attach_flexam_metrics(loss_components)
 
                             # HFATO override: swap the FM base loss for the
