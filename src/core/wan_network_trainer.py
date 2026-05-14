@@ -1231,6 +1231,19 @@ class WanNetworkTrainer:
             lr_descriptions=lr_descriptions,
         )
 
+        try:
+            num_processes = int(getattr(accelerator, "num_processes", 1) or 1)
+            args.effective_batch_size = int(
+                args.gradient_accumulation_steps
+                * num_processes
+                * sum(
+                    int(getattr(d, "batch_size", 1))
+                    for d in train_dataset_group.datasets
+                )
+            )
+        except Exception:
+            args.effective_batch_size = None
+
         (
             optimizer_name,
             optimizer_args,
@@ -1464,7 +1477,7 @@ class WanNetworkTrainer:
             f"   • Gradient accumulation steps: {args.gradient_accumulation_steps}"
         )
         accelerator.print(
-            f"   • Effective batch size: {args.gradient_accumulation_steps * sum(d.batch_size for d in train_dataset_group.datasets):,}"
+            f"   • Effective batch size: {getattr(args, 'effective_batch_size', None) or args.gradient_accumulation_steps * sum(d.batch_size for d in train_dataset_group.datasets):,}"
         )
         accelerator.print(
             f"   • Batch sizes per device: {', '.join([str(d.batch_size) for d in train_dataset_group.datasets])}"

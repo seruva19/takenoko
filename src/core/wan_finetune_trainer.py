@@ -1869,6 +1869,19 @@ class WanFinetuneTrainer:
             )
             self.fused_backward_pass = False
 
+        try:
+            num_processes = int(getattr(accelerator, "num_processes", 1) or 1)
+            args.effective_batch_size = int(
+                args.gradient_accumulation_steps
+                * num_processes
+                * sum(
+                    int(getattr(d, "batch_size", 1))
+                    for d in train_dataset_group.datasets
+                )
+            )
+        except Exception:
+            args.effective_batch_size = None
+
         if optimizer_type == "adafactor" and not getattr(args, "badam_enabled", False):
             logger.info("Creating Adafactor optimizer directly")
             trainable_params = []

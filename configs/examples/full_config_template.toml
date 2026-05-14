@@ -282,6 +282,7 @@ dynamic_positional_activate_above_frames = 0
 # - "GaLoreAdamW", "GaLoreAdamW8bit", "GaLoreAdafactor": GaLore optimizers
 # - "QGaLoreAdamW8bit": Q-GaLore optimizer (requires q-galore-torch)
 # - "BAdam": Block-coordinate wrapper around a base optimizer for memory-saving full fine-tuning
+# - "SinkSGDAdv": adv-optm SinkSGD_adv with Sinkhorn normalization and spectral scaling
 # - "IVON": Bayesian optimizer that samples parameters each step (requires ivon_ess)
 # - "SPlus": SPlus optimizer (kvfrans/splus)
 # - "SOAP", "SophiaG", "Scion", etc. (see optimizer_manager.py)
@@ -380,6 +381,17 @@ optimizer_type = "adamw8bit"
 # - scale_factor: Scaling factor for updates (default: 0.2).
 # - sign_stabilization: Use sign stabilization (default: True).
 #
+# SinkSGDAdv-specific optimizer_args:
+# - Use optimizer_type = "SinkSGDAdv".
+# - Pass all settings through optimizer_args.
+# - lr: Optimizer learning rate. Recommended starting point: 0.01.
+# - orthogonal_sinkhorn: Apply row/column orthogonal projection during Sinkhorn normalization (default: true).
+# - spectral_normalization: Enable upstream spectral scaling for matrix updates (default: true).
+# - sinkhorn_iterations: Sinkhorn balancing passes (default: 5, valid range: >= 1).
+# - reference_batch_size: Baseline effective batch size for Takenoko LR scaling (default: 4).
+# - batch_scale_mode: Takenoko LR scaling rule using effective batch size ("off", "sqrt", "linear"; default: "sqrt").
+# - Any other adv_optm.optim.SinkSGD_adv kwarg can be passed by upstream name, e.g. momentum, weight_decay, normed_momentum, state_precision.
+#
 # NorMuon-specific arguments:
 # - beta2: Second moment coefficient (default: 0.95).
 #
@@ -437,6 +449,17 @@ optimizer_type = "adamw8bit"
 # optimizer_args = ["dion2_exclude_embeddings=True", "dion2_exclude_lm_head=True", "dion2_lm_head_lr_scale=0.05", "dion2_error_feedback=True", "dion2_distribute_work=True"]
 # optimizer_args = ["mano_momentum=0.95", "mano_nesterov=False", "mano_scale_factor=0.2", "mano_betas=(0.9,0.95)"]
 # optimizer_args = ["mano_exclude_embeddings=True", "mano_exclude_lm_head=True", "mano_exclude_name_patterns=['*.head.*']"]
+# optimizer_type = "SinkSGDAdv"
+# optimizer_args = [
+#   "lr=0.01",
+#   "orthogonal_sinkhorn=True",
+#   "spectral_normalization=True",
+#   "sinkhorn_iterations=5",
+#   "batch_scale_mode='sqrt'",
+#   "reference_batch_size=4",
+#   "momentum=0.9",
+#   "weight_decay=0.0",
+# ]
 #
 # Example for GaLore
 # optimizer_args = ["galore_rank=128", "galore_update_proj_gap=200", "galore_scale=0.25", "galore_proj_type='std'", "galore_apply_to='matrix_only'"]

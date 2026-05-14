@@ -539,6 +539,17 @@ class OptimizerManager:
             optimizer_class = SPlus
             optimizer = optimizer_class(trainable_params, lr=lr, **optimizer_kwargs)
 
+        elif optimizer_type in {"sinksgdadv", "sinksgd_adv", "sinksgd"}:
+            from optimizers.factory.custom_factory import create_sinksgd_adv_optimizer
+
+            optimizer_class, optimizer = create_sinksgd_adv_optimizer(
+                args,
+                trainable_params,
+                lr,
+                optimizer_kwargs,
+                logger,
+            )
+
         elif optimizer_type == "TemporalAdamW".lower():
             from optimizers.factory.custom_factory import (
                 create_temporal_adamw_optimizer,
