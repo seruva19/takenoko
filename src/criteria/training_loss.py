@@ -422,6 +422,8 @@ class LossComponents:
         The orthogonal regularization loss component for p, if enabled.
     ortho_reg_q: Optional[torch.Tensor]
         The orthogonal regularization loss component for q, if enabled.
+    ortho_hydra_balance_loss: Optional[torch.Tensor]
+        The unweighted Ortho-Hydra router load-balance loss, if enabled.
     mhc_identity_reg: Optional[torch.Tensor]
         The mHC-LoRA identity regularization loss component, if enabled.        
     mhc_entropy_reg: Optional[torch.Tensor]
@@ -671,6 +673,7 @@ class LossComponents:
     bfm_frn_loss: Optional[torch.Tensor] = None
     ortho_reg_p: Optional[torch.Tensor] = None
     ortho_reg_q: Optional[torch.Tensor] = None
+    ortho_hydra_balance_loss: Optional[torch.Tensor] = None
     mhc_identity_reg: Optional[torch.Tensor] = None
     mhc_entropy_reg: Optional[torch.Tensor] = None
     lorweb_entropy_reg: Optional[torch.Tensor] = None
@@ -3085,6 +3088,27 @@ class TrainingLossComputer:
         except Exception as e:
             logger.warning(f"Orthogonal LoRA regularization failed: {e}")
 
+        # ---- Optional Ortho-Hydra router load-balancing loss ----
+        ortho_hydra_balance_val: Optional[torch.Tensor] = None
+        try:
+            if network is not None and hasattr(network, "get_ortho_hydra_balance_loss"):
+                if hasattr(network, "step_ortho_hydra_balance_warmup"):
+                    network.step_ortho_hydra_balance_warmup(global_step)
+                weight = float(
+                    getattr(
+                        network,
+                        "ortho_hydra_current_balance_loss_weight",
+                        getattr(network, "ortho_hydra_balance_loss_weight", 0.0),
+                    )
+                    or 0.0
+                )
+                if weight > 0.0:
+                    balance_loss = network.get_ortho_hydra_balance_loss()
+                    loss = loss + weight * balance_loss
+                    ortho_hydra_balance_val = balance_loss.detach()
+        except Exception as e:
+            logger.warning(f"Ortho-Hydra balance loss failed: {e}")
+
         # ---- Optional mHC-LoRA identity regularization ----
         mhc_identity_val: Optional[torch.Tensor] = None
         try:
@@ -3290,6 +3314,7 @@ class TrainingLossComputer:
             bfm_frn_loss=bfm_frn_loss_value,
             ortho_reg_p=ortho_p_val,
             ortho_reg_q=ortho_q_val,
+            ortho_hydra_balance_loss=ortho_hydra_balance_val,
             mhc_identity_reg=mhc_identity_val,
             mhc_entropy_reg=mhc_entropy_val,
             lorweb_entropy_reg=lorweb_entropy_val,

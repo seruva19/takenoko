@@ -74,6 +74,7 @@ from configs.adalora_config import apply_adalora_config
 from configs.mora_config import apply_mora_config
 from configs.flex_config import apply_flex_config
 from configs.oftv2_config import apply_oftv2_config
+from configs.ortho_hydra_config import apply_ortho_hydra_config
 from configs.vera_config import apply_vera_config
 from configs.stella_config import apply_stella_config
 from configs.vblora_config import apply_vblora_config
@@ -632,6 +633,7 @@ def create_args_from_config(
     apply_adalora_config(args, config, logger)
     apply_mora_config(args, config, logger)
     apply_oftv2_config(args, config, logger)
+    apply_ortho_hydra_config(args, config, logger)
     apply_vera_config(args, config, logger)
     apply_stella_config(args, config, logger)
     apply_vblora_config(args, config, logger)

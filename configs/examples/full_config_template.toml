@@ -845,7 +845,7 @@ lr_scheduler_args = ''
 # "networks.reward_lora", "networks.vae_wan", "lycoris.kohya", "networks.t_lora", "networks.tc_lora_wan", "networks.moc_lora",
 # "networks.mhc_lora", "networks.lorweb_lora_wan", "networks.singlora_wan", "networks.wan_finetune", "networks.slider_lora_wan",
 # "networks.relora_wan", "networks.adalora_wan", "networks.mora_wan", "networks.vera_wan", "networks.stella_wan", "networks.cdka_wan",
-# "networks.oftv2_wan", "networks.qlora_wan", "networks.video2lora_wan"
+# "networks.oftv2_wan", "networks.ortho_hydra_wan", "networks.qlora_wan", "networks.video2lora_wan"
 # The module defines trainable adapters and is imported dynamically by the trainer.
 network_module = "networks.lora_wan"
 
@@ -919,6 +919,35 @@ network_alpha = 32
 # - optional "pissa_niter=4" can be used with "initialize=pissa"
 # Recommended with network_dropout = 0 to match PiSSA paper/PEFT defaults.
 # network_args = ["initialize=pissa_niter_4"]
+
+# Ortho-Hydra (orthogonalized routed experts for DiT LoRA)
+# Default: disabled. Enable only by selecting network_module = "networks.ortho_hydra_wan"
+# and adding "ortho_hydra_enabled=true" to network_args.
+# Ortho-Hydra replaces each targeted Linear LoRA adapter with:
+# - a frozen SVD input basis shared by all experts
+# - disjoint frozen output bases per expert when num_experts * network_dim fits the layer rank
+# - trainable Cayley rotations, rank gains, and a layer-local router
+# It is training and checkpoint-load compatible inside Takenoko, but routed adapters are not
+# statically mergeable to a base DiT without losing routing behavior.
+# Parameters are supplied through network_args:
+# - ortho_hydra_enabled: bool, must be true when using networks.ortho_hydra_wan
+# - ortho_hydra_num_experts: int >= 2 (default 4)
+# - ortho_hydra_balance_loss_weight: float >= 0 (default 0.001)
+# - ortho_hydra_balance_warmup_steps: int >= 0 (default 0)
+# - ortho_hydra_svd_niter: int >= 0 (default 2)
+# - ortho_hydra_router_init_std: float >= 0 (default 0.01)
+# Example:
+# network_module = "networks.ortho_hydra_wan"
+# network_dim = 16
+# network_alpha = 16
+# network_args = [
+#   "ortho_hydra_enabled=true",
+#   "ortho_hydra_num_experts=4",
+#   "ortho_hydra_balance_loss_weight=0.001",
+#   "ortho_hydra_balance_warmup_steps=0",
+#   "ortho_hydra_svd_niter=2",
+#   "ortho_hydra_router_init_std=0.01"
+# ]
 
 # OFTv2 (Orthogonal Finetuning v2, training-only)
 # Requires: network_module = "networks.oftv2_wan"

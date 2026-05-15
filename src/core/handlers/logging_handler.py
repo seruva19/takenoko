@@ -184,6 +184,23 @@ def collect_and_log_training_metrics(
         pass
 
     try:
+        unwrapped_network = accelerator.unwrap_model(network)
+        if hasattr(unwrapped_network, "get_ortho_hydra_router_stats"):
+            ortho_hydra_stats = unwrapped_network.get_ortho_hydra_router_stats()
+            if isinstance(ortho_hydra_stats, dict):
+                logs.update(ortho_hydra_stats)
+            logs["ortho_hydra/balance_weight"] = float(
+                getattr(
+                    unwrapped_network,
+                    "ortho_hydra_current_balance_loss_weight",
+                    getattr(unwrapped_network, "ortho_hydra_balance_loss_weight", 0.0),
+                )
+                or 0.0
+            )
+    except Exception:
+        pass
+
+    try:
         unwrapped_transformer = accelerator.unwrap_model(transformer)
         if hasattr(
             unwrapped_transformer,
@@ -203,6 +220,10 @@ def collect_and_log_training_metrics(
         logs["loss/mse"] = float(base_loss_val.item())
     if loss_components.dispersive_loss is not None:
         logs["loss/dispersive"] = float(loss_components.dispersive_loss.item())
+    if getattr(loss_components, "ortho_hydra_balance_loss", None) is not None:
+        logs["loss/ortho_hydra_balance"] = float(
+            loss_components.ortho_hydra_balance_loss.item()
+        )
     if loss_components.dop_loss is not None:
         logs["loss/dop"] = float(loss_components.dop_loss.item())
     if getattr(loss_components, "blank_prompt_loss", None) is not None:
