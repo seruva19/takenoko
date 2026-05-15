@@ -9009,6 +9009,49 @@ vae_latent_degradation_noise_std = 0.0
 # Lower values let the decoder see a mix of clean and degraded latents during refinement.
 vae_latent_degradation_apply_prob = 1.0
 
+# Predictive Video VAE objective. Default: false.
+# Only valid with network_module = "networks.vae_wan" and video batches.
+# During VAE training, Takenoko encodes only an observed prefix of each video, pads the
+# missing latent groups with uninformative prior latents, and decodes the full sequence.
+# This is intended to shape VAE latents toward predictive motion structure. It changes
+# the trained VAE/tokenizer, so downstream latents should be re-cached before LoRA/DiT work.
+enable_pv_vae = false
+
+# Temporal compression factor used to map video frames to latent temporal groups.
+# Wan video VAE convention is first frame + groups of 4 frames, so default is 4.
+pv_vae_temporal_compression = 4
+
+# Maximum fraction of latent temporal groups that may be withheld from the encoder.
+# Must be in [0, 1]. 
+pv_vae_max_drop_ratio = 1.0
+
+# Minimum latent groups kept visible to the encoder. Must be >= 1.
+# The first frame/group is always retained by keeping this at 1.
+pv_vae_min_observed_groups = 1
+
+# Minimum latent groups dropped when PV-VAE is active. Must be >= 0.
+# Set to 0 to mix standard reconstruction steps with predictive reconstruction.
+pv_vae_min_drop_groups = 1
+
+# Latent padding for withheld future groups.
+# "gaussian": sample standard normal prior latents, matching the paper's uninformative prior option.
+# "zeros": deterministic zero padding for debugging.
+# Learnable padding is intentionally not exposed here because Takenoko's current VAE optimizer
+# only owns VAE parameters, and adding standalone trainables would require checkpoint/state wiring.
+pv_vae_padding_mode = "gaussian"
+
+# Optional motion-aware temporal-difference reconstruction loss.
+# Total contribution is pv_vae_temporal_diff_weight * L(delta(recon), delta(target)).
+# Set to 0.0 to disable.
+pv_vae_temporal_diff_weight = 0.0
+
+# Temporal-difference loss type: "l1", "mse", or "huber".
+pv_vae_temporal_diff_loss = "l1"
+
+# Apply predictive reconstruction during validation too. Default false keeps validation
+# on standard full-video reconstruction for easier comparison.
+pv_vae_apply_in_validation = false
+
 # =============================================================================
 # ⚠️ ONLINE SELF-CORRECTION SETTINGS
 # =============================================================================

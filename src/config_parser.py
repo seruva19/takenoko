@@ -59,6 +59,7 @@ from configs.stable_velocity_config import apply_stable_velocity_config
 from configs.structure_from_tracking_config import (
     apply_structure_from_tracking_config,
 )
+from enhancements.pv_vae.config import apply_pv_vae_config
 from configs.tc_lora_config import parse_tc_lora_config
 from configs.lorweb_config import apply_lorweb_config
 from configs.delta_time_sampling_config import apply_delta_time_sampling_config
@@ -582,6 +583,7 @@ def create_args_from_config(
     args.network_alpha = config.get("network_alpha", 32)
     args.network_weights = config.get("network_weights")
     args.network_dropout = config.get("network_dropout", 0)
+    apply_pv_vae_config(args, config, logger)
 
     # Slider training configuration (detected by network_module)
     args.slider_guidance_strength = config.get("slider_guidance_strength", 3.0)

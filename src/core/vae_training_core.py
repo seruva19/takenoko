@@ -31,6 +31,12 @@ from utils.sensecraft_utils import (
     prepare_sensecraft_loss_tensors,
 )
 from utils.vae_latent_degradation import apply_vae_latent_degradation
+from enhancements.pv_vae.helper import (
+    PVVAEContext,
+    compute_pv_vae_temporal_difference_loss,
+    pad_pv_vae_latents,
+    prepare_pv_vae_observed_video,
+)
 
 import logging
 from common.logger import get_logger
@@ -163,6 +169,7 @@ class VaeTrainingCore:
         self._sample_images_dir: Optional[str] = None
         self._sample_max_frames: int = 16
         self._last_validation_logs: Dict[str, float] = {}
+        self._last_pv_vae_context: Optional[PVVAEContext] = None
 
     def _maybe_degrade_latent(
         self,
@@ -308,6 +315,7 @@ class VaeTrainingCore:
         use_latent_mean: bool = False,
         reconstruction_loss_type: str = "mse",
         sobel_fn: Optional[Callable[[torch.Tensor], torch.Tensor]] = None,
+        pv_vae_context: Optional[PVVAEContext] = None,
     ) -> Tuple[torch.Tensor, Dict[str, Any]]:
         """Compute VAE losses including optional perceptual terms."""
 
@@ -318,6 +326,7 @@ class VaeTrainingCore:
             "edge": 0.0,
             "sensecraft": 0.0,
             "kl": 1e-6,
+            "pv_temporal_diff": 0.0,
         }
 
         primary = reconstruction_loss_type.lower()
@@ -399,6 +408,20 @@ class VaeTrainingCore:
         else:
             loss_dict["sensecraft"] = reconstructed_f32.new_zeros(())
             loss_dict["sensecraft_terms"] = sensecraft_terms
+
+        pv_temporal_diff_loss = compute_pv_vae_temporal_difference_loss(
+            reconstructed_f32,
+            original_f32,
+            pv_vae_context,
+        )
+        if (
+            pv_temporal_diff_loss is not None
+            and weights.get("pv_temporal_diff", 0.0) > 0.0
+        ):
+            loss_dict["pv_temporal_diff"] = pv_temporal_diff_loss
+            abs_losses["pv_temporal_diff"] = pv_temporal_diff_loss
+        else:
+            loss_dict["pv_temporal_diff"] = reconstructed_f32.new_zeros(())
 
         kl_weight = weights.get("kl", 0.0)
         if (
@@ -660,13 +683,29 @@ class VaeTrainingCore:
         if hasattr(vae_module, "module"):
             vae_module = vae_module.module
 
+        module_training = bool(
+            getattr(
+                vae_module,
+                "training",
+                getattr(getattr(vae_module, "model", None), "training", True),
+            )
+        )
+        self._last_pv_vae_context = None
+        encode_images, pv_vae_context = prepare_pv_vae_observed_video(
+            args,
+            images,
+            training=module_training,
+        )
+
         with accelerator.autocast():
             if hasattr(vae_module, "encode") and hasattr(vae_module, "decode"):
-                encoded = vae_module.encode(images)
+                encoded = vae_module.encode(encode_images)
                 latent, mu, logvar = self._extract_latent_stats(
                     encoded, use_latent_mean
                 )
-                decode_latent = self._maybe_degrade_latent(args, latent)
+                decode_latent = pad_pv_vae_latents(latent, pv_vae_context)
+                self._last_pv_vae_context = pv_vae_context
+                decode_latent = self._maybe_degrade_latent(args, decode_latent)
                 reconstructed = self._decode_output(vae_module.decode(decode_latent))
             else:
                 output = vae_module(images)
@@ -702,6 +741,7 @@ class VaeTrainingCore:
             "edge": [],
             "sensecraft": [],
             "kl": [],
+            "pv_temporal_diff": [],
         }
         sensecraft_term_tensors: Dict[str, list[torch.Tensor]] = {}
 
@@ -753,6 +793,7 @@ class VaeTrainingCore:
                         args, "vae_reconstruction_loss", "mse"
                     ),
                     sobel_fn=self._sobel_fn,
+                    pv_vae_context=self._last_pv_vae_context,
                 )
 
                 losses.append(val_loss.detach())
@@ -841,6 +882,11 @@ class VaeTrainingCore:
                 else 0.0
             ),
             "kl": float(getattr(args, "vae_kl_weight", 1e-6)),
+            "pv_temporal_diff": (
+                float(getattr(args, "pv_vae_temporal_diff_weight", 0.0))
+                if bool(getattr(args, "enable_pv_vae", False))
+                else 0.0
+            ),
         }
         reconstruction_loss_type, loss_weights = self._apply_refinement_profile(
             args,
@@ -913,12 +959,13 @@ class VaeTrainingCore:
             self._lpips_model = None
 
         logger.info(
-            "Starting VAE training with weights %s, reconstruction loss=%s, latent_mean=%s, sensecraft_enabled=%s, latent_degradation=%s",
+            "Starting VAE training with weights %s, reconstruction loss=%s, latent_mean=%s, sensecraft_enabled=%s, latent_degradation=%s, pv_vae=%s",
             self._loss_weights,
             reconstruction_loss_type,
             self._use_latent_mean,
             bool(getattr(args, "vae_enable_sensecraft_loss", False)),
             bool(getattr(args, "vae_enable_latent_degradation", False)),
+            bool(getattr(args, "enable_pv_vae", False)),
         )
 
         for epoch in range(num_train_epochs):
@@ -992,6 +1039,7 @@ class VaeTrainingCore:
                         use_latent_mean=self._use_latent_mean,
                         reconstruction_loss_type=reconstruction_loss_type,
                         sobel_fn=self._sobel_fn,
+                        pv_vae_context=self._last_pv_vae_context,
                     )
 
                     # Apply sample weights if present
@@ -1129,10 +1177,21 @@ class VaeTrainingCore:
                     "vae/loss/average": avr_loss,
                 }
 
-                for term in ("mse", "mae", "lpips", "edge", "sensecraft", "kl"):
+                for term in (
+                    "mse",
+                    "mae",
+                    "lpips",
+                    "edge",
+                    "sensecraft",
+                    "kl",
+                    "pv_temporal_diff",
+                ):
                     value = loss_dict.get(term)
                     if isinstance(value, torch.Tensor):
                         logs[f"vae/loss/{term}"] = float(value.detach().item())
+
+                if self._last_pv_vae_context is not None:
+                    logs.update(self._last_pv_vae_context.to_log_dict())
 
                 sensecraft_terms = loss_dict.get("sensecraft_terms", {}) or {}
                 for key, value in sensecraft_terms.items():
