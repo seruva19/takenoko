@@ -348,6 +348,10 @@ class LossComponents:
         The MOALIGN motion-centric relational alignment loss, if enabled.
     repa_loss: Optional[torch.Tensor]
         The REPA alignment loss, if enabled.
+    m2_repa_align_loss: Optional[torch.Tensor]
+        The unweighted M2-REPA cosine expert-alignment loss, if enabled.
+    m2_repa_decouple_loss: Optional[torch.Tensor]
+        The unweighted M2-REPA CKA decoupling loss, if enabled.
     stable_velocity_weight_mean: Optional[torch.Tensor]
         Mean StableVelocity weight applied to REPA samples (if enabled).
     stable_velocity_active_ratio: Optional[torch.Tensor]
@@ -630,6 +634,8 @@ class LossComponents:
     soar_sigma_tprime_mean: Optional[torch.Tensor] = None
     moalign_loss: Optional[torch.Tensor] = None
     repa_loss: Optional[torch.Tensor] = None
+    m2_repa_align_loss: Optional[torch.Tensor] = None
+    m2_repa_decouple_loss: Optional[torch.Tensor] = None
     stable_velocity_weight_mean: Optional[torch.Tensor] = None
     stable_velocity_active_ratio: Optional[torch.Tensor] = None
     stable_velocity_target_applied_ratio: Optional[torch.Tensor] = None
@@ -2256,6 +2262,8 @@ class TrainingLossComputer:
         sara_loss_value: Optional[torch.Tensor] = None
         moalign_loss_value: Optional[torch.Tensor] = None
         repa_loss_value: Optional[torch.Tensor] = None
+        m2_repa_align_loss_value: Optional[torch.Tensor] = None
+        m2_repa_decouple_loss_value: Optional[torch.Tensor] = None
         stable_velocity_weight_mean_value: Optional[torch.Tensor] = None
         stable_velocity_active_ratio_value: Optional[torch.Tensor] = None
         if sara_helper is not None:
@@ -2366,6 +2374,14 @@ class TrainingLossComputer:
                         repa_val = repa_helper.get_repa_loss(clean_pixels, vae)
                     loss = loss + repa_val
                     repa_loss_value = repa_val.detach()
+                    m2_metrics = getattr(repa_helper, "last_m2_repa_metrics", None)
+                    if isinstance(m2_metrics, dict):
+                        m2_align = m2_metrics.get("m2_repa_align_loss")
+                        if torch.is_tensor(m2_align):
+                            m2_repa_align_loss_value = m2_align.detach()
+                        m2_decouple = m2_metrics.get("m2_repa_decouple_loss")
+                        if torch.is_tensor(m2_decouple):
+                            m2_repa_decouple_loss_value = m2_decouple.detach()
                     sv_metrics = getattr(
                         repa_helper, "last_stable_velocity_metrics", None
                     )
@@ -3247,6 +3263,8 @@ class TrainingLossComputer:
             soar_sigma_tprime_mean=soar_sigma_tprime_mean_value,
             moalign_loss=moalign_loss_value,
             repa_loss=repa_loss_value,
+            m2_repa_align_loss=m2_repa_align_loss_value,
+            m2_repa_decouple_loss=m2_repa_decouple_loss_value,
             stable_velocity_weight_mean=stable_velocity_weight_mean_value,
             stable_velocity_active_ratio=stable_velocity_active_ratio_value,
             reg_align_loss=reg_align_loss_value,

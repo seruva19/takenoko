@@ -67,6 +67,9 @@ from enhancements.motion_preservation.trainer_integration import (
 from enhancements.repa.trainer_integration import (
     maybe_add_vae_repa_params_for_finetune,
 )
+from enhancements.m2_repa.trainer_integration import (
+    maybe_add_m2_repa_params_for_finetune,
+)
 from enhancements.blockwise_flow_matching.conditioning import (
     BFMConditioningHelper,
     infer_text_context_dim,
@@ -1502,6 +1505,7 @@ class WanFinetuneTrainer:
             or getattr(args, "sara_enabled", False)
             or getattr(args, "enable_repa", False)
             or getattr(args, "enable_videorepa", False)
+            or getattr(args, "enable_m2_repa", False)
             or getattr(args, "enable_moalign", False)
             or getattr(args, "enable_semanticgen_lora", False)
             or getattr(args, "semantic_align_enabled", False)
@@ -1567,6 +1571,7 @@ class WanFinetuneTrainer:
                 or getattr(args, "sara_enabled", False)
                 or getattr(args, "enable_repa", False)
                 or getattr(args, "enable_videorepa", False)
+                or getattr(args, "enable_m2_repa", False)
                 or getattr(args, "enable_moalign", False)
                 or getattr(args, "load_val_pixels", False)
             )
@@ -1765,6 +1770,23 @@ class WanFinetuneTrainer:
             except Exception as exc:
                 logger.warning(f"VideoREPA setup failed: {exc}")
                 videorepa_helper = None
+
+        m2_repa_helper = None
+        if getattr(args, "enable_m2_repa", False):
+            try:
+                from enhancements.m2_repa.m2_repa_helper import M2RepaHelper
+
+                logger.info("M2-REPA is enabled. Initializing helper module.")
+                m2_repa_helper = M2RepaHelper(transformer, args)
+                maybe_add_m2_repa_params_for_finetune(
+                    params_to_optimize,
+                    param_names,
+                    m2_repa_helper,
+                    args,
+                )
+            except Exception as exc:
+                logger.warning(f"M2-REPA setup failed: {exc}")
+                m2_repa_helper = None
 
         vae_repa_helper = None
         if getattr(args, "enable_vae_repa", False):
@@ -2401,7 +2423,20 @@ class WanFinetuneTrainer:
         repa_helper = None
         haste_helper = None
         contrastive_attention_helper = None
-        if videorepa_helper is not None:
+        if m2_repa_helper is not None:
+            try:
+                repa_helper = m2_repa_helper
+                repa_helper.setup_hooks()
+                repa_helper = accelerator.prepare(repa_helper)
+                logger.info("M2-REPA helper initialized")
+            except Exception as e:
+                logger.warning(f"Failed to initialize M2-REPA helper: {e}")
+                try:
+                    m2_repa_helper.remove_hooks()
+                except Exception:
+                    pass
+                repa_helper = None
+        elif videorepa_helper is not None:
             try:
                 repa_helper = videorepa_helper
                 repa_helper.setup_hooks()

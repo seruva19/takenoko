@@ -64,6 +64,7 @@ from enhancements.structure_from_tracking.trainer_integration import (
     maybe_precompute_sft_teacher_cache_before_training,
 )
 from enhancements.repa.trainer_integration import maybe_add_vae_repa_params_for_lora
+from enhancements.m2_repa.trainer_integration import maybe_add_m2_repa_params_for_lora
 from enhancements.blockwise_flow_matching.conditioning import (
     BFMConditioningHelper,
     infer_text_context_dim,
@@ -499,6 +500,7 @@ class WanNetworkTrainer:
             or getattr(args, "sara_enabled", False)
             or getattr(args, "enable_repa", False)
             or getattr(args, "enable_videorepa", False)
+            or getattr(args, "enable_m2_repa", False)
             or getattr(args, "enable_structure_from_tracking", False)
             or getattr(args, "enable_moalign", False)
             or getattr(args, "enable_semanticgen_lora", False)
@@ -571,6 +573,7 @@ class WanNetworkTrainer:
                 or getattr(args, "sara_enabled", False)
                 or getattr(args, "enable_repa", False)
                 or getattr(args, "enable_videorepa", False)
+                or getattr(args, "enable_m2_repa", False)
                 or getattr(args, "enable_structure_from_tracking", False)
                 or getattr(args, "enable_moalign", False)
                 or getattr(args, "load_val_pixels", False)
@@ -1010,6 +1013,23 @@ class WanNetworkTrainer:
             except Exception as exc:
                 logger.warning(f"VideoREPA setup failed: {exc}")
                 videorepa_helper = None
+
+        m2_repa_helper = None
+        if getattr(args, "enable_m2_repa", False):
+            try:
+                from enhancements.m2_repa.m2_repa_helper import M2RepaHelper
+
+                logger.info("M2-REPA is enabled. Initializing helper module.")
+                m2_repa_helper = M2RepaHelper(transformer, args)
+                maybe_add_m2_repa_params_for_lora(
+                    trainable_params,
+                    lr_descriptions,
+                    m2_repa_helper,
+                    args,
+                )
+            except Exception as exc:
+                logger.warning(f"M2-REPA setup failed: {exc}")
+                m2_repa_helper = None
 
         vae_repa_helper = None
         if getattr(args, "enable_vae_repa", False):
@@ -1943,6 +1963,21 @@ class WanNetworkTrainer:
                         sara_helper.configure_accelerator(accelerator)
                     sara_helper.setup_hooks()
                     sara_helper = accelerator.prepare(sara_helper)
+            elif m2_repa_helper is not None:
+                try:
+                    logger.info(
+                        "M2-REPA is enabled. Setting up the multi-expert helper."
+                    )
+                    repa_helper = m2_repa_helper
+                    repa_helper.setup_hooks()
+                    repa_helper = accelerator.prepare(repa_helper)
+                except Exception as exc:
+                    logger.warning(f"M2-REPA hook setup failed: {exc}")
+                    try:
+                        m2_repa_helper.remove_hooks()
+                    except Exception:
+                        pass
+                    repa_helper = None
             elif videorepa_helper is not None:
                 try:
                     logger.info(

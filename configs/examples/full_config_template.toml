@@ -3298,6 +3298,132 @@ repa_shared_projection = false
 repa_spatial_align = true
 
 # =============================================================================
+# ⚠️ M2-REPA (DECOUPLED MULTI-EXPERT REPRESENTATION ALIGNMENT)
+# =============================================================================
+
+# Enable M2-REPA-multi-expert alignment during training.
+# This is train-time only and does not affect LoRA inference behavior.
+# Mutually exclusive with enable_repa, enable_irepa, enable_videorepa,
+# enable_moalign, crepa_enabled, sara_enabled, and enable_structure_from_tracking.
+enable_m2_repa = false
+
+# Comma-separated expert encoder list. At least two experts are required when
+# enable_m2_repa = true; each expert gets its own MLP decoupling head.
+# Supported by the current EncoderManager:
+# - DINOv2: "dinov2-vit-s", "dinov2-vit-b", "dinov2-vit-l", "dinov2-vit-g"
+# - CLIP: "clip-vit-B", "clip-vit-L" when CLIP dependencies are installed
+# - MoCo-v3: "mocov3-vit-s", "mocov3-vit-b", "mocov3-vit-l"
+# - MAE: "mae-vit-b", "mae-vit-l", "mae-vit-h"
+# - I-JEPA: "jepa-vit-h", "jepa-vit-g"
+# M2-REPA also supports SAM-family segmentation experts through the existing
+# Structure-From-Tracking teacher path:
+# - "sam2" uses m2_repa_sam_model_id / m2_repa_sam_checkpoint below
+# - "sam2:<huggingface-model-id>" overrides the model ID inline
+# - "sam3:<huggingface-model-id>" is accepted only when local transformers
+#   provides Sam3Model support
+# Depth Anything V2 depth experts are also supported through transformers:
+# - "depth-anything-v2" uses m2_repa_depth_model_id / checkpoint below
+# - "depth-anything-v2-small", "depth-anything-v2-base", "depth-anything-v2-large"
+# - "depth-anything-v2:<huggingface-model-id>" for a custom Transformers checkpoint
+# For paper-style value, use complementary experts rather than duplicates.
+m2_repa_encoder_names = "dinov2-vit-b,dinov2-vit-l"
+
+# Expert input resolution. 256 is the broadest-supported setting; 512 is DINOv2-only.
+m2_repa_input_resolution = 256
+
+# Diffusion block index used for alignment (0-based).
+# Earlier/mid blocks usually work better for representation shaping.
+m2_repa_alignment_depth = 8
+
+# Optional multi-layer alignment depths. If set, overrides m2_repa_alignment_depth.
+# Example: m2_repa_alignment_depths = [8, 12, 16]
+# m2_repa_alignment_depths = [8]
+
+# Cosine alignment loss weight for matching each decoupled diffusion feature
+# to its corresponding frozen expert feature. Must be > 0 when enabled.
+m2_repa_align_lambda = 0.5
+
+# CKA decoupling regularization weight. This is the M2-REPA-specific part that
+# discourages expert heads from collapsing into redundant representations.
+# Set to 0.0 only for ablations.
+m2_repa_decouple_lambda = 0.05
+
+# Hidden width for each per-expert projection MLP.
+# Higher values increase train-time memory and compute.
+m2_repa_projector_hidden_dim = 2048
+
+# Number of linear layers in each per-expert projection MLP. Paper-style setup
+# uses lightweight MLP heads; 3 is a good starting point.
+m2_repa_projector_layers = 3
+
+# Maximum spatial tokens per frame after alignment. -1 disables token reduction.
+# Use a positive value such as 256 or 512 to reduce VRAM on high-resolution clips.
+m2_repa_max_spatial_tokens = -1
+
+# Maximum flattened token samples used for pairwise CKA decoupling. Larger values
+# are more faithful but increase memory quadratically through feature products.
+m2_repa_decouple_max_samples = 4096
+
+# Spatial alignment policy when diffusion and expert token grids differ:
+# - true: interpolate token grids to preserve patch-wise alignment
+# - false: crop to the shared token count
+m2_repa_spatial_align = true
+
+# Temporal alignment policy when diffusion and expert frame counts differ:
+# - true: linearly interpolate source features to the expert frame count
+# - false: crop to the shared frame count
+m2_repa_temporal_align = true
+
+# Detach frozen expert outputs from autograd. Keep true unless debugging.
+m2_repa_detach_teacher = true
+
+# Encoder frame/image chunk size. 0 processes all frames at once; set a positive
+# value to reduce peak VRAM at the cost of more encoder calls.
+m2_repa_encoder_chunk_size = 0
+
+# SAM2/SAM3 expert model ID used when m2_repa_encoder_names contains "sam2".
+# Ignored unless a SAM-family expert is selected.
+m2_repa_sam_model_id = "facebook/sam2-hiera-large"
+
+# Optional local checkpoint or Hugging Face path for the SAM-family expert.
+# Leave empty to use m2_repa_sam_model_id.
+m2_repa_sam_checkpoint = ""
+
+# Input image size for SAM-family expert extraction. Higher values preserve
+# segmentation detail but increase memory. 512 matches the existing SFT default.
+m2_repa_sam_image_size = 512
+
+# SAM-family teacher dtype. Valid values: "float16", "bfloat16", "float32".
+# float16 is fastest on CUDA; use float32 for CPU debugging.
+m2_repa_sam_teacher_dtype = "float16"
+
+# Apply the SAM teacher's causal memory smoothing over video frames. This is
+# useful for temporal consistency but can be disabled for image-only ablations.
+m2_repa_sam_use_causal_memory = true
+
+# Depth Anything V2 expert model ID used when m2_repa_encoder_names contains
+# "depth-anything-v2". Ignored unless a depth expert is selected.
+m2_repa_depth_model_id = "depth-anything/Depth-Anything-V2-Base-hf"
+
+# Optional local checkpoint or Hugging Face path for the Depth Anything V2 expert.
+# Leave empty to use m2_repa_depth_model_id or the inline expert model ID.
+m2_repa_depth_checkpoint = ""
+
+# Square input size for Depth Anything V2. 518 follows the official V2 defaults;
+# smaller sizes reduce memory while weakening depth detail.
+m2_repa_depth_image_size = 518
+
+# Depth Anything V2 teacher dtype. Valid values: "float16", "bfloat16", "float32".
+# float16 is fastest on CUDA; use float32 for CPU debugging.
+m2_repa_depth_teacher_dtype = "float16"
+
+# Depth Anything V2 target feature source:
+# - "auto": prefer hidden states, fallback to predicted depth tokens
+# - "hidden_states": require model hidden states for richer representation alignment
+# - "predicted_depth": align to the scalar depth map tokens
+m2_repa_depth_feature_source = "auto"
+
+# =============================================================================
 # ⚠️ STABLE VELOCITY SETTINGS
 # =============================================================================
 

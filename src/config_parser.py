@@ -53,6 +53,7 @@ from configs.reflexflow_config import apply_reflexflow_config
 from configs.isofm_config import apply_isofm_config
 from configs.soar_config import apply_soar_config
 from configs.videorepa_config import apply_videorepa_config
+from configs.m2_repa_config import apply_m2_repa_config
 from configs.vae_repa_config import apply_vae_repa_config
 from configs.stable_velocity_config import apply_stable_velocity_config
 from configs.structure_from_tracking_config import (
@@ -1834,6 +1835,9 @@ def create_args_from_config(
 
     # VideoREPA (Token-Relation Distillation) settings
     apply_videorepa_config(args, config, logger)
+
+    # M2-REPA (multi-expert decoupled representation alignment) settings
+    apply_m2_repa_config(args, config, logger)
 
     # Structure-From-Tracking (SAM2 LGF-KL distillation) settings
     apply_structure_from_tracking_config(args, config, logger)

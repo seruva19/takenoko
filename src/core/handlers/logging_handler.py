@@ -597,6 +597,12 @@ def collect_and_log_training_metrics(
         logs["loss/moalign"] = float(loss_components.moalign_loss.item())
     if loss_components.repa_loss is not None:
         logs["loss/repa"] = float(loss_components.repa_loss.item())
+    if getattr(loss_components, "m2_repa_align_loss", None) is not None:
+        logs["m2_repa/align_loss"] = float(loss_components.m2_repa_align_loss.item())
+    if getattr(loss_components, "m2_repa_decouple_loss", None) is not None:
+        logs["m2_repa/decouple_loss"] = float(
+            loss_components.m2_repa_decouple_loss.item()
+        )
     if getattr(loss_components, "stable_velocity_weight_mean", None) is not None:
         logs["repa/stable_velocity_weight_mean"] = float(
             loss_components.stable_velocity_weight_mean.item()
