@@ -5729,6 +5729,66 @@ contrastive_attention_latent_update_step_size = 0.1
 contrastive_attention_latent_update_interval = 1
 
 # ============================================================================= 
+# ⚠️ DAR (DIFFUSION-ADAPTIVE ROUTING) SETTINGS
+# ============================================================================= 
+
+# Enable Diffusion-Adaptive Routing for Wan transformer residual streams.
+# Default: false. When enabled, Takenoko replaces the per-block residual stream
+# during gradient-enabled forwards with a learnable, chunked softmax aggregation
+# over prior sublayer outputs. This is intended for experimental LoRA/full-FT
+# training only; it does not add runtime requirements to exported LoRA weights.
+# Dependencies: incompatible with enable_sprint, enable_tread, and
+# enable_self_resampling_attention_routing because those features also rewrite
+# the transformer block stream or change routed sequence shapes.
+enable_dar = false
+
+# Query parameterization for the DAR router.
+# Valid options:
+# - "static": paper pure-static query q_l = w_l.
+# - "static_timestep": static query plus Wan timestep/modulation embedding.
+# - "dynamic": low-rank Wan-safe approximation of q_l = W_q v_{l-1}.
+# Default: "static_timestep" for practical timestep-aware LoRA training.
+dar_query_mode = "static_timestep"
+
+# Chunk size S for chunked aggregation. Default is S=4.
+# S=1 keeps every prior source (dense routing); larger values use prior chunk
+# summaries plus raw sources from the current chunk. Must be >= 1.
+dar_chunk_size = 4
+
+# Blend between the standard residual stream and DAR routed stream.
+# 1.0 = full DAR replacement, 0.0 = no routed effect even when enabled; intermediate values are a
+# stabilization knob for adapting pretrained Wan LoRAs. Must be in [0, 1].
+dar_residual_blend = 1.0
+
+# Low-rank hidden size for dar_query_mode="dynamic".
+# This keeps the dynamic query practical for 14B LoRA training while preserving
+# the source-dependent query behavior. Ignored by static modes. Must be >= 1.
+dar_dynamic_rank = 16
+
+# Softmax temperature for source routing logits.
+# Lower values sharpen routing; higher values smooth routing. Must be > 0.
+dar_query_temperature = 1.0
+
+# Epsilon used by per-source RMS normalization in the router. Must be > 0.
+dar_norm_eps = 1e-6
+
+# Apply a dedicated final DAR aggregation before the Wan prediction head. Disable for ablations.
+dar_final_aggregate = true
+
+# Apply DAR during no-grad/eval forwards such as validation or sampling.
+# Default false keeps DAR train-time only and avoids changing sampler behavior.
+dar_apply_in_eval = false
+
+# Learning-rate scale for DAR router parameters relative to learning_rate.
+# Must be > 0. Example: 0.25 trains router parameters more conservatively.
+dar_lr_scale = 1.0
+
+# Disable Wan block gradient checkpointing while DAR is attached.
+# DAR keeps a mutable cross-layer source history, so checkpoint replay is not
+# safe for the sublayer-level implementation. Default true preserves correctness.
+dar_disable_block_checkpointing = true
+
+# ============================================================================= 
 # ⚠️ SPRINT (SPARSE-DENSE RESIDUAL FUSION) SETTINGS
 # ============================================================================= 
 

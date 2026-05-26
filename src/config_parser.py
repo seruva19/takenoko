@@ -105,6 +105,7 @@ from configs.vae_refinement_validation_config import (
 )
 from configs.neon_config import apply_neon_config
 from configs.badam_config import apply_badam_config
+from configs.dar_config import apply_dar_config
 
 
 def create_args_from_config(
@@ -345,6 +346,7 @@ def create_args_from_config(
     # RoPE precision optimization (float32 vs float64)
     args.rope_use_float32 = bool(config.get("rope_use_float32", False))
     apply_dype_config(args, config, logger)
+    apply_dar_config(args, config, logger)
 
     # Optional: force lower precision attention compute (fp16) for additional VRAM savings
     args.lower_precision_attention = bool(

@@ -1687,6 +1687,27 @@ class WanFinetuneTrainer:
             transformer, args, text_encoder
         )
 
+        dar_helper = None
+        if getattr(args, "enable_dar", False):
+            try:
+                from enhancements.dar.dar_helper import (
+                    DarRoutingHelper,
+                    maybe_add_dar_params,
+                )
+
+                logger.info("DAR routing is enabled. Initializing helper module.")
+                dar_helper = DarRoutingHelper(transformer, args)
+                dar_helper.setup_hooks()
+                maybe_add_dar_params(
+                    params_to_optimize,
+                    param_names,
+                    dar_helper,
+                    args,
+                )
+            except Exception as exc:
+                logger.warning(f"DAR routing setup failed: {exc}")
+                dar_helper = None
+
         crepa_helper = None
         if getattr(args, "crepa_enabled", False):
             try:

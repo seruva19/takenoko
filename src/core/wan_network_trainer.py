@@ -933,6 +933,27 @@ class WanNetworkTrainer:
                     )
                     lr_descriptions.append("patch_embedding")
 
+        dar_helper = None
+        if getattr(args, "enable_dar", False):
+            try:
+                from enhancements.dar.dar_helper import (
+                    DarRoutingHelper,
+                    maybe_add_dar_params,
+                )
+
+                logger.info("DAR routing is enabled. Initializing helper module.")
+                dar_helper = DarRoutingHelper(transformer, args)
+                dar_helper.setup_hooks()
+                maybe_add_dar_params(
+                    trainable_params,
+                    lr_descriptions,
+                    dar_helper,
+                    args,
+                )
+            except Exception as exc:
+                logger.warning(f"DAR routing setup failed: {exc}")
+                dar_helper = None
+
         crepa_helper = None
         if getattr(args, "crepa_enabled", False):
             try:

@@ -910,6 +910,31 @@ class WanAttentionBlock(nn.Module):
             sparse_attention (bool): Whether to use sparse attention (default: False)
         """
         x_orig_dtype = x.dtype
+        dar_router = getattr(self, "_dar_router", None)
+        if dar_router is not None and getattr(dar_router, "is_active", False):
+            return dar_router.forward_block(
+                self,
+                block_index,
+                x,
+                e,
+                seq_lens,
+                grid_sizes,
+                freqs,
+                context,
+                context_lens,
+                sparse_attention=sparse_attention,
+                batched_rotary=batched_rotary,
+                extra_tokens=extra_tokens,
+                history_routing_config=history_routing_config,
+                enable_rollout_kv_cache=enable_rollout_kv_cache,
+                rollout_kv_cache=rollout_kv_cache,
+                enable_rollout_self_attn_kv_cache=enable_rollout_self_attn_kv_cache,
+                rollout_self_attn_kv_cache=rollout_self_attn_kv_cache,
+                rollout_history_frame_count=rollout_history_frame_count,
+                rope_offsets=rope_offsets,
+                reference_frame_token_counts=reference_frame_token_counts,
+                dynamic_rope_scales=dynamic_rope_scales,
+            )
 
         # Optional lean attention math to avoid large fp32 intermediates (2.2 only)
         if (
@@ -1032,6 +1057,31 @@ class WanAttentionBlock(nn.Module):
             context_lens (Tensor): Context lengths
             sparse_attention (bool): Whether to use sparse attention (default: False)
         """
+        dar_router = getattr(self, "_dar_router", None)
+        if dar_router is not None and getattr(dar_router, "is_active", False):
+            return self._forward(
+                x,
+                e,
+                seq_lens,
+                grid_sizes,
+                freqs,
+                context,
+                context_lens,
+                sparse_attention,
+                batched_rotary,
+                extra_tokens,
+                history_routing_config,
+                block_index,
+                enable_rollout_kv_cache,
+                rollout_kv_cache,
+                enable_rollout_self_attn_kv_cache,
+                rollout_self_attn_kv_cache,
+                rollout_history_frame_count,
+                rope_offsets,
+                reference_frame_token_counts,
+                dynamic_rope_scales,
+            )
+
         if self.training and self.gradient_checkpointing:
             forward_fn = self._forward
             if self.activation_cpu_offloading:
@@ -2170,6 +2220,19 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
 
         # Track input device for consistency check when CPU offloading is enabled
         input_device = x.device
+        dar_router = getattr(self, "_dar_router", None)
+        dar_should_apply = (
+            dar_router is not None
+            and callable(getattr(dar_router, "should_apply", None))
+            and dar_router.should_apply()
+        )
+        dar_active = bool(dar_should_apply)
+        if dar_active:
+            dar_router.begin_forward(x)
+        elif dar_router is not None and callable(
+            getattr(dar_router, "end_forward", None)
+        ):
+            dar_router.end_forward()
         # ═══════════════════════════════════════════════════════════════════════════════
         # SPRINT SPARSE-DENSE FUSION PATH
         # ═══════════════════════════════════════════════════════════════════════════════
@@ -2177,6 +2240,10 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
         if using_segment_blocks and self.sprint_fusion is not None:
             logger.warning(
                 "BFM segment blocks do not support Sprint; disabling Sprint for this forward."
+            )
+        elif dar_active and self.sprint_fusion is not None:
+            logger.warning(
+                "DAR routing is active; disabling Sprint for this forward."
             )
         elif self.sprint_fusion is not None:
             try:
@@ -2362,6 +2429,10 @@ class WanModel(nn.Module):  # ModelMixin, ConfigMixin):
         # Ensure device consistency after CPU offloading operations
         if x.device != input_device:
             x = x.to(input_device)
+
+        if dar_active and getattr(dar_router, "is_active", False):
+            x = dar_router.final_aggregate(x, e)
+            dar_router.end_forward()
 
         # Split REG class token before head
         if reg_extra_tokens:
