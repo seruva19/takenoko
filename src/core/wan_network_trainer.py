@@ -500,6 +500,7 @@ class WanNetworkTrainer:
             or getattr(args, "sara_enabled", False)
             or getattr(args, "enable_repa", False)
             or getattr(args, "enable_videorepa", False)
+            or getattr(args, "enable_mirai_foresight", False)
             or getattr(args, "enable_m2_repa", False)
             or getattr(args, "enable_structure_from_tracking", False)
             or getattr(args, "enable_moalign", False)
@@ -573,6 +574,7 @@ class WanNetworkTrainer:
                 or getattr(args, "sara_enabled", False)
                 or getattr(args, "enable_repa", False)
                 or getattr(args, "enable_videorepa", False)
+                or getattr(args, "enable_mirai_foresight", False)
                 or getattr(args, "enable_m2_repa", False)
                 or getattr(args, "enable_structure_from_tracking", False)
                 or getattr(args, "enable_moalign", False)
@@ -1034,6 +1036,25 @@ class WanNetworkTrainer:
             except Exception as exc:
                 logger.warning(f"VideoREPA setup failed: {exc}")
                 videorepa_helper = None
+
+        mirai_foresight_helper = None
+        if getattr(args, "enable_mirai_foresight", False):
+            try:
+                from enhancements.mirai_foresight.mirai_foresight_helper import (
+                    MiraiForesightHelper,
+                )
+
+                logger.info("Mirai Foresight is enabled. Initializing helper module.")
+                mirai_foresight_helper = MiraiForesightHelper(transformer, args)
+                self._maybe_add_mirai_foresight_params(
+                    trainable_params,
+                    lr_descriptions,
+                    mirai_foresight_helper,
+                    args,
+                )
+            except Exception as exc:
+                logger.warning(f"Mirai Foresight setup failed: {exc}")
+                mirai_foresight_helper = None
 
         m2_repa_helper = None
         if getattr(args, "enable_m2_repa", False):
@@ -2010,6 +2031,21 @@ class WanNetworkTrainer:
                 except Exception as exc:
                     logger.warning(f"VideoREPA hook setup failed: {exc}")
                     repa_helper = None
+            elif mirai_foresight_helper is not None:
+                try:
+                    logger.info(
+                        "Mirai Foresight is enabled. Setting up future-state hooks."
+                    )
+                    repa_helper = mirai_foresight_helper
+                    repa_helper.setup_hooks()
+                    repa_helper = accelerator.prepare(repa_helper)
+                except Exception as exc:
+                    logger.warning(f"Mirai Foresight hook setup failed: {exc}")
+                    try:
+                        mirai_foresight_helper.remove_hooks()
+                    except Exception:
+                        pass
+                    repa_helper = None
             elif vae_repa_helper is not None:
                 try:
                     logger.info("VAE-REPA is enabled. Setting up the helper module.")
@@ -2532,6 +2568,42 @@ class WanNetworkTrainer:
         lr_descriptions.append("videorepa_projector")
         logger.info(
             "VideoREPA: added %d projector params to optimizer groups (lr=%.6f).",
+            len(new_params),
+            lr,
+        )
+
+    @staticmethod
+    def _maybe_add_mirai_foresight_params(
+        trainable_params: list[Any],
+        lr_descriptions: list[str],
+        mirai_foresight_helper: Any,
+        args: argparse.Namespace,
+    ) -> None:
+        """Ensure Mirai Foresight projector parameters are optimized."""
+        params = getattr(mirai_foresight_helper, "get_trainable_params", None)
+        if not callable(params):
+            return
+        trainable = list(params())
+        if not trainable:
+            return
+        existing = set()
+        for group in trainable_params:
+            if isinstance(group, dict) and "params" in group:
+                existing.update(id(p) for p in group["params"])
+            elif isinstance(group, torch.nn.Parameter):
+                existing.add(id(group))
+        new_params = [p for p in trainable if id(p) not in existing]
+        if not new_params:
+            return
+        lr = (
+            float(getattr(args, "learning_rate", 1e-4))
+            * float(getattr(args, "input_lr_scale", 1.0))
+            * float(getattr(args, "mirai_foresight_projector_lr_ratio", 1.0))
+        )
+        trainable_params.append({"params": new_params, "lr": lr})
+        lr_descriptions.append("mirai_foresight_projector")
+        logger.info(
+            "Mirai Foresight: added %d projector params to optimizer groups (lr=%.6f).",
             len(new_params),
             lr,
         )

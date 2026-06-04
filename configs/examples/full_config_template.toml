@@ -3956,6 +3956,94 @@ videorepa_detach_teacher = true
 videorepa_encoder_chunk_size = 0
 
 # =============================================================================
+# ⚠️ MIRAI FORESIGHT (FUTURE HIDDEN-STATE ALIGNMENT) SETTINGS
+# =============================================================================
+
+# Enable Mirai Foresight training regularization (default: false).
+# This ports the inference-free part of Video-Mirai / Foresight-Forcing:
+# current DiT hidden states are projected toward detached future hidden states from the same training clip.
+# The projector and hooks are train-time only and are not saved into the downstream LoRA inference graph.
+# Compatibility:
+# - Mutually exclusive with REPA/iREPA/VAE-REPA/VideoREPA/M2-REPA/CREPA/SARA/
+#   MOALIGN/Structure-From-Tracking because they share the representation-loss helper slot.
+# - Requires pixel batches so temporal token counts can be inferred safely.
+# - Most useful for video LoRA training; image-only batches skip this loss.
+enable_mirai_foresight = false
+
+# Primary transformer block index (0-based) for student hidden capture.
+# Use a mid/late block where motion and layout features are already formed.
+mirai_foresight_alignment_depth = 18
+
+# Optional multi-layer alignment depths. If set in a custom config, it overrides mirai_foresight_alignment_depth.
+# mirai_foresight_alignment_depths = [12, 18, 24]
+
+# Global Mirai Foresight loss weight.
+# Valid range: >= 0; must be > 0 when enable_mirai_foresight = true.
+# Recommended starting range: 0.05 to 0.2 because the official objective is an
+# auxiliary representation term, not a replacement for the denoising loss.
+mirai_foresight_loss_lambda = 0.1
+
+# Future offset measured in frame blocks. 1 aligns current hidden tokens to the next block.
+# Larger values push longer-horizon consistency but need longer clips. Valid range: >= 1.
+mirai_foresight_delta = 1
+
+# Frames per logical block used to convert mirai_foresight_delta into a frame shift.
+# Keep 1 for standard supervised batches. Set to the causal/chunk size if your training recipe groups frames into blocks.
+# Valid range: >= 1.
+mirai_foresight_num_frame_per_block = 1
+
+# Include the current hidden state in the detached target. This softens the
+# future-prediction target and can be safer for short or noisy clips.
+mirai_foresight_include_current = false
+
+# Average detached targets across all valid deltas up to mirai_foresight_delta.
+# When include_current=true and delta=1, this approximates the upstream
+# Video-Mirai mean-pool target over Δ={0,1}.
+mirai_foresight_delta_mean_pool = false
+
+# Projector type:
+# - "mlp": identity-initialized residual MLP (recommended first try, lower VRAM)
+# - "dit": small DiT-style self-attention projector with delta conditioning
+mirai_foresight_projector_type = "mlp"
+
+# Number of projector layers. For "mlp", this controls residual MLP depth.
+# For "dit", this controls the number of self-attention blocks.
+# Valid range: >= 1.
+mirai_foresight_projector_layers = 2
+
+# Projector hidden dimension. 0 means auto = DiT hidden_dim * ffn_ratio.
+# Use a smaller explicit value to reduce VRAM.
+mirai_foresight_projector_hidden_dim = 0
+
+# Auto hidden-width multiplier when projector_hidden_dim = 0.
+# Valid range: > 0. 4.0 matches common DiT FFN sizing.
+mirai_foresight_ffn_ratio = 4.0
+
+# Attention heads for the "dit" projector. 0 means auto = hidden_dim // 64,
+# adjusted downward until it divides the hidden dimension.
+mirai_foresight_num_heads = 0
+
+# Loss form:
+# - "negative_cosine": upstream-style -cosine_similarity (can be negative)
+# - "cosine": non-negative 1 - cosine_similarity
+# - "mse": direct feature MSE
+# - "smooth_l1": robust direct feature matching
+mirai_foresight_loss_type = "negative_cosine"
+
+# Per-frame spatial token cap before future alignment.
+# -1 disables capping. Positive values uniformly sample tokens per frame.
+# Recommended: 256 for DiT projector or high-resolution buckets to limit VRAM.
+mirai_foresight_max_spatial_tokens = 256
+
+# Detach future hidden states before loss (recommended true). Keeping this true
+# makes the future state act as a stable teacher target for the current state.
+mirai_foresight_detach_teacher = true
+
+# Projector learning-rate multiplier relative to learning_rate * input_lr_scale.
+# Valid range: > 0. Raise carefully if projector loss lags behind LoRA updates.
+mirai_foresight_projector_lr_ratio = 1.0
+
+# =============================================================================
 # ⚠️ DET MOTION TRANSFER REGULARIZER SETTINGS
 # =============================================================================
 
